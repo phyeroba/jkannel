@@ -83,7 +83,10 @@ services:
     build:
       context: ./frontend
     environment:
-      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-3000}/api
+      # Use 127.0.0.1 (IPv4) rather than localhost: on Windows/macOS the browser
+      # resolves localhost to IPv6 ::1 first, but Docker publishes ports on IPv4,
+      # so API calls to http://localhost:3000 fail with "Failed to fetch".
+      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-3000}/api
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     depends_on:

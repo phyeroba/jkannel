@@ -1,4 +1,6 @@
-const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api') + '/v1';
+// Default to 127.0.0.1 (IPv4) not localhost: browsers resolve localhost to IPv6
+// ::1 first, but Docker publishes ports on IPv4, so localhost:3000 fails.
+const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000/api') + '/v1';
 let accessToken = localStorage.getItem('jkannel-access-token') ?? '';
 let refreshToken = localStorage.getItem('jkannel-refresh-token') ?? '';
 export function setTokens(access: string, refresh: string) {
