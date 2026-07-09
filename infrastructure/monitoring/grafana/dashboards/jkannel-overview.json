@@ -1,0 +1,35 @@
+{
+  "uid": "jkannel-overview",
+  "title": "JKANNEL Operations Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "tags": ["jkannel", "kamex", "messaging"],
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Backend Up",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [{ "expr": "jkannel_backend_up", "refId": "A" }],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Backend Memory",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [{ "expr": "jkannel_backend_memory_bytes", "refId": "A" }],
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Backend Uptime",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [{ "expr": "jkannel_backend_uptime_seconds", "refId": "A" }],
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 }
+    }
+  ]
+}

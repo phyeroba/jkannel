@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.md
+design/
+docs/
+database/migrations/
+infrastructure/
+runtime/
+package-lock.json

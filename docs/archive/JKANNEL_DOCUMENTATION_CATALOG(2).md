@@ -1,0 +1,29 @@
+# JKANNEL Documentation Catalog
+
+## Foundation
+
+-   ENGINEERING_CONSTITUTION.md
+-   SYSTEM_PHILOSOPHY.md
+-   PRODUCT_VISION.md
+-   PRODUCT_SCOPE.md
+-   SUCCESS_CRITERIA.md
+-   DOCUMENTATION_STANDARD.md
+-   ADR_STANDARD.md
+
+## Architecture
+
+-   SYSTEM_ARCHITECTURE.md
+-   DOCKER_ARCHITECTURE.md
+-   ENGINE_ADAPTER_ARCHITECTURE.md
+-   DATABASE_ARCHITECTURE.md
+-   API_ARCHITECTURE.md
+
+## Modules
+
+### SMSC Manager
+
+Parts 01-10
+
+### Configuration Generator
+
+Parts 01-07

@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+.vite/
+.cache/
+*.tsbuildinfo
+artifacts/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/settings.local.json
+# Local archives / snapshots (may contain secrets) — never publish
+*.zip
+*.tar
+*.tar.gz
+*.tgz

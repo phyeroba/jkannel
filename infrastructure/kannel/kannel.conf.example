@@ -1,0 +1,14 @@
+# Structural example only; not enabled by the Phase 1 Compose stack.
+group = core
+admin-port = 13000
+smsbox-port = 13001
+admin-password = CHANGE_ME_OUTSIDE_SOURCE_CONTROL
+status-password = CHANGE_ME_OUTSIDE_SOURCE_CONTROL
+log-level = 1
+
+group = smsbox
+bearerbox-host = bearerbox
+sendsms-port = 13013
+
+# SMSC groups are generated and managed through the Engine Adapter in later phases.
+

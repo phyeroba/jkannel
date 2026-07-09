@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CPaaS Console · Design System</title>
+<script>(function(){var t;try{t=localStorage.getItem('cpaas-theme')}catch(e){}document.documentElement.setAttribute('data-theme',t||'light');})();</script>
+<link rel="stylesheet" href="shared/app.css">
+<style>
+  body { background: var(--parchment); }
+  .ds { display: grid; grid-template-columns: 232px 1fr; max-width: 1320px; margin: 0 auto; align-items: start; }
+
+  /* ---- side rail ---- */
+  .ds-rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 26px 16px 40px; border-right: 1px solid var(--hairline); }
+  .ds-rail__brand { display: flex; align-items: center; gap: 11px; margin-bottom: 26px; padding: 0 10px; }
+  .ds-rail__brand .brand-word { color: var(--ink); }
+  .ds-rail a { display: block; padding: 6px 11px; border-radius: var(--r-sm); color: var(--ink-muted); font-size: 13px; font-weight: 500; transition: .12s; }
+  .ds-rail a:hover { background: var(--surface-sunken); color: var(--ink); }
+  .ds-rail a.is-active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .ds-rail h4 { font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); padding: 0 11px; margin: 20px 0 6px; }
+
+  /* ---- content ---- */
+  .ds-main { padding: 0 48px 120px; min-width: 0; }
+  .ds-top { display: flex; align-items: center; gap: 14px; padding: 22px 0; position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--parchment) 88%, transparent); backdrop-filter: blur(18px) saturate(160%); margin-bottom: 8px; }
+  .ds-top .grow { flex: 1; }
+
+  .ds-hero { padding: 30px 0 8px; }
+  .ds-hero h1 { font-size: 48px; letter-spacing: -0.03em; line-height: 1.05; }
+  .ds-hero p { font-size: 18px; color: var(--ink-muted); margin-top: 16px; max-width: 640px; }
+  .ds-princ { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 34px; }
+  .ds-princ .card { padding: 18px; }
+  .ds-princ h5 { font-size: 14px; margin-bottom: 5px; }
+  .ds-princ p { font-size: 13px; color: var(--ink-muted); line-height: 1.5; margin: 0; }
+
+  section.ds-sec { padding: 46px 0 8px; border-top: 1px solid var(--hairline); margin-top: 46px; scroll-margin-top: 80px; }
+  section.ds-sec:first-of-type { border-top: none; }
+  .ds-sec__head { margin-bottom: 26px; }
+  .ds-sec__head .eyebrow { margin-bottom: 8px; }
+  .ds-sec__head h2 { font-size: 28px; letter-spacing: -0.025em; }
+  .ds-sec__head p { color: var(--ink-muted); margin-top: 8px; max-width: 620px; font-size: 14.5px; }
+
+  .ds-block { margin-bottom: 30px; }
+  .ds-block__label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 14px; }
+
+  /* swatch grids */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .sw { border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+  .sw__chip { height: 64px; border-bottom: 1px solid var(--hairline-soft); }
+  .sw__meta { padding: 9px 11px; }
+  .sw__name { font-size: 12.5px; font-weight: 600; }
+  .sw__val { font-size: 11px; color: var(--ink-faint); font-family: var(--mono); margin-top: 2px; text-transform: none; }
+
+  /* type rows */
+  .type-row { display: flex; align-items: baseline; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--hairline-soft); }
+  .type-row:last-child { border-bottom: none; }
+  .type-row .spec { width: 200px; flex: none; font-size: 12px; color: var(--ink-faint); font-family: var(--mono); }
+  .type-row .samp { min-width: 0; }
+
+  /* demo wells */
+  .well { border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface); padding: 26px; }
+  .well--sunken { background: var(--surface-2); }
+  .demo-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .demo-grid { display: grid; gap: 14px; }
+
+  /* spacing scale */
+  .space-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; }
+  .space-row .bar { height: 16px; background: var(--primary); border-radius: 3px; }
+  .space-row .lab { font-size: 12px; font-family: var(--mono); color: var(--ink-muted); width: 90px; }
+
+  /* radius / shadow demo */
+  .rad-grid, .shadow-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 16px; }
+  .rad-box { height: 86px; background: var(--primary-soft); border: 1px solid var(--primary); display: grid; place-items: end center; padding-bottom: 8px; font-size: 11px; font-family: var(--mono); color: var(--primary); }
+  .shadow-box { height: 96px; background: var(--surface); border-radius: var(--r-lg); display: grid; place-items: end center; padding-bottom: 10px; font-size: 11px; font-family: var(--mono); color: var(--ink-muted); }
+
+  /* icon grid */
+  .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px,1fr)); gap: 10px; }
+  .icon-cell { border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 16px 8px 10px; display: flex; flex-direction: column; align-items: center; gap: 9px; background: var(--surface); }
+  .icon-cell .ico { width: 22px; height: 22px; color: var(--ink); }
+  .icon-cell span { font-size: 11px; color: var(--ink-faint); font-family: var(--mono); }
+
+  /* spec callouts */
+  .spec-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap: 10px; }
+  .spec-item { border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 11px 14px; background: var(--surface); }
+  .spec-item dt { font-size: 12px; color: var(--ink-muted); }
+  .spec-item dd { margin: 3px 0 0; font-size: 13.5px; font-weight: 600; font-family: var(--mono); }
+
+  .cls { font-family: var(--mono); font-size: 11.5px; color: var(--ink-muted); background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; }
+
+  @media (max-width: 940px) {
+    .ds { grid-template-columns: 1fr; }
+    .ds-rail { display: none; }
+    .ds-main { padding: 0 20px 80px; }
+    .ds-princ { grid-template-columns: 1fr 1fr; }
+    .ds-hero h1 { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+<div class="ds">
+
+  <!-- ================= SIDE RAIL ================= -->
+  <aside class="ds-rail">
+    <div class="ds-rail__brand">
+      <span class="brandmark"></span>
+      <div><div class="brand-word">CPaaS</div><div class="brand-sub">Design System</div></div>
+    </div>
+    <nav id="railNav">
+      <h4>Foundations</h4>
+      <a href="#principles">Principles</a>
+      <a href="#color">Color</a>
+      <a href="#type">Typography</a>
+      <a href="#space">Spacing &amp; layout</a>
+      <a href="#radius">Radius &amp; elevation</a>
+      <a href="#icons">Iconography</a>
+      <h4>Components</h4>
+      <a href="#buttons">Buttons</a>
+      <a href="#badges">Badges &amp; status</a>
+      <a href="#chips">Chips, tabs &amp; toggles</a>
+      <a href="#channels">Channel glyphs</a>
+      <a href="#forms">Forms</a>
+      <a href="#cards">Cards &amp; metrics</a>
+      <a href="#tables">Tables</a>
+      <a href="#code">Code</a>
+      <h4>Patterns</h4>
+      <a href="#nav">Navigation</a>
+      <a href="#palette">Command palette</a>
+    </nav>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main class="ds-main">
+    <div class="ds-top">
+      <div class="eyebrow">CPaaS Console</div>
+      <div class="grow"></div>
+      <a class="btn btn-quiet btn-sm" href="index.html">All screens</a>
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle theme" style="border:1px solid var(--hairline);background:var(--surface)"></button>
+    </div>
+
+    <header class="ds-hero">
+      <div class="eyebrow" style="margin-bottom:14px">Design language · v1.0</div>
+      <h1>One language across<br>Console, Portal &amp; Operations.</h1>
+      <p>A single-accent, airy, hairline-driven system. It favors generous whitespace, tabular numerics for data density, and one decisive Action Blue over decorative color. Everything below is live and theme-aware — toggle dark mode to see every token respond.</p>
+
+      <div class="ds-princ">
+        <div class="card">
+          <h5>Single accent</h5>
+          <p>One Action Blue carries every interactive intent. Color is reserved for meaning, never decoration.</p>
+        </div>
+        <div class="card">
+          <h5>Hairline-driven</h5>
+          <p>Structure comes from 1px hairlines and surface shifts, not heavy borders or drop shadows.</p>
+        </div>
+        <div class="card">
+          <h5>Airy &amp; calm</h5>
+          <p>Generous padding and a restrained type scale keep dense operational data legible.</p>
+        </div>
+        <div class="card">
+          <h5>Numeric-first</h5>
+          <p>Tabular figures everywhere data lives, so columns align and totals are scannable.</p>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================= COLOR ================= -->
+    <section class="ds-sec" id="color">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Foundations</div>
+        <h2>Color</h2>
+        <p>Tokens are defined as CSS custom properties and remapped wholesale for dark mode. Reference tokens by variable — never hard-code a hex value.</p>
+      </div>
+
+      <div class="ds-block">
+        <div class="ds-block__label">Brand &amp; accent</div>
+        <div class="swatches" data-tokens="--primary,--primary-focus,--primary-press,--primary-soft"></div>
+      </div>
+      <div class="ds-block">
+        <div class="ds-block__label">Surfaces</div>
+        <div class="swatches" data-tokens="--canvas,--parchment,--surface,--surface-2,--surface-sunken"></div>
+      </div>
+      <div class="ds-block">
+        <div class="ds-block__label">Ink / text</div>
+        <div class="swatches" data-tokens="--ink,--ink-2,--ink-muted,--ink-faint"></div>
+      </div>
+      <div class="ds-block">
+        <div class="ds-block__label">Lines</div>
+        <div class="swatches" data-tokens="--hairline,--hairline-soft,--divider"></div>
+      </div>
+      <div class="ds-block">
+        <div class="ds-block__label">Semantic — status</div>
+        <div class="swatches" data-tokens="--good,--good-soft,--warn,--warn-soft,--bad,--bad-soft"></div>
+      </div>
+      <div class="ds-block">
+        <div class="ds-block__label">Sidebar (dark chrome)</div>
+        <div class="swatches" data-tokens="--sidebar-bg,--sidebar-ink,--sidebar-muted"></div>
+      </div>
+    </section>
+
+    <!-- ================= TYPOGRAPHY ================= -->
+    <section class="ds-sec" id="type">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Foundations</div>
+        <h2>Typography</h2>
+        <p>Inter (variable) across the board, with a monospace stack for IDs, code and figures that must not reflow. Tight negative tracking on headings; tabular numerics on data.</p>
+      </div>
+
+      <div class="well">
+        <div class="type-row"><div class="spec">.display · 40 / 600</div><div class="samp"><span class="display">Delivery health</span></div></div>
+        <div class="type-row"><div class="spec">.title-lg · 28 / 600</div><div class="samp"><span class="title-lg">Campaign performance</span></div></div>
+        <div class="type-row"><div class="spec">.title · 21 / 600</div><div class="samp"><span class="title">Recent activity</span></div></div>
+        <div class="type-row"><div class="spec">.subtitle · 17 / 400</div><div class="samp"><span class="subtitle">Across all channels this period</span></div></div>
+        <div class="type-row"><div class="spec">body · 15 / 400</div><div class="samp">The quick brown fox delivered 1,284 messages across six channels.</div></div>
+        <div class="type-row"><div class="spec">.eyebrow · 12 / 600 · caps</div><div class="samp"><span class="eyebrow">Workspace overview</span></div></div>
+        <div class="type-row"><div class="spec">.fine · 12 / 400</div><div class="samp"><span class="fine">Sample data only · IDs are illustrative</span></div></div>
+        <div class="type-row"><div class="spec">.mono · tabular</div><div class="samp"><span class="mono">msg_8F2K· +1 415 555 0142 · 99.94%</span></div></div>
+      </div>
+
+      <div class="ds-block" style="margin-top:24px">
+        <div class="ds-block__label">Font families</div>
+        <div class="spec-list">
+          <div class="spec-item"><dt>Sans — UI &amp; headings</dt><dd>Inter</dd></div>
+          <div class="spec-item"><dt>Mono — IDs, code, figures</dt><dd>SF Mono / JetBrains</dd></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SPACING ================= -->
+    <section class="ds-sec" id="space">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Foundations</div>
+        <h2>Spacing &amp; layout</h2>
+        <p>A soft 4 / 8 rhythm. Cards breathe at 18–26px; grids use an 18px gutter. The app shell is a fixed 248px rail beside a fluid column capped for readability.</p>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Spacing scale</div>
+        <div id="spaceScale"></div>
+      </div>
+
+      <div class="spec-list">
+        <div class="spec-item"><dt>Sidebar width</dt><dd>248px</dd></div>
+        <div class="spec-item"><dt>Topbar height</dt><dd>60px</dd></div>
+        <div class="spec-item"><dt>Content max-width</dt><dd>1240px</dd></div>
+        <div class="spec-item"><dt>Grid gutter</dt><dd>18px</dd></div>
+        <div class="spec-item"><dt>Card padding</dt><dd>22 – 26px</dd></div>
+        <div class="spec-item"><dt>Content inset</dt><dd>32 / 28px</dd></div>
+      </div>
+    </section>
+
+    <!-- ================= RADIUS / ELEVATION ================= -->
+    <section class="ds-sec" id="radius">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Foundations</div>
+        <h2>Radius &amp; elevation</h2>
+        <p>Rounded but not soft: four radius steps plus a pill. Elevation is rare — a single product shadow for floating surfaces and a softer pop for menus and the command palette.</p>
+      </div>
+
+      <div class="ds-block">
+        <div class="ds-block__label">Corner radius</div>
+        <div class="rad-grid">
+          <div class="rad-box" style="border-radius:var(--r-sm)">--r-sm · 8</div>
+          <div class="rad-box" style="border-radius:var(--r-md)">--r-md · 11</div>
+          <div class="rad-box" style="border-radius:var(--r-lg)">--r-lg · 18</div>
+          <div class="rad-box" style="border-radius:var(--r-pill)">--r-pill</div>
+        </div>
+      </div>
+
+      <div class="ds-block">
+        <div class="ds-block__label">Elevation</div>
+        <div class="shadow-grid">
+          <div class="shadow-box" style="box-shadow:var(--shadow-product)">--shadow-product</div>
+          <div class="shadow-box" style="box-shadow:var(--shadow-pop)">--shadow-pop</div>
+          <div class="shadow-box" style="border:1px solid var(--hairline)">hairline only</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ICONS ================= -->
+    <section class="ds-sec" id="icons">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Foundations</div>
+        <h2>Iconography</h2>
+        <p>One inline SVG set drawn on a 24px grid with a 1.7px stroke, round caps and joins. Icons inherit <span class="cls">currentColor</span> and render at 17–18px in the UI.</p>
+      </div>
+      <div class="icon-grid" id="iconGrid"></div>
+    </section>
+
+    <!-- ================= BUTTONS ================= -->
+    <section class="ds-sec" id="buttons">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Buttons</h2>
+        <p>Pill-shaped, 38px tall by default. One primary per view. Ghost for secondary affirmative actions, quiet for neutral, dark for compact contextual actions.</p>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Variants</div>
+        <div class="demo-row">
+          <button class="btn btn-primary">Send message</button>
+          <button class="btn btn-ghost">Add variant</button>
+          <button class="btn btn-quiet">Cancel</button>
+          <button class="btn btn-dark">Export</button>
+          <span class="lnk">View report →</span>
+        </div>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Sizes</div>
+        <div class="demo-row">
+          <button class="btn btn-primary btn-sm">Small</button>
+          <button class="btn btn-primary">Default</button>
+          <button class="btn btn-primary btn-lg">Large</button>
+        </div>
+      </div>
+
+      <div class="well">
+        <div class="ds-block__label">With icons &amp; states</div>
+        <div class="demo-row">
+          <button class="btn btn-primary btn-icon-lead" id="bIcon"></button>
+          <button class="btn btn-quiet" id="bIcon2"></button>
+          <button class="btn btn-primary" disabled>Disabled</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= BADGES ================= -->
+    <section class="ds-sec" id="badges">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Badges &amp; status</h2>
+        <p>Soft-tinted pills carry delivery and lifecycle state. Pair a colored dot with the label for fast scanning in dense tables.</p>
+      </div>
+      <div class="well">
+        <div class="demo-row">
+          <span class="badge">Neutral</span>
+          <span class="badge badge--good"><span class="dot"></span>Delivered</span>
+          <span class="badge badge--warn"><span class="dot"></span>Pending</span>
+          <span class="badge badge--bad"><span class="dot"></span>Failed</span>
+          <span class="badge badge--info"><span class="dot"></span>Sandbox</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CHIPS / TABS ================= -->
+    <section class="ds-sec" id="chips">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Chips, tabs &amp; toggles</h2>
+        <p>Filtering and view-switching controls. Chips for multi-select filters, the segmented control for mutually exclusive views, underline tabs for in-page sections.</p>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Filter chips</div>
+        <div class="demo-row">
+          <span class="chip is-active">All channels</span>
+          <span class="chip">SMS</span>
+          <span class="chip">WhatsApp</span>
+          <span class="chip">Email</span>
+          <span class="chip">Voice</span>
+        </div>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Segmented control</div>
+        <div class="seg">
+          <button class="is-active">24 hours</button>
+          <button>7 days</button>
+          <button>30 days</button>
+        </div>
+      </div>
+
+      <div class="well ds-block">
+        <div class="ds-block__label">Tabs</div>
+        <div class="tabs">
+          <div class="tab is-active">Overview</div>
+          <div class="tab">Variants</div>
+          <div class="tab">Audience</div>
+          <div class="tab">Settings</div>
+        </div>
+      </div>
+
+      <div class="well">
+        <div class="ds-block__label">Toggle</div>
+        <div class="demo-row">
+          <span class="toggle is-on" id="tg1"></span>
+          <span class="muted" style="font-size:13px">Quiet hours enforcement</span>
+          <span class="toggle" id="tg2" style="margin-left:18px"></span>
+          <span class="muted" style="font-size:13px">Recurring schedule</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CHANNELS ================= -->
+    <section class="ds-sec" id="channels">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Channel glyphs</h2>
+        <p>Each messaging channel owns a fixed color and a 22px rounded glyph. These are the one sanctioned exception to the single-accent rule — used only to identify channels.</p>
+      </div>
+      <div class="well">
+        <div class="demo-row" style="gap:26px">
+          <span class="chan"><span class="g g-sms">SMS</span>SMS</span>
+          <span class="chan"><span class="g g-wa">WA</span>WhatsApp</span>
+          <span class="chan"><span class="g g-email">@</span>Email</span>
+          <span class="chan"><span class="g g-voice">☏</span>Voice</span>
+          <span class="chan"><span class="g g-rcs">R</span>RCS</span>
+          <span class="chan"><span class="g g-push">P</span>Push</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= FORMS ================= -->
+    <section class="ds-sec" id="forms">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Forms</h2>
+        <p>Inputs sit at 40px with an 11px radius and a focus ring built from the soft accent. Labels are 13px, hints 12px and faint. Leading icons align inside the field.</p>
+      </div>
+      <div class="well">
+        <div class="demo-grid" style="grid-template-columns:1fr 1fr;max-width:680px">
+          <div class="field">
+            <label class="label">Campaign name</label>
+            <input class="input" value="Spring re-engagement">
+            <span class="hint">Shown only to your team.</span>
+          </div>
+          <div class="field">
+            <label class="label">Sender ID</label>
+            <div class="input-wrap">
+              <span class="lead-ico" id="formIco"></span>
+              <input class="input" placeholder="Search senders…">
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">Channel</label>
+            <select class="select">
+              <option>SMS</option><option>WhatsApp</option><option>Email</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="label">Daily cap</label>
+            <input class="input" value="25,000">
+          </div>
+          <div class="field" style="grid-column:1/-1">
+            <label class="label">Message body</label>
+            <textarea class="textarea">Hi {{first_name}}, your code is {{code}}. Reply STOP to opt out.</textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CARDS / METRICS ================= -->
+    <section class="ds-sec" id="cards">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Cards &amp; metrics</h2>
+        <p>The surface primitive: an 18px-radius card on a single hairline. Stat cards present one figure with a delta; meters show progress against a cap.</p>
+      </div>
+
+      <div class="ds-block">
+        <div class="ds-block__label">Stat cards</div>
+        <div class="grid g-4">
+          <div class="stat">
+            <div class="stat__label">Sent today</div>
+            <div class="stat__value tnum">48,209</div>
+            <div class="stat__sub"><span class="delta up">▲ 12.4%</span> vs yesterday</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Delivery rate</div>
+            <div class="stat__value tnum">99.94%</div>
+            <div class="stat__sub"><span class="delta up">▲ 0.3pt</span> 7-day avg</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Opt-outs</div>
+            <div class="stat__value tnum">312</div>
+            <div class="stat__sub"><span class="delta down">▼ 4.1%</span> vs last week</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Credit balance</div>
+            <div class="stat__value tnum">$1,284</div>
+            <div class="stat__sub muted">≈ 9 days at current rate</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ds-block">
+        <div class="ds-block__label">Content card &amp; meter</div>
+        <div class="split-even">
+          <div class="card">
+            <div class="card__head">
+              <h3>Monthly send quota</h3>
+              <span class="grow"></span>
+              <span class="badge badge--good"><span class="dot"></span>Healthy</span>
+            </div>
+            <div class="stack" style="gap:14px">
+              <div class="meter"><span style="width:64%"></span></div>
+              <div class="row between fine"><span>320,400 of 500,000 sent</span><span class="mono">64%</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><h3>WhatsApp template</h3></div>
+            <p class="muted" style="font-size:13.5px">Approval status from the WABA before a template can be used in production.</p>
+            <div class="row" style="margin-top:14px;gap:8px">
+              <span class="badge badge--good"><span class="dot"></span>Approved</span>
+              <span class="badge badge--warn"><span class="dot"></span>Pending</span>
+              <span class="badge badge--bad"><span class="dot"></span>Rejected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TABLES ================= -->
+    <section class="ds-sec" id="tables">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Tables</h2>
+        <p>The workhorse of operational screens. Uppercase faint headers, hairline-soft row dividers, hover highlight, monospace IDs and right-aligned tabular figures.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="tbl">
+          <thead>
+            <tr><th>Message ID</th><th>Channel</th><th>Recipient</th><th>Status</th><th class="r">Cost</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="tbl-id">msg_8F2K9Q</td><td><span class="chan"><span class="g g-sms" style="width:18px;height:18px;font-size:9px">SMS</span></span></td><td class="mono">+1 415 555 0142</td><td><span class="badge badge--good"><span class="dot"></span>Delivered</span></td><td class="r">$0.0079</td></tr>
+            <tr><td class="tbl-id">msg_7C1M4P</td><td><span class="chan"><span class="g g-wa" style="width:18px;height:18px;font-size:9px">WA</span></span></td><td class="mono">+44 7700 900812</td><td><span class="badge badge--warn"><span class="dot"></span>Pending</span></td><td class="r">$0.0210</td></tr>
+            <tr><td class="tbl-id">msg_5A9Z2T</td><td><span class="chan"><span class="g g-email" style="width:18px;height:18px;font-size:9px">@</span></span></td><td class="mono">ops@northwind.io</td><td><span class="badge badge--bad"><span class="dot"></span>Bounced</span></td><td class="r">$0.0004</td></tr>
+            <tr><td class="tbl-id">msg_3D6X8L</td><td><span class="chan"><span class="g g-sms" style="width:18px;height:18px;font-size:9px">SMS</span></span></td><td class="mono">+61 412 345 678</td><td><span class="badge badge--good"><span class="dot"></span>Delivered</span></td><td class="r">$0.0310</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= CODE ================= -->
+    <section class="ds-sec" id="code">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Components</div>
+        <h2>Code</h2>
+        <p>Developer Portal surfaces. A dark code well with a labeled header bar and GitHub-style syntax tints, regardless of theme.</p>
+      </div>
+      <div>
+        <div class="code-head"><span class="badge badge--info">POST</span><span class="mono">/v1/messages</span><span class="grow"></span><span>cURL</span></div>
+        <pre class="code"><span class="c"># Send a single SMS</span>
+curl <span class="s">https://api.cpaas.example.com/v1/messages</span> \
+  -H <span class="s">"Authorization: Bearer $API_KEY"</span> \
+  -d <span class="p">'{</span>
+    <span class="k">"to"</span><span class="p">:</span> <span class="s">"+14155550142"</span><span class="p">,</span>
+    <span class="k">"from"</span><span class="p">:</span> <span class="s">"CPAAS"</span><span class="p">,</span>
+    <span class="k">"channel"</span><span class="p">:</span> <span class="s">"sms"</span><span class="p">,</span>
+    <span class="k">"body"</span><span class="p">:</span> <span class="s">"Your code is 481920"</span>
+  <span class="p">}'</span></pre>
+      </div>
+    </section>
+
+    <!-- ================= NAV PATTERN ================= -->
+    <section class="ds-sec" id="nav">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Patterns</div>
+        <h2>Navigation</h2>
+        <p>A persistent dark rail anchors the app. Grouped nav items, an active accent tab, count and tag affordances, and a topbar with search, credit and theme.</p>
+      </div>
+      <div class="well well--sunken" style="padding:0;overflow:hidden">
+        <div style="display:grid;grid-template-columns:248px 1fr">
+          <div style="background:var(--sidebar-bg);color:var(--sidebar-ink);padding:14px 12px">
+            <div class="nav-group" style="margin-top:0">
+              <div class="nav-group__label">Messaging</div>
+              <div class="nav-item is-active" id="navA"><span>Compose</span></div>
+              <div class="nav-item" id="navB"><span>Campaigns</span><span class="tag">A/B</span></div>
+              <div class="nav-item" id="navC"><span>Analytics</span></div>
+            </div>
+            <div class="nav-group">
+              <div class="nav-group__label">Infrastructure</div>
+              <div class="nav-item" id="navD"><span>Billing &amp; Credit</span><span class="count">$1,284</span></div>
+            </div>
+          </div>
+          <div style="background:var(--parchment)">
+            <div class="topbar" style="position:static">
+              <div class="topbar__title">Compose</div>
+              <span class="crumb">/ Messaging</span>
+              <div class="topbar__spacer"></div>
+              <div class="search-trigger"><span id="navSearch"></span>Search…<span class="kbd">⌘K</span></div>
+              <div class="credit-chip"><span class="dot"></span>Credit <b>$1,284</b></div>
+            </div>
+            <div style="padding:28px"><span class="muted" style="font-size:13px">Page content sits here on the parchment canvas.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= COMMAND PALETTE ================= -->
+    <section class="ds-sec" id="palette">
+      <div class="ds-sec__head">
+        <div class="eyebrow">Patterns</div>
+        <h2>Command palette</h2>
+        <p>⌘K opens fuzzy navigation across every screen and action. Grouped results, selected-row accent, and a monospace shortcut hint on the right.</p>
+      </div>
+      <div class="well well--sunken" style="display:grid;place-items:center;padding:40px">
+        <div class="cmdk" style="position:static;transform:none;width:min(560px,100%)">
+          <div class="cmdk__input"><span id="cmdkIco"></span><input value="cam" readonly></div>
+          <div class="cmdk__list">
+            <div class="cmdk__group">Navigate</div>
+            <div class="cmdk__item is-sel"><span>Campaigns &amp; A/B</span><span class="meta">G then C</span></div>
+            <div class="cmdk__item"><span>Contacts &amp; Segments</span><span class="meta">G then A</span></div>
+            <div class="cmdk__group">Actions</div>
+            <div class="cmdk__item"><span>New campaign</span><span class="meta">↵</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="fine" style="margin-top:60px;text-align:center">CPaaS Console — design system reference · derived from <span class="mono">shared/app.css</span> · all tokens are live and theme-aware</p>
+  </main>
+</div>
+
+<script>
+/* ---- icon set (mirrors shared/shell.js) ---- */
+var I = {
+  home:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
+  send:'<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/>',
+  mega:'<path d="M3 11v3a1 1 0 0 0 1 1h2l3.5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M14 7s2 1.5 2 4.5S14 16 14 16"/><path d="M18 4s3 2.5 3 7.5-3 7.5-3 7.5"/>',
+  chart:'<path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6"/><rect x="12.5" y="7" width="3" height="10"/><rect x="18" y="13" width="3" height="4"/>',
+  hash:'<path d="M9 3 7 21M17 3l-2 18M4 8.5h16M3 15.5h16"/>',
+  card:'<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 10h18"/>',
+  gear:'<circle cx="12" cy="12" r="3.2"/><path d="M19.4 12a7.4 7.4 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7.3 7.3 0 0 0-2.2-1.3L14.4 2h-4l-.4 2.2a7.3 7.3 0 0 0-2.2 1.3l-2.3-1-2 3.4 2 1.5a7.4 7.4 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-1a7.3 7.3 0 0 0 2.2 1.3l.4 2.3h4l.4-2.3a7.3 7.3 0 0 0 2.2-1.3l2.3 1 2-3.4-2-1.5c.06-.43.1-.86.1-1.3z"/>',
+  key:'<circle cx="8" cy="14" r="4"/><path d="M11 11 21 1m-3 0 3 3m-6 0 3 3"/>',
+  code:'<path d="m8 8-5 4 5 4M16 8l5 4-5 4M13.5 5l-3 14"/>',
+  book:'<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5z"/><path d="M4 19.5A1.5 1.5 0 0 1 5.5 18H20v3H5.5A1.5 1.5 0 0 1 4 19.5z"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  bell:'<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  sun:'<circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.6 6.6 0 0 0 21 12.8z"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  inbox:'<path d="M3 13h4l2 3h6l2-3h4"/><path d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>',
+  users:'<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
+  layers:'<path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  shield:'<path d="M12 3 4 6v6c0 5 3.5 7.5 8 9 4.5-1.5 8-4 8-9V6z"/><path d="M9.5 12.5 8 14M8 11l4 4"/>',
+  route:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 3 3v6.5"/><path d="M6 8.5V14"/>',
+  ext:'<path d="M14 4h6v6M20 4l-9 9M19 13v6H5V5h6"/>'
+};
+function svg(name, cls){
+  return '<svg class="'+(cls||'ico')+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+(I[name]||'')+'</svg>';
+}
+
+/* ---- color swatches (read live computed values) ---- */
+function isDarkValue(v){
+  v = v.trim();
+  var m = v.match(/^#([0-9a-f]{6})$/i);
+  if(m){ var n=parseInt(m[1],16); var r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+    return (0.299*r+0.587*g+0.114*b) < 140; }
+  return false;
+}
+function renderSwatches(){
+  var cs = getComputedStyle(document.documentElement);
+  document.querySelectorAll('.swatches[data-tokens]').forEach(function(box){
+    box.innerHTML = box.getAttribute('data-tokens').split(',').map(function(tok){
+      var val = cs.getPropertyValue(tok).trim();
+      var border = isDarkValue(val) ? 'transparent' : 'var(--hairline-soft)';
+      return '<div class="sw"><div class="sw__chip" style="background:'+val+';border-bottom-color:'+border+'"></div>'+
+        '<div class="sw__meta"><div class="sw__name">'+tok+'</div><div class="sw__val">'+(val||'—')+'</div></div></div>';
+    }).join('');
+  });
+}
+
+/* ---- spacing scale ---- */
+(function(){
+  var steps = [4,6,8,12,16,18,22,26,32,48];
+  document.getElementById('spaceScale').innerHTML = steps.map(function(n){
+    return '<div class="space-row"><span class="lab">'+n+'px</span><span class="bar" style="width:'+n*2+'px"></span></div>';
+  }).join('');
+})();
+
+/* ---- icon grid ---- */
+(function(){
+  var names = ['home','send','mega','chart','hash','card','gear','key','code','book','search','bell','inbox','users','layers','shield','route','plus','ext','sun'];
+  document.getElementById('iconGrid').innerHTML = names.map(function(n){
+    return '<div class="icon-cell">'+svg(n)+'<span>'+n+'</span></div>';
+  }).join('');
+})();
+
+/* ---- inline icons in demos ---- */
+document.getElementById('bIcon').innerHTML = svg('plus','ico')+'New campaign';
+document.getElementById('bIcon2').innerHTML = svg('ext','ico')+'Open docs';
+document.getElementById('formIco').innerHTML = svg('search','ico');
+document.getElementById('navSearch').innerHTML = svg('search','ico');
+document.getElementById('cmdkIco').innerHTML = svg('search','ico');
+
+/* ---- toggles ---- */
+['tg1','tg2'].forEach(function(id){
+  var el = document.getElementById(id);
+  el.onclick = function(){ el.classList.toggle('is-on'); };
+});
+
+/* ---- nav item hover icons ---- */
+[['navA','send'],['navB','mega'],['navC','chart'],['navD','card']].forEach(function(p){
+  var el = document.getElementById(p[0]);
+  el.insertAdjacentHTML('afterbegin', svg(p[1],'ico'));
+});
+
+/* ---- scroll spy ---- */
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#railNav a'));
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(a){ a.classList.remove('is-active'); });
+        if(map[e.target.id]) map[e.target.id].classList.add('is-active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('section.ds-sec').forEach(function(s){ obs.observe(s); });
+})();
+
+/* ---- theme ---- */
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try{ localStorage.setItem('cpaas-theme', t); }catch(e){}
+  document.getElementById('themeBtn').innerHTML = svg(t==='dark'?'sun':'moon','ico');
+  renderSwatches();
+}
+document.getElementById('themeBtn').onclick = function(){
+  setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');
+};
+setTheme(document.documentElement.getAttribute('data-theme')||'light');
+</script>
+</body>
+</html>

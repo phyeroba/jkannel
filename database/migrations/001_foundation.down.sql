@@ -1,0 +1,7 @@
+BEGIN;
+DROP TABLE IF EXISTS audit_log CASCADE;
+DROP FUNCTION IF EXISTS reject_audit_mutation();
+DROP TABLE IF EXISTS configuration_versions CASCADE;
+DROP TABLE IF EXISTS tenants CASCADE;
+DROP TABLE IF EXISTS schema_migrations CASCADE;
+COMMIT;

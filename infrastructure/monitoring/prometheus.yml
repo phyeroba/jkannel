@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: jkannel-backend
+    metrics_path: /api/v1/metrics
+    static_configs:
+      - targets: ["backend:3000"]
+
+  - job_name: kamex-bearerbox
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["kamex-bearerbox:13000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

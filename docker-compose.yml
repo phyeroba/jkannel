@@ -1,0 +1,230 @@
+name: jkannel
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_APP_URL: postgresql://jkannel_app:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AUTH_DATABASE_URL: postgresql://jkannel_auth:${POSTGRES_AUTH_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+      POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD}
+      MIGRATIONS_ON_BOOT: ${MIGRATIONS_ON_BOOT:-true}
+      MIGRATIONS_DIR: /app/database/migrations
+      REDIS_URL: redis://redis:6379
+      AUTH_ACCESS_TOKEN_KEY: ${AUTH_ACCESS_TOKEN_KEY:-}
+      AUTH_REFRESH_TOKEN_KEY: ${AUTH_REFRESH_TOKEN_KEY:-}
+      AUTH_SIGNING_KEY: ${AUTH_SIGNING_KEY:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      AI_OPERATIONS_ENABLED: ${AI_OPERATIONS_ENABLED:-false}
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_FROM: ${SMTP_FROM:-jkannel@localhost}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_COPILOT_MODEL: ${AI_COPILOT_MODEL:-claude-sonnet-5}
+      KAMEX_BASE_URL: http://kamex-bearerbox:13000
+      KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+      KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
+      KAMEX_CONFIG_PATH: /var/lib/jkannel/kamex.conf
+      KAMEX_VALIDATOR_URL: http://kamex-validator:8080
+      KAMEX_VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
+      KAMEX_SQLBOX_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - ./runtime/kamex:/var/lib/jkannel
+      - ./database/migrations:/app/database/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kamex-validator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-3000}/api
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  kamex-bearerbox:
+    profiles: ["engine-kamex"]
+    image: ghcr.io/vaska94/kamex:1.8.3@sha256:c13f0e390bf0cbadef55440a6dc584670851faf41e42a027644e984502a21d7d
+    command: ["/etc/kamex/kamex.conf"]
+    environment:
+      KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
+      KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+    volumes:
+      - ./runtime/kamex/kamex.conf:/etc/kamex/kamex.conf:ro
+      - kamex-spool:/var/spool/kamex
+      - kamex-logs:/var/log/kamex
+    ports:
+      - "${KAMEX_ADMIN_PORT:-13000}:13000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:13000/status.json?password=$${KAMEX_STATUS_PASSWORD}\" >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  kamex-validator:
+    build:
+      context: ./infrastructure/kannel/validator
+    environment:
+      VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
+      KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
+      KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  kamex-smsbox:
+    profiles: ["engine-kamex"]
+    image: ghcr.io/vaska94/kamex:1.8.3@sha256:c13f0e390bf0cbadef55440a6dc584670851faf41e42a027644e984502a21d7d
+    entrypoint: ["/usr/sbin/smsbox"]
+    command: ["/etc/kamex/kamex-smsbox.conf"]
+    environment:
+      KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
+      KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+      KAMEX_SENDSMS_PASSWORD: ${KAMEX_SENDSMS_PASSWORD}
+    volumes:
+      - ./infrastructure/kannel/kamex-smsbox.conf:/etc/kamex/kamex-smsbox.conf:ro
+      - kamex-logs:/var/log/kamex
+    ports:
+      - "${KAMEX_SENDSMS_PORT:-13013}:13013"
+    depends_on:
+      kamex-sqlbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS --max-time 3 http://127.0.0.1:13013/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  kamex-sqlbox:
+    profiles: ["engine-kamex"]
+    build:
+      context: ./infrastructure/kannel/sqlbox
+    command: ["/etc/kamex/sqlbox.conf"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./infrastructure/kannel/sqlbox.conf:/etc/kamex/sqlbox.conf:ro
+      - kamex-logs:/var/log/kamex
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kamex-bearerbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  kamex-spool:
+  kamex-logs:
+  prometheus-data:
+  grafana-data:

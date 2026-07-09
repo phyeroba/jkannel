@@ -1,0 +1,147 @@
+export interface NavigationItem {
+  label: string;
+  to: string;
+  icon: string;
+  /** Absent means every authenticated user may open the workspace. */
+  permission?: string;
+  group: 'Operations' | 'Messaging' | 'Insights' | 'Platform';
+  badge?: string;
+}
+
+export const navigation: NavigationItem[] = [
+  {
+    label: 'Operations',
+    to: '/dashboard/operations',
+    icon: 'home',
+    permission: 'dashboard.view',
+    group: 'Operations',
+  },
+  {
+    label: 'Monitoring',
+    to: '/monitoring',
+    icon: 'chart',
+    permission: 'monitoring.view',
+    group: 'Operations',
+  },
+  { label: 'Alerts', to: '/alerts', icon: 'alert', permission: 'alerts.view', group: 'Operations' },
+  { label: 'Notifications', to: '/notifications', icon: 'bell', group: 'Operations' },
+  {
+    label: 'Messages',
+    to: '/messages',
+    icon: 'sms',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Queues',
+    to: '/queues',
+    icon: 'queue',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Delivery Reports',
+    to: '/delivery-reports',
+    icon: 'check',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'SMSC Connections',
+    to: '/smsc',
+    icon: 'server',
+    permission: 'smsc.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Routing',
+    to: '/routing',
+    icon: 'route',
+    permission: 'routes.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Configuration',
+    to: '/configuration',
+    icon: 'cog',
+    permission: 'configuration.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Analytics & Reports',
+    to: '/reports',
+    icon: 'chart',
+    permission: 'reports.view',
+    group: 'Insights',
+  },
+  {
+    label: 'Customers',
+    to: '/customers',
+    icon: 'users',
+    permission: 'system.view',
+    group: 'Insights',
+  },
+  {
+    label: 'AI Copilot',
+    to: '/copilot',
+    icon: 'spark',
+    permission: 'monitoring.view',
+    group: 'Insights',
+  },
+  {
+    label: 'API Gateway',
+    to: '/api-gateway',
+    icon: 'api',
+    permission: 'system.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Runtime Containers',
+    to: '/docker',
+    icon: 'docker',
+    permission: 'system.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Logs & Audit',
+    to: '/logs-audit',
+    icon: 'terminal',
+    permission: 'monitoring.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Plugins',
+    to: '/plugins',
+    icon: 'plugin',
+    permission: 'system.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Backup & Restore',
+    to: '/backup',
+    icon: 'db',
+    permission: 'system.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Users & Roles',
+    to: '/users',
+    icon: 'shield',
+    permission: 'users.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Sessions',
+    to: '/sessions',
+    icon: 'key',
+    permission: 'users.sessions',
+    group: 'Platform',
+  },
+  {
+    label: 'System Settings',
+    to: '/system',
+    icon: 'cog',
+    permission: 'system.view',
+    group: 'Platform',
+  },
+];
