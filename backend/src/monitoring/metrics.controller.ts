@@ -1,18 +1,22 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Optional, Res } from '@nestjs/common';
 import { HealthService } from '../health/health.service';
 import { MetricsRegistry } from './metrics.registry';
+import { PlatformMetricsService } from '../monitoring-depth/platform-metrics.service';
 
 @Controller('metrics')
 export class MetricsController {
   constructor(
     private readonly health: HealthService,
-    private readonly registry?: MetricsRegistry,
+    @Optional() private readonly registry?: MetricsRegistry,
+    // Optional so /metrics keeps working before MonitoringDepthModule is wired.
+    // When present, platform/DB/Redis gauges are appended to the scrape output.
+    @Optional() private readonly platform?: PlatformMetricsService,
   ) {}
 
   @Get()
-  metrics(
+  async metrics(
     @Res() response: { setHeader(name: string, value: string): void; send(body: string): void },
-  ): void {
+  ): Promise<void> {
     const memory = process.memoryUsage();
     const status = this.health.getStatus();
     const lines = [
@@ -30,6 +34,16 @@ export class MetricsController {
       `jkannel_backend_memory_bytes{kind="external"} ${memory.external}`,
     ];
     if (this.registry) lines.push(this.registry.render());
+    // Never let a slow/unreachable dependency fail the scrape; render() itself
+    // degrades to *_up 0 gauges. When platform is absent no await runs, so the
+    // handler stays synchronous for the base metrics.
+    if (this.platform) {
+      try {
+        lines.push(await this.platform.render());
+      } catch {
+        /* platform metrics are best-effort */
+      }
+    }
     response.setHeader('content-type', 'text/plain; version=0.0.4; charset=utf-8');
     response.send(`${lines.join('\n')}\n`);
   }

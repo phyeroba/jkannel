@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import { AuthRepository, AuditSink } from './auth.ports';
 import {
   AuthSession,
@@ -9,9 +9,47 @@ import {
   UserCredential,
 } from './auth.types';
 import { AuthService } from './auth.service';
+import { IdentityStore, LoginHistoryEntry, MfaLoginDevice } from './identity.repository';
+import { encryptSecret, normalizeRecoveryCode, sha256Hex } from './identity-crypto';
+import { generateTotp, newTotpSecret } from './identity-totp';
 import { PasswordHasher } from './password-hasher';
 import { TokenService } from './token.service';
 import { randomUUID } from 'node:crypto';
+
+class MemoryIdentity implements IdentityStore {
+  device?: MfaLoginDevice;
+  recovery: Array<{ id: string; codeHash: string; used: boolean }> = [];
+  loginHistory: LoginHistoryEntry[] = [];
+  passwordHistory: string[] = [];
+  currentHash?: string;
+  touched = false;
+  async findConfirmedMfaDevice() {
+    return this.device;
+  }
+  async touchMfaDevice() {
+    this.touched = true;
+  }
+  async findActiveRecoveryCode(_t: string, _u: string, codeHash: string) {
+    const record = this.recovery.find((entry) => entry.codeHash === codeHash && !entry.used);
+    return record ? { id: record.id } : undefined;
+  }
+  async burnRecoveryCode(id: string) {
+    const record = this.recovery.find((entry) => entry.id === id);
+    if (record) record.used = true;
+  }
+  async recordLoginHistory(entry: LoginHistoryEntry) {
+    this.loginHistory.push(entry);
+  }
+  async currentPasswordHash() {
+    return this.currentHash;
+  }
+  async recentPasswordHashes(_t: string, _u: string, limit: number) {
+    return this.passwordHistory.slice(-limit).reverse();
+  }
+  async addPasswordHistory(_t: string, _u: string, hash: string) {
+    this.passwordHistory.push(hash);
+  }
+}
 
 interface StoredResetToken extends PasswordResetToken {
   tokenHash: string;
@@ -45,6 +83,10 @@ class MemoryAuth implements AuthRepository, AuditSink {
   }
   async revokeSession(_: string, at: Date) {
     if (this.session) this.session.revokedAt = at;
+  }
+  async revokeSessionFamily(familyId: string, at: Date) {
+    if (this.session && this.session.familyId === familyId && !this.session.revokedAt)
+      this.session.revokedAt = at;
   }
   async append(event: AuditEvent) {
     this.events.push(event);
@@ -255,6 +297,96 @@ describe('AuthService', () => {
       await expect(
         service.acceptInvitation('invite-1', 'newoperator', 'valid password 12'),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('multi-factor enforcement', () => {
+    let identity: MemoryIdentity;
+    let secret: string;
+    beforeEach(() => {
+      identity = new MemoryIdentity();
+      secret = newTotpSecret();
+      identity.device = { id: 'd1', secretEncrypted: encryptSecret(secret) };
+      service = new AuthService(store, store, new PasswordHasher(), new TokenService(), identity);
+    });
+    it('rejects login without a code and reports mfaRequired', async () => {
+      const error = await service
+        .login('acme', 'operator', 'correct horse battery staple')
+        .catch((caught) => caught);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(error.getResponse()).toMatchObject({ mfaRequired: true });
+      expect(identity.loginHistory.at(-1)?.outcome).toBe('mfa_required');
+    });
+    it('accepts a valid TOTP code and burns nothing', async () => {
+      const token = generateTotp(secret);
+      const result = await service.login(
+        'acme',
+        'operator',
+        'correct horse battery staple',
+        {},
+        { totp: token },
+      );
+      expect(result.accessToken).toBeTruthy();
+      expect(identity.touched).toBe(true);
+      expect(identity.loginHistory.at(-1)).toMatchObject({ outcome: 'success', mfaUsed: true });
+    });
+    it('accepts and burns a single-use recovery code', async () => {
+      const code = 'abcde-fghij';
+      identity.recovery.push({
+        id: 'r1',
+        codeHash: sha256Hex(normalizeRecoveryCode(code)),
+        used: false,
+      });
+      const result = await service.login(
+        'acme',
+        'operator',
+        'correct horse battery staple',
+        {},
+        { recoveryCode: code },
+      );
+      expect(result.accessToken).toBeTruthy();
+      expect(identity.recovery[0].used).toBe(true);
+    });
+    it('rejects an incorrect TOTP code', async () => {
+      await expect(
+        service.login('acme', 'operator', 'correct horse battery staple', {}, { totp: '000000' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('refresh token reuse', () => {
+    it('revokes the family when a rotated refresh token is replayed', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const next = await service.refresh(first.refreshToken);
+      await expect(service.refresh(first.refreshToken)).rejects.toThrow(
+        'Refresh token reuse detected',
+      );
+      expect(store.session?.revokedAt).toBeInstanceOf(Date);
+      expect(store.session?.reusedAt).toBeInstanceOf(Date);
+      // The family is burned, so even the current refresh token is dead.
+      await expect(service.refresh(next.refreshToken)).rejects.toThrow('Invalid refresh token');
+      expect(store.events.map((event) => event.action)).toContain('token.reuse.detected');
+    });
+  });
+
+  describe('password history', () => {
+    let identity: MemoryIdentity;
+    beforeEach(() => {
+      identity = new MemoryIdentity();
+      service = new AuthService(store, store, new PasswordHasher(), new TokenService(), identity);
+      identity.currentHash = store.credential!.passwordHash;
+    });
+    it('rejects reuse of the current password', async () => {
+      const { devToken } = await service.requestPasswordReset('acme', 'operator');
+      await expect(
+        service.confirmPasswordReset(devToken!, 'correct horse battery staple'),
+      ).rejects.toThrow('New password must differ');
+    });
+    it('archives the outgoing hash and accepts a fresh password', async () => {
+      const { devToken } = await service.requestPasswordReset('acme', 'operator');
+      const result = await service.confirmPasswordReset(devToken!, 'a brand new password');
+      expect(result).toEqual({ reset: true });
+      expect(identity.passwordHistory).toHaveLength(1);
     });
   });
 });

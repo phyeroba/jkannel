@@ -17,6 +17,8 @@ export interface AuthRepository {
   saveSession(session: AuthSession): Promise<void>;
   findSession(sessionId: string): Promise<AuthSession | undefined>;
   revokeSession(sessionId: string, revokedAt: Date): Promise<void>;
+  /** Revoke every session sharing a refresh-token family (rotation replay defence). */
+  revokeSessionFamily(familyId: string, revokedAt: Date): Promise<void>;
 
   // Password reset (unauthenticated; run through the pre-tenant auth role).
   findResetTarget(tenantSlug: string, username: string): Promise<PasswordResetTarget | undefined>;

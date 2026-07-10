@@ -21,6 +21,8 @@ import { JobsService } from './platform/jobs.service';
 import { OpenApiController } from './platform/openapi.controller';
 import { MetricsRegistry } from './monitoring/metrics.registry';
 import { MetricsInterceptor } from './monitoring/metrics.interceptor';
+import { BackupDrModule } from './backup-dr/backup-dr.module';
+import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.module';
 
 @Module({
   imports: [
@@ -31,6 +33,8 @@ import { MetricsInterceptor } from './monitoring/metrics.interceptor';
     AiOperationsModule,
     AiCopilotModule,
     PlatformConsoleModule,
+    BackupDrModule,
+    MonitoringDepthModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

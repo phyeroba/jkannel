@@ -56,6 +56,13 @@ services:
       # Scheduled daily/weekly volume-report generation + anomaly detection.
       REPORT_JOBS_ENABLED: ${REPORT_JOBS_ENABLED:-true}
       REPORT_JOBS_INTERVAL_MS: ${REPORT_JOBS_INTERVAL_MS:-900000}
+      # Backup & DR: real pg_dump artifacts, encryption, scheduler.
+      BACKUP_DIR: /var/lib/jkannel/backups
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      BACKUP_SCHEDULER_ENABLED: ${BACKUP_SCHEDULER_ENABLED:-true}
+      BACKUP_SCHEDULER_INTERVAL_MS: ${BACKUP_SCHEDULER_INTERVAL_MS:-3600000}
+      # MFA secret encryption (falls back to an auth key when unset).
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
       KAMEX_BASE_URL: http://kamex-bearerbox:13000
       KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
       KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}

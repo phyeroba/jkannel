@@ -33,6 +33,12 @@ export interface AuthSession {
   revokedAt?: Date;
   ipAddress?: string;
   userAgent?: string;
+  /** Stable identifier shared across every rotation of one login's refresh token. */
+  familyId?: string;
+  /** Reserved for chain supersession; populated only in multi-row rotation designs. */
+  supersededBy?: string;
+  /** Set when a rotated (already-superseded) refresh token is replayed. */
+  reusedAt?: Date;
 }
 
 export interface AuditEvent {
@@ -42,7 +48,9 @@ export interface AuditEvent {
     | 'login.failed'
     | 'account.locked'
     | 'token.refreshed'
+    | 'token.reuse.detected'
     | 'logout'
+    | 'mfa.required'
     | 'password.reset.requested'
     | 'password.reset.completed'
     | 'user.invitation.accepted';

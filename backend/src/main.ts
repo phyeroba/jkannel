@@ -17,7 +17,15 @@ async function bootstrap(): Promise<void> {
       .split(',')
       .map((value) => value.trim()),
     credentials: true,
-    allowedHeaders: ['content-type', 'authorization', 'x-correlation-id', 'idempotency-key'],
+    allowedHeaders: [
+      'content-type',
+      'authorization',
+      'x-correlation-id',
+      'idempotency-key',
+      // Consent header for the opt-in AI Operations Copilot; without it the
+      // browser CORS preflight blocks the request ("Failed to fetch").
+      'x-jkannel-ai-opt-in',
+    ],
   });
   app.setGlobalPrefix('api/v1');
   app.useGlobalFilters(new HttpExceptionFilter());

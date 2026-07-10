@@ -1,0 +1,11 @@
+BEGIN;
+DROP TABLE IF EXISTS restore_operations;
+DROP TABLE IF EXISTS backup_schedules;
+DROP INDEX IF EXISTS backup_records_retention_idx;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS restore_of;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS database_version;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS platform_version;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS artifact_path;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS verified_at;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS retention_class;
+COMMIT;

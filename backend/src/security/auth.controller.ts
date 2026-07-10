@@ -8,16 +8,29 @@ interface RequestInfo extends AuthenticatedRequest {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
   @Post('login') login(
-    @Body() body: { tenant: string; username: string; password: string },
+    @Body()
+    body: {
+      tenant: string;
+      username: string;
+      password: string;
+      totp?: string;
+      recoveryCode?: string;
+    },
     @Req() request: RequestInfo,
   ) {
-    return this.auth.login(body.tenant, body.username, body.password, {
-      ipAddress: request.ip,
-      userAgent:
-        typeof request.headers['user-agent'] === 'string'
-          ? request.headers['user-agent']
-          : undefined,
-    });
+    return this.auth.login(
+      body.tenant,
+      body.username,
+      body.password,
+      {
+        ipAddress: request.ip,
+        userAgent:
+          typeof request.headers['user-agent'] === 'string'
+            ? request.headers['user-agent']
+            : undefined,
+      },
+      { totp: body.totp, recoveryCode: body.recoveryCode },
+    );
   }
   @Post('refresh') refresh(@Body() body: { refreshToken: string }) {
     return this.auth.refresh(body.refreshToken);

@@ -57,7 +57,7 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
   }
   async saveSession(session: AuthSession): Promise<void> {
     await this.database.authQuery(
-      `INSERT INTO auth_sessions(id,tenant_id,user_id,refresh_token_hash,created_at,expires_at,last_seen_at,revoked_at,ip_address,user_agent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET refresh_token_hash=EXCLUDED.refresh_token_hash,last_seen_at=EXCLUDED.last_seen_at,expires_at=EXCLUDED.expires_at,revoked_at=EXCLUDED.revoked_at`,
+      `INSERT INTO auth_sessions(id,tenant_id,user_id,refresh_token_hash,created_at,expires_at,last_seen_at,revoked_at,ip_address,user_agent,family_id,superseded_by,reused_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(id) DO UPDATE SET refresh_token_hash=EXCLUDED.refresh_token_hash,last_seen_at=EXCLUDED.last_seen_at,expires_at=EXCLUDED.expires_at,revoked_at=EXCLUDED.revoked_at,superseded_by=EXCLUDED.superseded_by,reused_at=EXCLUDED.reused_at`,
       [
         session.id,
         session.tenantId,
@@ -69,6 +69,9 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
         session.revokedAt ?? null,
         session.ipAddress ?? null,
         session.userAgent ?? null,
+        session.familyId ?? null,
+        session.supersededBy ?? null,
+        session.reusedAt ?? null,
       ],
     );
   }
@@ -84,6 +87,9 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
       revoked_at: Date | null;
       ip_address: string | null;
       user_agent: string | null;
+      family_id: string | null;
+      superseded_by: string | null;
+      reused_at: Date | null;
     }>('SELECT * FROM auth_sessions WHERE id=$1', [id]);
     const x = r.rows[0];
     return x
@@ -98,6 +104,9 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
           revokedAt: x.revoked_at ?? undefined,
           ipAddress: x.ip_address ?? undefined,
           userAgent: x.user_agent ?? undefined,
+          familyId: x.family_id ?? undefined,
+          supersededBy: x.superseded_by ?? undefined,
+          reusedAt: x.reused_at ?? undefined,
         }
       : undefined;
   }
@@ -106,6 +115,12 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
       id,
       revokedAt,
     ]);
+  }
+  async revokeSessionFamily(familyId: string, revokedAt: Date): Promise<void> {
+    await this.database.authQuery(
+      'UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,$2) WHERE family_id=$1 AND revoked_at IS NULL',
+      [familyId, revokedAt],
+    );
   }
   async findResetTarget(
     tenantSlug: string,

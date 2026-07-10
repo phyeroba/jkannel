@@ -12,7 +12,14 @@
       "Read(//d/JKANNEL/frontend/**)",
       "Bash(cd /d/JKANNEL/frontend && npm test 2>&1 | tail -40)",
       "Bash(npx vitest *)",
-      "Bash(grep -iE \"\\(^|/\\)\\\\.env$|\\\\.zip$|node_modules|/dist/|settings\\\\.local\")"
+      "Bash(grep -iE \"\\(^|/\\)\\\\.env$|\\\\.zip$|node_modules|/dist/|settings\\\\.local\")",
+      "Bash(node -e \"console.log\\(require\\('otplib/package.json'\\).version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('qrcode/package.json'\\).version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('ioredis/package.json'\\).version\\)\")",
+      "Bash(echo \"installed: otplib=$\\(node -e \"console.log\\(require\\('otplib/package.json'\\).version\\)\"\\) qrcode=$\\(node -e \"console.log\\(require\\('qrcode/package.json'\\).version\\)\"\\) ioredis=$\\(node -e \"console.log\\(require\\('ioredis/package.json'\\).version\\)\"\\)\")",
+      "Bash(node -e \"require\\('otplib'\\); require\\('qrcode'\\); require\\('ioredis'\\); console.log\\('all three import OK'\\)\")",
+      "Bash(ls src/security/ && echo \"---DB MIGRATIONS---\" && ls /d/JKANNEL/database/migrations/ && echo \"---PACKAGE SCRIPTS---\" && cat package.json | head -60)",
+      "Read(//d/JKANNEL/database/migrations//**)"
     ]
   }
 }
