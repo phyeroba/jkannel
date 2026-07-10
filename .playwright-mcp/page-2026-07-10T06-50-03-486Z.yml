@@ -1,0 +1,50 @@
+- generic [ref=f2e2]:
+  - link "Skip to workspace" [ref=f2e3] [cursor=pointer]:
+    - /url: "#workspace"
+  - generic [ref=f2e4]:
+    - complementary "Primary navigation" [ref=f2e5]:
+      - generic [ref=f2e6]:
+        - img [ref=f2e8]
+        - generic [ref=f2e10]:
+          - strong [ref=f2e11]: JKANNEL
+          - generic [ref=f2e12]: Kamex control plane
+      - navigation [ref=f2e13]:
+        - generic [ref=f2e14]:
+          - paragraph [ref=f2e15]: Operations
+          - link "Notifications" [ref=f2e16] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=f2e18]
+            - generic [ref=f2e21]: Notifications
+      - generic [ref=f2e24]:
+        - strong [ref=f2e25]: Kamex 1.8.3
+        - generic [ref=f2e26]: Messaging engine connected
+    - generic [ref=f2e27]:
+      - banner [ref=f2e28]:
+        - button "Search JKANNEL Ctrl K" [ref=f2e29]:
+          - img [ref=f2e30]
+          - generic [ref=f2e33]: Search JKANNEL
+          - generic [ref=f2e34]: Ctrl K
+        - generic [ref=f2e35]:
+          - button "Toggle theme" [ref=f2e36] [cursor=pointer]:
+            - img [ref=f2e37]
+          - button "Open notifications" [ref=f2e39] [cursor=pointer]:
+            - img [ref=f2e40]
+          - generic [ref=f2e43]:
+            - generic [ref=f2e44]: O
+            - generic [ref=f2e45]:
+              - strong [ref=f2e46]: Operator
+              - generic [ref=f2e47]: Authenticated
+            - button "Sign out" [ref=f2e48] [cursor=pointer]:
+              - img [ref=f2e49]
+      - main [ref=f2e51]:
+        - navigation "Breadcrumb" [ref=f2e52]:
+          - link "Home" [ref=f2e53] [cursor=pointer]:
+            - /url: /dashboard/operations
+        - generic [ref=f2e54]:
+          - generic:
+            - heading [level=1]
+            - paragraph
+      - contentinfo [ref=f2e55]:
+        - button "API connected - retry" [ref=f2e56] [cursor=pointer]: API connected - retry
+        - generic [ref=f2e58]: Kamex 1.8.3
+        - generic [ref=f2e59]: JKANNEL 0.1.0

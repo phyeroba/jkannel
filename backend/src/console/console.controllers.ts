@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -16,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
+import { PasswordHasher } from '../security/password-hasher';
 import { ConsoleRepository, Actor, GridPage } from './console.repository';
 import { ExportColumn, ExportService } from '../platform/export.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
@@ -189,6 +191,9 @@ export class SmscController {
     @Param('id') id: string,
   ) {
     return this.repository.listSmscDeployments(actor(r), uuid(id, 'id'));
+  }
+  @Get(':id') @RequirePermissions('smsc.view') detail(@Req() r: Request, @Param('id') id: string) {
+    return this.repository.getSmscDetail(actor(r), uuid(id, 'id'));
   }
   @Post(':id/actions/:operation') @RequirePermissions('smsc.manage') async operate(
     @Req() r: Request,
@@ -597,9 +602,13 @@ export class UsersController {
   constructor(
     private readonly repository: ConsoleRepository,
     private readonly exporter?: ExportService,
+    private readonly passwords?: PasswordHasher,
   ) {}
   @Get() @RequirePermissions('users.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listUsers(actor(r), q);
+  }
+  @Get('roles') @RequirePermissions('users.view') roles(@Req() r: Request) {
+    return this.repository.listRoles(actor(r));
   }
   @Get('export.csv') @RequirePermissions('users.view') exportCsv(
     @Req() r: Request,
@@ -641,6 +650,50 @@ export class UsersController {
     const email = text(b.email, 'email');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new BadRequestException('Invalid email');
     return this.repository.invite(actor(r), { ...b, email });
+  }
+  @Post() @RequirePermissions('users.manage') async create(@Req() r: Request, @Body() b: any) {
+    const username = text(b.username, 'username');
+    if (!/^[a-zA-Z0-9._-]{2,64}$/.test(username))
+      throw new BadRequestException('username must be 2–64 chars (letters, numbers, . _ -)');
+    const password = text(b.password, 'password');
+    if (password.length < 12)
+      throw new BadRequestException('password must be at least 12 characters');
+    const passwordHash = await this.passwords!.hash(password);
+    return this.repository.createUser(actor(r), {
+      username,
+      passwordHash,
+      roleIds: Array.isArray(b.roleIds) ? b.roleIds.map((x: unknown) => uuid(x, 'roleId')) : [],
+      status: b.status,
+    });
+  }
+  @Get(':id') @RequirePermissions('users.view') get(@Req() r: Request, @Param('id') id: string) {
+    return this.repository.getUser(actor(r), uuid(id, 'id'));
+  }
+  @Patch(':id') @RequirePermissions('users.manage') async update(
+    @Req() r: Request,
+    @Param('id') id: string,
+    @Body() b: any,
+  ) {
+    const value: any = { reason: b.reason };
+    if (b.status !== undefined) {
+      if (!['active', 'disabled', 'locked', 'archived'].includes(b.status))
+        throw new BadRequestException('Unsupported user status');
+      value.status = b.status;
+    }
+    if (Array.isArray(b.roleIds)) value.roleIds = b.roleIds.map((x: unknown) => uuid(x, 'roleId'));
+    if (b.password !== undefined) {
+      const password = text(b.password, 'password');
+      if (password.length < 12)
+        throw new BadRequestException('password must be at least 12 characters');
+      value.passwordHash = await this.passwords!.hash(password);
+    }
+    return this.repository.updateUser(actor(r), uuid(id, 'id'), value);
+  }
+  @Delete(':id') @RequirePermissions('users.manage') archive(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.archiveUser(actor(r), uuid(id, 'id'));
   }
 }
 
@@ -968,33 +1021,87 @@ export class ReadModelsController {
       foreignId: b.foreignId,
     });
   }
-  @Get('queues') @RequirePermissions('messages.view') async queues(@Req() r: Request) {
-    const probe = await this.sqlbox.probe();
-    return probe.available
-      ? {
-          ...(await this.sqlbox.queueSummary(await this.tenantSmscScope(r))),
-          source: 'kamex-sqlbox',
-        }
-      : { queued: null, source: 'unavailable', message: probe.evidence };
-  }
-  @Get('reports/delivery') @RequirePermissions('reports.view') async reports(@Req() r: Request) {
+  @Get('queues') @RequirePermissions('messages.view') async queues(
+    @Req() r: Request,
+    @Query() q: any = {},
+  ) {
     const probe = await this.sqlbox.probe();
     if (!probe.available)
       return {
         items: [],
+        nextCursor: null,
+        queued: null,
+        source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
+      };
+    const allowed = await this.tenantSmscScope(r);
+    const [page, summary] = await Promise.all([
+      this.sqlbox.listQueue({
+        limit: boundedInt(q.limit, 'limit', 1, 500, 100),
+        cursor: q.cursor
+          ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0)
+          : undefined,
+        query: q.query,
+        smscId: q.smscId,
+        allowedSmscIds: allowed,
+      }),
+      this.sqlbox.queueSummary(allowed),
+    ]);
+    return { ...page, summary, source: { status: 'available', type: 'kamex-sqlbox' } };
+  }
+  @Get('reports/delivery') @RequirePermissions('reports.view') async reports(
+    @Req() r: Request,
+    @Query() q: any = {},
+  ) {
+    const probe = await this.sqlbox.probe();
+    if (!probe.available)
+      return {
+        items: [],
+        nextCursor: null,
         summary: null,
         source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
       };
     const page = await this.sqlbox.list({
-      limit: 500,
+      limit: boundedInt(q.limit, 'limit', 1, 500, 100),
+      cursor: q.cursor ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0) : undefined,
+      query: q.query,
+      smscId: q.smscId,
       direction: 'DLR',
       allowedSmscIds: await this.tenantSmscScope(r),
     });
     return {
-      items: page.items,
+      ...page,
       summary: { total: page.items.length, nextCursor: page.nextCursor },
       source: { status: 'available', type: 'kamex-sqlbox' },
     };
+  }
+  @Get('reports/delivery/export.csv') @RequirePermissions('reports.view') async deliveryExport(
+    @Req() r: Request,
+    @Query() q: any = {},
+    @Res() response?: any,
+  ) {
+    const probe = await this.sqlbox.probe();
+    if (!probe.available) {
+      response.setHeader('content-type', 'text/csv; charset=utf-8');
+      response.send('id,timestamp,direction,status,sender,receiver,smscId,externalRef,text\r\n');
+      return;
+    }
+    const exported = await this.sqlbox.exportCsv({
+      limit: boundedInt(
+        q.limit,
+        'limit',
+        1,
+        Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000),
+        500,
+      ),
+      query: q.query,
+      smscId: q.smscId,
+      direction: 'DLR',
+      allowedSmscIds: await this.tenantSmscScope(r),
+    });
+    response.setHeader('content-type', 'text/csv; charset=utf-8');
+    response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
+    response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+    response.send(exported.content);
   }
   @Get('monitoring') @RequirePermissions('monitoring.view') async monitoring() {
     const adapter = this.engines!.forImplementation(process.env.ENGINE_IMPLEMENTATION ?? 'kamex');
@@ -1066,6 +1173,13 @@ export class ReadModelsController {
       r.principal!.username ?? r.principal!.userId,
       describeFilters(q),
     );
+  }
+  // Declared after the export routes so the literal paths match first.
+  @Get('audit-events/:id') @RequirePermissions('system.view') auditEvent(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository!.getAuditEvent(actor(r), uuid(id, 'id'));
   }
   @Get('messages/export.pdf') @RequirePermissions('messages.export') async exportMessagesPdf(
     @Req() r: Request,

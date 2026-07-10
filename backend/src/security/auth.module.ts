@@ -10,6 +10,7 @@ import { AuthGuard } from './auth.guard';
 import { PermissionsGuard } from './permissions.guard';
 import { SessionsController } from './sessions.controller';
 import { SessionAdminRepository } from './session-admin.repository';
+import { ExportService } from '../platform/export.service';
 
 @Module({
   controllers: [AuthController, SessionsController],
@@ -24,6 +25,7 @@ import { SessionAdminRepository } from './session-admin.repository';
     AuthGuard,
     PermissionsGuard,
     SessionAdminRepository,
+    ExportService,
   ],
   exports: [PasswordHasher, TokenService, AuthService, AuthGuard, PermissionsGuard],
 })

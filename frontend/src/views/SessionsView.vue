@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { ApiError, apiRequest } from '../api';
+import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 
 type RecordValue = Record<string, unknown>;
 
@@ -19,10 +19,32 @@ const limit = ref(50);
 const offset = ref(0);
 const activeOnly = ref(false);
 const userId = ref('');
+const search = ref('');
+const sortField = ref('createdAt');
+const sortDir = ref<'asc' | 'desc'>('desc');
 const loading = ref(false);
+const exporting = ref(false);
 const error = ref('');
 const unavailable = ref(false);
 const notice = ref('');
+
+const sortFields = [
+  { value: 'createdAt', label: 'Created' },
+  { value: 'lastSeenAt', label: 'Last seen' },
+  { value: 'expiresAt', label: 'Expires' },
+  { value: 'username', label: 'Username' },
+];
+
+function buildQuery(overrides: { limit?: number; offset?: number } = {}): URLSearchParams {
+  const params = new URLSearchParams();
+  if (activeOnly.value) params.set('active', 'true');
+  if (userId.value.trim()) params.set('userId', userId.value.trim());
+  if (search.value.trim()) params.set('search', search.value.trim());
+  params.set('sort', `${sortDir.value === 'desc' ? '-' : ''}${sortField.value}`);
+  params.set('limit', String(overrides.limit ?? limit.value));
+  params.set('offset', String(overrides.offset ?? offset.value));
+  return params;
+}
 
 function normalize(payload: unknown): SessionPage {
   if (payload && typeof payload === 'object' && Array.isArray((payload as RecordValue).items)) {
@@ -48,12 +70,7 @@ async function load(preserveNotice = false) {
   unavailable.value = false;
   if (!preserveNotice) notice.value = '';
   try {
-    const params = new URLSearchParams();
-    if (activeOnly.value) params.set('active', 'true');
-    if (userId.value.trim()) params.set('userId', userId.value.trim());
-    params.set('limit', String(limit.value));
-    params.set('offset', String(offset.value));
-    const page = normalize(await apiRequest<unknown>(`/sessions?${params.toString()}`));
+    const page = normalize(await apiRequest<unknown>(`/sessions?${buildQuery().toString()}`));
     rows.value = page.items;
     total.value = page.total;
   } catch (reason) {
@@ -70,6 +87,35 @@ async function load(preserveNotice = false) {
 function applyFilters() {
   offset.value = 0;
   void load();
+}
+
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+function onSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    applyFilters();
+  }, 300);
+}
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+});
+
+async function exportSessions(format: 'csv' | 'pdf') {
+  exporting.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const params = buildQuery({ limit: 500, offset: 0 });
+    const exported = await apiDownloadFile(`/sessions/export.${format}?${params.toString()}`);
+    saveDownloadedFile(exported.blob, exported.filename);
+    notice.value = `Exported ${
+      exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'
+    } sessions as ${format.toUpperCase()}.`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+  } finally {
+    exporting.value = false;
+  }
 }
 
 function turnPage(direction: number) {
@@ -105,6 +151,17 @@ onMounted(() => void load());
 <template>
   <section :aria-busy="loading" data-testid="sessions-view">
     <section class="toolbar panel grid-toolbar">
+      <label class="filter-select filter-search">
+        <span>Search</span>
+        <input
+          v-model="search"
+          data-testid="sessions-search"
+          type="search"
+          placeholder="Search username, IP, or agent"
+          @input="onSearchInput"
+          @keyup.enter="applyFilters"
+        />
+      </label>
       <label class="filter-select">
         <span>User ID</span>
         <input
@@ -122,6 +179,21 @@ onMounted(() => void load());
           <option :value="true">Active only</option>
         </select>
       </label>
+      <label class="filter-select">
+        <span>Sort by</span>
+        <select v-model="sortField" data-testid="sessions-sort-field" @change="applyFilters">
+          <option v-for="field in sortFields" :key="field.value" :value="field.value">
+            {{ field.label }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-select sort-direction">
+        <span>Direction</span>
+        <select v-model="sortDir" data-testid="sessions-sort-dir" @change="applyFilters">
+          <option value="desc">Descending</option>
+          <option value="asc">Ascending</option>
+        </select>
+      </label>
       <button
         class="primary-button"
         data-testid="sessions-refresh"
@@ -129,6 +201,22 @@ onMounted(() => void load());
         @click="load()"
       >
         {{ loading ? 'Working…' : 'Refresh' }}
+      </button>
+      <button
+        class="secondary-button"
+        data-testid="sessions-export-csv"
+        :disabled="exporting"
+        @click="exportSessions('csv')"
+      >
+        Export CSV
+      </button>
+      <button
+        class="secondary-button"
+        data-testid="sessions-export-pdf"
+        :disabled="exporting"
+        @click="exportSessions('pdf')"
+      >
+        Export PDF
       </button>
     </section>
 

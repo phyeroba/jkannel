@@ -37,11 +37,16 @@ export class NotificationsController {
   @Get('unread-count') async unread(@Req() r: Request) {
     return { unread: await this.repository.unreadNotificationCount(actor(r)) };
   }
-  @Post(':id/read') markRead(@Req() r: Request, @Param('id') id: string) {
-    return this.repository.markNotificationRead(actor(r), id);
-  }
   @Post('read-all') markAllRead(@Req() r: Request) {
     return this.repository.markAllNotificationsRead(actor(r));
+  }
+  // Declared before ':id' variants below; opening a notification marks it read
+  // and returns the full detail (title, body, data payload, timestamps).
+  @Get(':id') open(@Req() r: Request, @Param('id') id: string) {
+    return this.repository.openNotification(actor(r), id);
+  }
+  @Post(':id/read') markRead(@Req() r: Request, @Param('id') id: string) {
+    return this.repository.markNotificationRead(actor(r), id);
   }
 }
 

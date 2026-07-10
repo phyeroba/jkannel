@@ -13,6 +13,7 @@ interface NotificationRecord {
   body: string;
   read_at: string | null;
   created_at: string;
+  data?: Record<string, unknown> | null;
 }
 
 const route = useRoute();
@@ -65,8 +66,10 @@ function onKeydown(event: KeyboardEvent) {
 }
 async function checkApi() {
   try {
+    // 127.0.0.1, not localhost: browsers resolve localhost to IPv6 first but
+    // Docker publishes ports on IPv4, which fails as "Failed to fetch".
     const response = await fetch(
-      `${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api'}/v1/health`,
+      `${import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000/api'}/v1/health`,
     );
     apiOnline.value = response.ok;
   } catch {
@@ -112,6 +115,32 @@ async function markNotificationRead(notification: NotificationRecord) {
     notificationsError.value = 'The notification could not be updated.';
   }
 }
+const selectedNotification = ref<NotificationRecord | null>(null);
+/** Opening a notification loads its full detail and marks it read. */
+async function openNotification(notification: NotificationRecord) {
+  try {
+    const detail = await apiRequest<NotificationRecord>(`/notifications/${notification.id}`);
+    selectedNotification.value = detail;
+    // The GET marks it read server-side; refresh list + badge to reflect that.
+    await Promise.all([loadNotifications(), refreshUnreadCount()]);
+  } catch {
+    // Fall back to the row data we already have so the detail still opens.
+    selectedNotification.value = notification;
+    notificationsError.value = 'The full notification could not be loaded.';
+  }
+}
+function closeNotificationDetail() {
+  selectedNotification.value = null;
+}
+/** Human-readable rows from a notification's structured data payload. */
+const selectedDataRows = computed(() => {
+  const data = selectedNotification.value?.data;
+  if (!data || typeof data !== 'object') return [] as Array<{ label: string; value: string }>;
+  return Object.entries(data).map(([key, value]) => ({
+    label: key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()),
+    value: value === null || value === undefined ? '—' : String(value),
+  }));
+});
 async function markAllNotificationsRead() {
   try {
     await apiRequest('/notifications/read-all', { method: 'POST', body: '{}' });
@@ -248,28 +277,80 @@ onUnmounted(() => {
           <strong>No notifications yet</strong
           ><small>Report deliveries and platform notices appear here.</small>
         </p>
-        <p
+        <button
           v-for="item in notifications"
           :key="item.id"
-          class="notification-item"
+          type="button"
+          class="notification-item notification-item-button"
           :class="{ unread: !item.read_at }"
           :data-testid="`notification-${item.id}`"
+          @click="openNotification(item)"
         >
           <strong>{{ item.title }}</strong
           ><small>{{ item.body }}</small
           ><small class="notification-meta"
             >{{ item.category }} · {{ item.created_at }}
-            <button
-              v-if="!item.read_at"
-              class="text-button"
-              :data-testid="`shell-mark-read-${item.id}`"
-              @click="markNotificationRead(item)"
-            >
-              Mark read
-            </button></small
+            <span v-if="!item.read_at" class="notification-unread-tag">unread</span></small
           >
-        </p>
+        </button>
       </aside>
+      <div
+        v-if="selectedNotification"
+        class="dialog-backdrop"
+        data-testid="notification-detail"
+        @click.self="closeNotificationDetail"
+      >
+        <section
+          class="command-dialog notification-detail-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="notification-detail-title"
+        >
+          <header>
+            <h2 id="notification-detail-title">{{ selectedNotification.title }}</h2>
+            <button
+              class="text-button"
+              data-testid="notification-detail-close"
+              @click="closeNotificationDetail"
+            >
+              Close
+            </button>
+          </header>
+          <p class="notification-detail-meta">
+            <span class="status-badge">{{ selectedNotification.category }}</span>
+            <span>{{ selectedNotification.created_at }}</span>
+            <span class="status-badge muted">read</span>
+          </p>
+          <p class="notification-detail-body">{{ selectedNotification.body }}</p>
+          <dl v-if="selectedDataRows.length" class="notification-detail-data">
+            <template v-for="row in selectedDataRows" :key="row.label">
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.value }}</dd>
+            </template>
+          </dl>
+          <footer class="notification-detail-footer">
+            <RouterLink
+              class="secondary-button"
+              to="/notifications"
+              @click="
+                closeNotificationDetail();
+                notificationsOpen = false;
+              "
+              >Open notification centre</RouterLink
+            >
+            <RouterLink
+              v-if="selectedNotification.category === 'report'"
+              class="primary-button"
+              to="/reports"
+              @click="
+                closeNotificationDetail();
+                notificationsOpen = false;
+              "
+              >View reports</RouterLink
+            >
+          </footer>
+        </section>
+      </div>
       <main id="workspace" class="workspace" tabindex="-1">
         <nav class="breadcrumbs" aria-label="Breadcrumb">
           <RouterLink to="/dashboard/operations">Home</RouterLink

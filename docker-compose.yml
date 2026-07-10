@@ -53,6 +53,9 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-local}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AI_COPILOT_MODEL: ${AI_COPILOT_MODEL:-claude-sonnet-5}
+      # Scheduled daily/weekly volume-report generation + anomaly detection.
+      REPORT_JOBS_ENABLED: ${REPORT_JOBS_ENABLED:-true}
+      REPORT_JOBS_INTERVAL_MS: ${REPORT_JOBS_INTERVAL_MS:-900000}
       KAMEX_BASE_URL: http://kamex-bearerbox:13000
       KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
       KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}

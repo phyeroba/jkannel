@@ -19,7 +19,7 @@ describe('API client', () => {
 
     await expect(apiRequest('/messages/msg-1')).resolves.toEqual({ id: 'msg-1' });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://localhost:3000/api/v1/messages/msg-1');
+    expect(url).toBe('http://127.0.0.1:3000/api/v1/messages/msg-1');
     expect(new Headers(init.headers).get('authorization')).toBe('Bearer access-1');
   });
 
@@ -41,7 +41,7 @@ describe('API client', () => {
 
     await expect(apiRequest('/messages')).resolves.toEqual(['ok']);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[1][0]).toBe('http://localhost:3000/api/v1/auth/refresh');
+    expect(fetchMock.mock.calls[1][0]).toBe('http://127.0.0.1:3000/api/v1/auth/refresh');
     expect(new Headers(fetchMock.mock.calls[2][1].headers).get('authorization')).toBe(
       'Bearer access-2',
     );

@@ -1,0 +1,216 @@
+- generic [ref=f3e2]:
+  - link "Skip to workspace" [ref=f3e127] [cursor=pointer]:
+    - /url: "#workspace"
+  - generic [ref=f3e128]:
+    - complementary "Primary navigation" [ref=f3e129]:
+      - generic [ref=f3e130]:
+        - img [ref=f3e132]
+        - generic [ref=f3e134]:
+          - strong [ref=f3e135]: JKANNEL
+          - generic [ref=f3e136]: Kamex control plane
+      - navigation [ref=f3e137]:
+        - generic [ref=f3e138]:
+          - paragraph [ref=f3e139]: Operations
+          - link "Operations" [ref=f3e140] [cursor=pointer]:
+            - /url: /dashboard/operations
+            - img [ref=f3e142]
+            - generic [ref=f3e145]: Operations
+          - link "Monitoring" [ref=f3e146] [cursor=pointer]:
+            - /url: /monitoring
+            - img [ref=f3e148]
+            - generic [ref=f3e151]: Monitoring
+          - link "Alerts" [ref=f3e152] [cursor=pointer]:
+            - /url: /alerts
+            - img [ref=f3e154]
+            - generic [ref=f3e157]: Alerts
+          - link "Notifications" [ref=f3e158] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=f3e160]
+            - generic [ref=f3e163]: Notifications
+        - generic [ref=f3e164]:
+          - paragraph [ref=f3e165]: Messaging
+          - link "Messages" [ref=f3e166] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=f3e168]
+            - generic [ref=f3e170]: Messages
+          - link "Queues" [ref=f3e171] [cursor=pointer]:
+            - /url: /queues
+            - img [ref=f3e173]
+            - generic [ref=f3e176]: Queues
+          - link "Delivery Reports" [ref=f3e177] [cursor=pointer]:
+            - /url: /delivery-reports
+            - img [ref=f3e179]
+            - generic [ref=f3e182]: Delivery Reports
+          - link "SMSC Connections" [ref=f3e183] [cursor=pointer]:
+            - /url: /smsc
+            - img [ref=f3e185]
+            - generic [ref=f3e189]: SMSC Connections
+          - link "Routing" [ref=f3e190] [cursor=pointer]:
+            - /url: /routing
+            - img [ref=f3e192]
+            - generic [ref=f3e196]: Routing
+          - link "Configuration" [ref=f3e197] [cursor=pointer]:
+            - /url: /configuration
+            - img [ref=f3e199]
+            - generic [ref=f3e202]: Configuration
+        - generic [ref=f3e203]:
+          - paragraph [ref=f3e204]: Insights
+          - link "Analytics & Reports" [ref=f3e205] [cursor=pointer]:
+            - /url: /reports
+            - img [ref=f3e207]
+            - generic [ref=f3e210]: Analytics & Reports
+          - link "Customers" [ref=f3e211] [cursor=pointer]:
+            - /url: /customers
+            - img [ref=f3e213]
+            - generic [ref=f3e216]: Customers
+          - link "AI Copilot" [ref=f3e217] [cursor=pointer]:
+            - /url: /copilot
+            - img [ref=f3e219]
+            - generic [ref=f3e222]: AI Copilot
+        - generic [ref=f3e223]:
+          - paragraph [ref=f3e224]: Platform
+          - link "API Gateway" [ref=f3e225] [cursor=pointer]:
+            - /url: /api-gateway
+            - img [ref=f3e227]
+            - generic [ref=f3e229]: API Gateway
+          - link "Runtime Containers" [ref=f3e230] [cursor=pointer]:
+            - /url: /docker
+            - img [ref=f3e232]
+            - generic [ref=f3e235]: Runtime Containers
+          - link "Logs & Audit" [ref=f3e236] [cursor=pointer]:
+            - /url: /logs-audit
+            - img [ref=f3e238]
+            - generic [ref=f3e241]: Logs & Audit
+          - link "Plugins" [ref=f3e242] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=f3e244]
+            - generic [ref=f3e246]: Plugins
+          - link "Backup & Restore" [ref=f3e247] [cursor=pointer]:
+            - /url: /backup
+            - img [ref=f3e249]
+            - generic [ref=f3e252]: Backup & Restore
+          - link "Users & Roles" [ref=f3e253] [cursor=pointer]:
+            - /url: /users
+            - img [ref=f3e255]
+            - generic [ref=f3e257]: Users & Roles
+          - link "Sessions" [ref=f3e258] [cursor=pointer]:
+            - /url: /sessions
+            - img [ref=f3e260]
+            - generic [ref=f3e263]: Sessions
+          - link "System Settings" [ref=f3e264] [cursor=pointer]:
+            - /url: /system
+            - img [ref=f3e266]
+            - generic [ref=f3e269]: System Settings
+      - generic [ref=f3e272]:
+        - strong [ref=f3e273]: Kamex 1.8.3
+        - generic [ref=f3e274]: Messaging engine connected
+    - generic [ref=f3e275]:
+      - banner [ref=f3e276]:
+        - button "Search JKANNEL Ctrl K" [ref=f3e277]:
+          - img [ref=f3e278]
+          - generic [ref=f3e281]: Search JKANNEL
+          - generic [ref=f3e282]: Ctrl K
+        - generic [ref=f3e283]:
+          - generic [ref=f3e284]: Development
+          - generic [ref=f3e285]: Connected
+          - button "Toggle theme" [ref=f3e287] [cursor=pointer]:
+            - img [ref=f3e288]
+          - button "Open notifications" [ref=f3e290] [cursor=pointer]:
+            - img [ref=f3e291]
+            - generic [ref=f3e294]: "2"
+          - generic [ref=f3e295]:
+            - generic [ref=f3e296]: o
+            - generic [ref=f3e297]:
+              - strong [ref=f3e298]: operator
+              - generic [ref=f3e299]: administrator
+            - button "Sign out" [ref=f3e300] [cursor=pointer]:
+              - img [ref=f3e301]
+      - main [ref=f3e303]:
+        - navigation "Breadcrumb" [ref=f3e304]:
+          - link "Home" [ref=f3e305] [cursor=pointer]:
+            - /url: /dashboard/operations
+          - generic [ref=f3e306]: /
+          - generic [ref=f3e307]: Dashboard
+          - generic [ref=f3e308]: /
+          - generic [ref=f3e309]: Operations
+        - generic [ref=f3e311]:
+          - heading "Operations Dashboard" [level=1] [ref=f3e312]
+          - paragraph [ref=f3e313]: Live situational awareness across the messaging platform.
+        - generic [ref=f3e314]:
+          - button "Refresh dashboard" [ref=f3e315] [cursor=pointer]
+          - link "Ask AI Copilot" [ref=f3e316] [cursor=pointer]:
+            - /url: /copilot
+          - generic [ref=f3e317]: "Last checked: 1:45:43 AM"
+        - generic [ref=f3e318]:
+          - article [ref=f3e319]:
+            - generic [ref=f3e320]:
+              - generic [ref=f3e321]: Queue depth
+              - img [ref=f3e323]
+            - strong [ref=f3e326]: "0"
+            - text: Messages waiting in SQLBox
+          - article [ref=f3e327]:
+            - generic [ref=f3e328]:
+              - generic [ref=f3e329]: Messages (latest daily)
+              - img [ref=f3e331]
+            - strong [ref=f3e333]: "0"
+            - text: Daily snapshot 2026-07-08T00:00:00.000Z
+          - article [ref=f3e334]:
+            - generic [ref=f3e335]:
+              - generic [ref=f3e336]: DLRs (latest daily)
+              - img [ref=f3e338]
+            - strong [ref=f3e341]: "0"
+            - text: DLRs in latest daily snapshot
+          - article [ref=f3e342]:
+            - generic [ref=f3e343]:
+              - generic [ref=f3e344]: Alerts
+              - img [ref=f3e346]
+            - strong [ref=f3e349]: "0"
+            - text: Alert instances recorded
+        - generic [ref=f3e350]:
+          - article [ref=f3e351]:
+            - generic [ref=f3e353]:
+              - heading "Message volume" [level=2] [ref=f3e354]
+              - paragraph [ref=f3e355]: Daily total-scope report snapshots
+            - generic "Daily message volume" [ref=f3e356]:
+              - 'generic "2026-07-08T00:00:00.000Z: 0 messages" [ref=f3e357]'
+          - article [ref=f3e358]:
+            - generic [ref=f3e360]:
+              - heading "Platform health" [level=2] [ref=f3e361]
+              - paragraph [ref=f3e362]: Observed dependency state
+            - list [ref=f3e363]:
+              - listitem [ref=f3e364]:
+                - generic [ref=f3e366]:
+                  - strong [ref=f3e367]: kamex 1.8.3
+                  - generic [ref=f3e368]: transport reachable
+                - generic [ref=f3e369]: degraded
+              - listitem [ref=f3e370]:
+                - generic [ref=f3e372]:
+                  - strong [ref=f3e373]: SQLBox message store
+                  - generic [ref=f3e374]: PostgreSQL SQLBox reachable
+                - generic [ref=f3e375]: available
+              - listitem [ref=f3e376]:
+                - generic [ref=f3e378]:
+                  - strong [ref=f3e379]: JKANNEL API
+                  - generic [ref=f3e380]: REST control plane responding
+                - generic [ref=f3e381]: healthy
+          - article [ref=f3e382]:
+            - generic [ref=f3e383]:
+              - generic [ref=f3e384]:
+                - heading "Operational attention" [level=2] [ref=f3e385]
+                - paragraph [ref=f3e386]: Most recent alert instances
+              - link "View all alerts" [ref=f3e387] [cursor=pointer]:
+                - /url: /alerts
+            - table [ref=f3e389]:
+              - rowgroup [ref=f3e390]:
+                - row "Severity Condition Status Opened" [ref=f3e391]:
+                  - columnheader "Severity" [ref=f3e392]
+                  - columnheader "Condition" [ref=f3e393]
+                  - columnheader "Status" [ref=f3e394]
+                  - columnheader "Opened" [ref=f3e395]
+              - rowgroup [ref=f3e396]:
+                - row "No alert instances recorded." [ref=f3e397]:
+                  - cell "No alert instances recorded." [ref=f3e398]
+      - contentinfo [ref=f3e399]:
+        - button "API connected - retry" [ref=f3e400] [cursor=pointer]: API connected - retry
+        - generic [ref=f3e402]: Kamex 1.8.3
+        - generic [ref=f3e403]: JKANNEL 0.1.0

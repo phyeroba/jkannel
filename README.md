@@ -14,6 +14,9 @@ JKANNEL is the control room around your SMS infrastructure — not an SMS gatewa
 ### Operations dashboard
 ![JKANNEL operations dashboard](docs/screenshots/dashboard.png)
 
+### Analytics & reports
+![JKANNEL analytics and reports](docs/screenshots/analytics.png)
+
 ---
 
 ## Highlights
@@ -61,15 +64,21 @@ Sign in with tenant `default`, username `operator`, and the password you provisi
 
 ## Documentation
 
+Repository documentation is organized so the root stays clean:
+
+- **`docs/`** — the full, canonical engineering specifications (architecture, engine, operations, security, UI, SDK, ADRs, domain, handbook). Indexed by `project/JKANNEL_DOCUMENTATION_CATALOG.md`.
+- **`project/`** — living project documents (state, roadmap, changelog, proposals, handover, memory).
+
 | Document | Purpose |
 |---|---|
-| `SUPERVISOR_HANDOVER_SUMMARY.md` | Reviewer-facing overview and test guide |
-| `PROJECT_STATE.md` | Current capabilities and gaps |
-| `SYSTEM_IMPROVEMENT_PROPOSALS.md` | Forward roadmap and rationale |
-| `CHANGELOG.md` | Dated history of changes |
-| `docs/` | Full engineering specifications (canonical) |
-| `JKANNEL_DOCUMENTATION_CATALOG.md` | Index of all canonical documentation |
+| [project/SUPERVISOR_HANDOVER_SUMMARY.md](project/SUPERVISOR_HANDOVER_SUMMARY.md) | Reviewer-facing overview and test guide |
+| [project/PROJECT_STATE.md](project/PROJECT_STATE.md) | Current capabilities and gaps |
+| [project/SYSTEM_IMPROVEMENT_PROPOSALS.md](project/SYSTEM_IMPROVEMENT_PROPOSALS.md) | Forward roadmap and rationale |
+| [project/CHANGELOG.md](project/CHANGELOG.md) | Dated history of changes |
+| [project/ROADMAP.md](project/ROADMAP.md) | Phase roadmap and dependency gates |
+| [docs/](docs/) | Full engineering specifications (canonical) |
+| [project/JKANNEL_DOCUMENTATION_CATALOG.md](project/JKANNEL_DOCUMENTATION_CATALOG.md) | Index of all canonical documentation |
 
 ## Status
 
-Actively developed. Backend: 30 test suites / 102 tests. Frontend: 40 tests. All 15 database migrations apply cleanly to a fresh database and the full stack (PostgreSQL, Redis, backend, frontend, Kamex bearerbox/smsbox/sqlbox/validator) runs healthy under Docker Compose. Production hardening items (HA/failover, encrypted scheduled backups, penetration testing, carrier-scale soak) are tracked in `SYSTEM_IMPROVEMENT_PROPOSALS.md`.
+Actively developed. Backend: 33 test suites / 108 tests. Frontend: full Vitest coverage. All 16 database migrations apply cleanly to a fresh database and the full stack (PostgreSQL, Redis, backend, frontend, Kamex bearerbox/smsbox/sqlbox/validator) runs healthy under Docker Compose. Production hardening items (HA/failover, encrypted scheduled backups, penetration testing, carrier-scale soak) are tracked in `project/SYSTEM_IMPROVEMENT_PROPOSALS.md`.

@@ -69,4 +69,68 @@ describe('Sessions administration view', () => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('active=true'))).toBe(true),
     );
   });
+
+  it('debounces the search input into a ?search= query', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(() => apiResponse(page));
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const initialCalls = fetchMock.mock.calls.length;
+
+    await wrapper.get('[data-testid="sessions-search"]').setValue('operator');
+    // Not fired yet before the 300ms debounce window elapses.
+    expect(fetchMock.mock.calls.length).toBe(initialCalls);
+    vi.advanceTimersByTime(300);
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('search=operator'))).toBe(true),
+    );
+    vi.useRealTimers();
+  });
+
+  it('builds a sort query from the sort controls', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => apiResponse(page));
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // Default sort is -createdAt (descending).
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('sort=-createdAt'))).toBe(true);
+
+    await wrapper.get('[data-testid="sessions-sort-field"]').setValue('username');
+    await wrapper.get('[data-testid="sessions-sort-dir"]').setValue('asc');
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('sort=username'))).toBe(true),
+    );
+  });
+
+  it('exports sessions through the CSV export endpoint with the active query', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/sessions/export.csv'))
+        return Promise.resolve(
+          new Response('a,b', {
+            status: 200,
+            headers: { 'x-jkannel-export-row-count': '1' },
+          }),
+        );
+      return apiResponse(page);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: vi.fn(() => 'blob:jkannel-export'),
+      configurable: true,
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await wrapper.get('[data-testid="sessions-export-csv"]').trigger('click');
+    await vi.waitFor(() => expect(click).toHaveBeenCalled());
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/sessions/export.csv'))).toBe(
+      true,
+    );
+    click.mockRestore();
+  });
 });

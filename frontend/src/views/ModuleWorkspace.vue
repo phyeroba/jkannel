@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { canAccess, session } from '../stores/session';
+import './workspace-extras.css';
 
 type RecordValue = Record<string, unknown>;
 
@@ -52,6 +53,25 @@ const BOOLEAN_OPTIONS = ['true', 'false'];
 
 function text(value: unknown, fallback = '—') {
   return value === null || value === undefined || value === '' ? fallback : String(value);
+}
+
+function list(value: unknown, fallback = '—') {
+  if (Array.isArray(value))
+    return value.length ? value.map((entry) => String(entry)).join(', ') : fallback;
+  return text(value, fallback);
+}
+
+function formatBytes(value: unknown, fallback = '—') {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return fallback;
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
 }
 
 const definitions: Record<string, Workspace> = {
@@ -256,10 +276,21 @@ const definitions: Record<string, Workspace> = {
     noun: 'API client',
     search: 'Client, credential, route, or state',
     endpoint: '/api-gateway/clients',
-    action: 'Add API client',
+    action: 'Create API client',
     actionEndpoint: '/api-gateway/clients',
     actionMethod: 'POST',
     creatable: true,
+    columns: [
+      { header: 'Name', value: (raw) => text(raw.name) },
+      { header: 'Client key', value: (raw) => text(raw.client_key ?? raw.clientKey), mono: true },
+      { header: 'Scopes', value: (raw) => list(raw.scopes) },
+      { header: 'Status', value: (raw) => text(raw.status) },
+      {
+        header: 'Rate limit/min',
+        value: (raw) => text(raw.rate_limit_per_min ?? raw.rateLimitPerMin),
+      },
+      { header: 'Last used', value: (raw) => text(raw.last_used_at ?? raw.lastUsedAt) },
+    ],
   },
   docker: {
     noun: 'container',
@@ -308,6 +339,14 @@ const definitions: Record<string, Workspace> = {
     search: 'Plugin, capability, publisher, or state',
     endpoint: '/plugins',
     action: 'Refresh',
+    columns: [
+      { header: 'Plugin', value: (raw) => text(raw.name ?? raw.plugin_id) },
+      { header: 'Version', value: (raw) => text(raw.version) },
+      { header: 'Publisher', value: (raw) => text(raw.publisher) },
+      { header: 'Status', value: (raw) => text(raw.status) },
+      { header: 'Permissions', value: (raw) => list(raw.permissions) },
+      { header: 'Events', value: (raw) => list(raw.events) },
+    ],
   },
   backup: {
     noun: 'backup',
@@ -316,6 +355,15 @@ const definitions: Record<string, Workspace> = {
     action: 'Create backup',
     actionEndpoint: '/backups',
     actionMethod: 'POST',
+    columns: [
+      { header: 'Label', value: (raw) => text(raw.label) },
+      { header: 'Kind', value: (raw) => text(raw.kind) },
+      { header: 'Status', value: (raw) => text(raw.status) },
+      { header: 'Size', value: (raw) => formatBytes(raw.size_bytes ?? raw.sizeBytes) },
+      { header: 'Checksum', value: (raw) => text(raw.checksum), mono: true },
+      { header: 'Started', value: (raw) => text(raw.started_at ?? raw.startedAt) },
+      { header: 'Completed', value: (raw) => text(raw.completed_at ?? raw.completedAt) },
+    ],
   },
   users: {
     noun: 'user',
@@ -399,6 +447,62 @@ const smscOptionsError = ref('');
 const deliverySummary = ref<RecordValue | null>(null);
 const deliveryUnavailable = ref(false);
 
+/* Honest "planned / unavailable" source handling (e.g. customers). */
+const sourceUnavailable = ref(false);
+const sourceMessage = ref('');
+
+/* Shared detail drawer (users, smsc, logs-audit). */
+const detailOpen = ref(false);
+const detailLoading = ref(false);
+const detailError = ref('');
+const detail = ref<RecordValue | null>(null);
+const editing = ref(false);
+
+/* Users & roles. */
+const roleOptions = ref<RecordValue[]>([]);
+const showCreateUser = ref(false);
+const newUsername = ref('');
+const newPassword = ref('');
+const newRoleIds = ref<string[]>([]);
+const editUserStatus = ref('');
+const editUserRoleIds = ref<string[]>([]);
+const editUserPassword = ref('');
+
+/* SMSC edit. */
+const editSmscName = ref('');
+const editSmscHost = ref('');
+const editSmscPort = ref(2775);
+const editSmscTps = ref(10);
+const editSmscEnabled = ref(true);
+
+/* Cursor-paginated modules (queues, delivery reports). */
+const cursorItems = ref<RecordValue[]>([]);
+const cursorNext = ref<string | null>(null);
+const cursorSummary = ref<RecordValue | null>(null);
+const cursorSource = ref<RecordValue | string | null>(null);
+const cursorCurrent = ref<string | null>(null);
+const cursorHistory = ref<Array<string | null>>([]);
+const dlrSmscId = ref('');
+
+/* Runtime containers. */
+const containers = ref<RecordValue[]>([]);
+const containersObservedAt = ref('');
+
+/* System settings. */
+const settingItems = ref<RecordValue[]>([]);
+const settingDrafts = ref<Record<string, string>>({});
+
+/* API gateway one-time secret + client composer. */
+const showApiClientForm = ref(false);
+const apiClientName = ref('');
+const apiClientScopes = ref('');
+const revealedSecret = ref('');
+const revealedSecretLabel = ref('');
+
+/* Backup restore composer. */
+const restoreRow = ref<Row | null>(null);
+const restoreReason = ref('');
+
 const key = computed(() => String(route.name));
 const workspace = computed(() => definitions[key.value]);
 const grid = computed(() => workspace.value?.grid);
@@ -422,7 +526,10 @@ const hasRowActions = computed(
     key.value === 'smsc' ||
     key.value === 'configuration' ||
     key.value === 'routing' ||
-    key.value === 'notifications',
+    key.value === 'notifications' ||
+    key.value === 'plugins' ||
+    key.value === 'backup' ||
+    key.value === 'api-gateway',
 );
 const columnCount = computed(
   () => (columns.value ? columns.value.length : 4) + (hasRowActions.value ? 1 : 0),
@@ -434,6 +541,26 @@ const rangeLabel = computed(() => {
   return `Showing ${first}–${last} of ${total.value}`;
 });
 const canGenerateReports = computed(() => canAccess(session.value, 'system.manage'));
+const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
+const canManageSystem = computed(() => canAccess(session.value, 'system.manage'));
+
+const isQueue = computed(() => key.value === 'queues');
+const isDlr = computed(() => key.value === 'delivery-reports');
+const isCursor = computed(() => isQueue.value || isDlr.value);
+const isDocker = computed(() => key.value === 'docker');
+const isSystem = computed(() => key.value === 'system');
+const customRender = computed(() => isCursor.value || isDocker.value || isSystem.value);
+const detailModule = computed(
+  () => key.value === 'users' || key.value === 'smsc' || key.value === 'logs-audit',
+);
+const settingGroups = computed(() => {
+  const groups: Record<string, RecordValue[]> = {};
+  for (const item of settingItems.value) {
+    const name = text(item.group, 'general');
+    (groups[name] ??= []).push(item);
+  }
+  return Object.entries(groups).map(([name, items]) => ({ name, items }));
+});
 
 function normalize(payload: unknown): { items: Row[]; total: number } {
   let source: unknown[] = [];
@@ -492,24 +619,51 @@ function buildGridQuery(overrides: { limit?: number; offset?: number } = {}) {
   return params;
 }
 
+function detectUnavailableSource(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return;
+  const source = (payload as RecordValue).source;
+  if (source && typeof source === 'object' && (source as RecordValue).status === 'unavailable') {
+    sourceUnavailable.value = true;
+    sourceMessage.value = text(
+      (source as RecordValue).message,
+      'This module is planned and not yet available.',
+    );
+  }
+}
+
 async function load(preserveNotice = false) {
   if (!workspace.value) return;
   loading.value = true;
   error.value = '';
   unavailable.value = false;
+  sourceUnavailable.value = false;
+  sourceMessage.value = '';
   if (!preserveNotice) notice.value = '';
   appliedSearch = query.value;
 
   try {
-    const path = grid.value
-      ? `${workspace.value.endpoint}?${buildGridQuery().toString()}`
-      : workspace.value.endpoint;
-    const page = normalize(await apiRequest<unknown>(path));
-    rows.value = page.items;
-    total.value = page.total;
+    if (isCursor.value) {
+      await loadCursorPage();
+    } else if (isDocker.value) {
+      await loadContainers();
+    } else if (isSystem.value) {
+      await loadSettings();
+    } else {
+      const path = grid.value
+        ? `${workspace.value.endpoint}?${buildGridQuery().toString()}`
+        : workspace.value.endpoint;
+      const payload = await apiRequest<unknown>(path);
+      const page = normalize(payload);
+      rows.value = page.items;
+      total.value = page.total;
+      detectUnavailableSource(payload);
+    }
   } catch (reason) {
     rows.value = [];
     total.value = 0;
+    cursorItems.value = [];
+    containers.value = [];
+    settingItems.value = [];
     unavailable.value =
       reason instanceof ApiError && (reason.status === 404 || reason.status === 501);
     error.value = reason instanceof Error ? reason.message : 'The service could not be reached.';
@@ -517,6 +671,66 @@ async function load(preserveNotice = false) {
     loading.value = false;
   }
   if (key.value === 'reports') void loadDeliverySummary();
+}
+
+async function loadCursorPage() {
+  const endpoint = isDlr.value ? '/reports/delivery' : '/queues';
+  const params = new URLSearchParams();
+  if (query.value.trim()) params.set('query', query.value.trim());
+  if (isDlr.value && dlrSmscId.value.trim()) params.set('smscId', dlrSmscId.value.trim());
+  if (cursorCurrent.value) params.set('cursor', cursorCurrent.value);
+  params.set('limit', '50');
+  const payload = await apiRequest<RecordValue>(`${endpoint}?${params.toString()}`);
+  cursorItems.value = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
+  cursorNext.value = (payload.nextCursor as string | null) ?? null;
+  cursorSummary.value = (payload.summary as RecordValue) ?? null;
+  cursorSource.value = (payload.source as RecordValue | string) ?? null;
+  detectUnavailableSource(payload);
+}
+
+async function loadContainers() {
+  const payload = await apiRequest<RecordValue>('/docker/containers');
+  containers.value = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
+  containersObservedAt.value = text(payload.observedAt ?? payload.observed_at, '');
+  detectUnavailableSource(payload);
+}
+
+async function loadSettings() {
+  const payload = await apiRequest<RecordValue>('/system/settings');
+  const items = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
+  settingItems.value = items;
+  const drafts: Record<string, string> = {};
+  for (const item of items) {
+    const settingKey = String(item.key);
+    drafts[settingKey] =
+      item.is_secret || item.isSecret
+        ? ''
+        : text(item.value, '') === '—'
+          ? ''
+          : String(item.value ?? '');
+  }
+  settingDrafts.value = drafts;
+  detectUnavailableSource(payload);
+}
+
+function resetCursor() {
+  cursorCurrent.value = null;
+  cursorHistory.value = [];
+  cursorNext.value = null;
+}
+
+function turnCursor(direction: number) {
+  if (direction > 0) {
+    if (!cursorNext.value) return;
+    cursorHistory.value = [...cursorHistory.value, cursorCurrent.value];
+    cursorCurrent.value = cursorNext.value;
+  } else {
+    if (!cursorHistory.value.length) return;
+    const history = [...cursorHistory.value];
+    cursorCurrent.value = history.pop() ?? null;
+    cursorHistory.value = history;
+  }
+  void load();
 }
 
 function applyGrid() {
@@ -553,6 +767,509 @@ async function exportGrid(format: 'csv' | 'pdf') {
   } finally {
     loading.value = false;
   }
+}
+
+const queueColumns = [
+  { label: 'ID', value: (raw: RecordValue) => text(raw.id ?? raw.message_id, '') },
+  { label: 'Sender', value: (raw: RecordValue) => text(raw.sender ?? raw.from, '') },
+  {
+    label: 'Receiver',
+    value: (raw: RecordValue) => text(raw.receiver ?? raw.recipient ?? raw.to, ''),
+  },
+  { label: 'SMSC', value: (raw: RecordValue) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, '') },
+  { label: 'Text', value: (raw: RecordValue) => text(raw.text ?? raw.body ?? raw.msgdata, '') },
+  {
+    label: 'Timestamp',
+    value: (raw: RecordValue) => text(raw.timestamp ?? raw.created_at ?? raw.time, ''),
+  },
+];
+
+const dlrColumns = [
+  {
+    label: 'Message ID',
+    value: (raw: RecordValue) => text(raw.id ?? raw.message_id ?? raw.messageId, ''),
+  },
+  {
+    label: 'Recipient',
+    value: (raw: RecordValue) => text(raw.recipient ?? raw.receiver ?? raw.to, ''),
+  },
+  {
+    label: 'Status',
+    value: (raw: RecordValue) => text(raw.status ?? raw.dlr_status ?? raw.state, ''),
+  },
+  { label: 'SMSC', value: (raw: RecordValue) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, '') },
+  {
+    label: 'Timestamp',
+    value: (raw: RecordValue) => text(raw.timestamp ?? raw.created_at ?? raw.updated_at, ''),
+  },
+];
+
+const cursorSourceUnavailable = computed(() => {
+  const source = cursorSource.value;
+  return Boolean(
+    source && typeof source === 'object' && (source as RecordValue).status === 'unavailable',
+  );
+});
+const cursorSourceLabel = computed(() => {
+  const source = cursorSource.value;
+  if (!source) return 'unknown';
+  if (typeof source === 'string') return source;
+  return text((source as RecordValue).type ?? (source as RecordValue).status, 'unknown');
+});
+
+function detailArray(field: string): RecordValue[] {
+  const value = detail.value?.[field];
+  return Array.isArray(value) ? (value as RecordValue[]) : [];
+}
+function stringArray(field: string): string[] {
+  const value = detail.value?.[field];
+  return Array.isArray(value) ? (value as unknown[]).map((entry) => String(entry)) : [];
+}
+function prettyJson(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+function smscDotClass(raw: RecordValue) {
+  const enabled = raw.enabled === true || raw.enabled === 'true';
+  const life = String(raw.lifecycle_state ?? raw.lifecycleState ?? '').toLowerCase();
+  if (enabled && ['active', 'reachable', 'deployed', 'validated'].includes(life)) return 'good';
+  if (!enabled || ['degraded', 'archived'].includes(life)) return 'bad';
+  return 'warn';
+}
+function smscHealthText(raw: RecordValue) {
+  const health = raw.health;
+  if (health && typeof health === 'object' && !Array.isArray(health)) {
+    const record = health as RecordValue;
+    const stateText = text(record.state ?? record.status, '');
+    const latency = record.latency_ms ?? record.latencyMs;
+    if (stateText === '—' && (latency === undefined || latency === null)) return '';
+    return `${stateText}${latency !== undefined && latency !== null ? ` · ${latency} ms` : ''}`;
+  }
+  return '';
+}
+function healthDotClass(state: unknown) {
+  const value = String(state ?? '').toLowerCase();
+  if (['reachable', 'active', 'healthy', 'ok'].includes(value)) return 'good';
+  if (['degraded', 'warning'].includes(value)) return 'warn';
+  if (value === '') return 'unknown';
+  return 'bad';
+}
+function containerDotClass(raw: RecordValue) {
+  const health = String(raw.health ?? '').toLowerCase();
+  if (health === 'healthy') return 'good';
+  if (health === 'unreachable') return 'bad';
+  if (health === 'degraded') return 'warn';
+  return 'unknown';
+}
+
+async function loadRoles() {
+  try {
+    const payload = await apiRequest<unknown>('/users/roles');
+    roleOptions.value = Array.isArray(payload)
+      ? (payload as RecordValue[])
+      : Array.isArray((payload as RecordValue)?.items)
+        ? ((payload as RecordValue).items as RecordValue[])
+        : [];
+  } catch {
+    roleOptions.value = [];
+  }
+}
+
+async function openDetail(row: Row) {
+  if (!detailModule.value) return;
+  detailOpen.value = true;
+  editing.value = false;
+  detailLoading.value = true;
+  detailError.value = '';
+  detail.value = null;
+  try {
+    const endpoint =
+      key.value === 'users'
+        ? `/users/${row.id}`
+        : key.value === 'smsc'
+          ? `/smscs/${row.id}`
+          : `/audit-events/${row.id}`;
+    const record = await apiRequest<RecordValue>(endpoint);
+    detail.value = record;
+    if (key.value === 'users') {
+      editUserStatus.value = text(record.status, 'active');
+      editUserRoleIds.value = Array.isArray(record.roles)
+        ? (record.roles as RecordValue[]).map((role) => String(role.id))
+        : [];
+      editUserPassword.value = '';
+      if (!roleOptions.value.length) void loadRoles();
+    }
+    if (key.value === 'smsc') {
+      editSmscName.value = text(record.name, '') === '—' ? '' : String(record.name ?? '');
+      editSmscHost.value = text(record.host, '') === '—' ? '' : String(record.host ?? '');
+      editSmscPort.value = Number(record.port ?? 2775);
+      editSmscTps.value = Number(record.tps ?? 10);
+      editSmscEnabled.value = record.enabled === true || record.enabled === 'true';
+    }
+  } catch (reason) {
+    detailError.value =
+      reason instanceof Error ? reason.message : 'The record could not be loaded.';
+  } finally {
+    detailLoading.value = false;
+  }
+}
+function closeDetail() {
+  detailOpen.value = false;
+  detail.value = null;
+  editing.value = false;
+}
+
+async function openCreateUser() {
+  showCreateUser.value = true;
+  if (!roleOptions.value.length) await loadRoles();
+}
+async function createUser() {
+  if (!newUsername.value.trim() || newPassword.value.length < 12) return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest('/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: newUsername.value.trim(),
+        password: newPassword.value,
+        roleIds: newRoleIds.value,
+      }),
+    });
+    showCreateUser.value = false;
+    newUsername.value = '';
+    newPassword.value = '';
+    newRoleIds.value = [];
+    notice.value = 'User created.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function saveUser() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: editUserStatus.value,
+        roleIds: editUserRoleIds.value,
+        ...(editUserPassword.value ? { password: editUserPassword.value } : {}),
+      }),
+    });
+    notice.value = 'User updated.';
+    await openDetail({ id } as Row);
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function archiveUser() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  if (!confirm(`Archive user ${text(detail.value.username, id)}? This revokes their access.`))
+    return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/users/${id}`, { method: 'DELETE' });
+    notice.value = 'User archived.';
+    closeDetail();
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function saveSmsc() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/smscs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        name: editSmscName.value.trim(),
+        host: editSmscHost.value.trim(),
+        port: editSmscPort.value,
+        tps: editSmscTps.value,
+        enabled: editSmscEnabled.value,
+      }),
+    });
+    notice.value = 'SMSC updated.';
+    await openDetail({ id } as Row);
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function testSmsc(row: Row) {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const result = await apiRequest<RecordValue>(`/smscs/${row.id}/actions/test`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: '{}',
+    });
+    const latency = result.latency_ms ?? result.latencyMs;
+    notice.value = `Test for ${row.name}: ${text(result.detail ?? result.state ?? result.status, 'completed')}${
+      latency !== undefined && latency !== null ? ` (${latency} ms)` : ''
+    }.`;
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function pluginAction(row: Row, operation: 'enable' | 'disable') {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/plugins/${row.id}/${operation}`, { method: 'POST', body: '{}' });
+    notice.value = `Plugin ${row.name} ${operation}d.`;
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function createBackup() {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest('/backups', { method: 'POST', body: JSON.stringify({ kind: 'full' }) });
+    notice.value = 'Full backup requested.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function verifyBackup(row: Row) {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/backups/${row.id}/verify`, { method: 'POST', body: '{}' });
+    notice.value = `Verification requested for ${row.name}.`;
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+function openRestore(row: Row) {
+  restoreRow.value = row;
+  restoreReason.value = '';
+}
+async function confirmRestore() {
+  if (!restoreRow.value || !restoreReason.value.trim()) return;
+  const target = restoreRow.value;
+  if (
+    !confirm(`Authorize restore from ${target.name}? This records an authorized restore request.`)
+  )
+    return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/backups/${target.id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: restoreReason.value.trim() }),
+    });
+    notice.value = 'Authorized restore request recorded.';
+    restoreRow.value = null;
+    restoreReason.value = '';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+function openApiClientForm() {
+  showApiClientForm.value = true;
+  apiClientName.value = '';
+  apiClientScopes.value = '';
+}
+async function createApiClient() {
+  if (!apiClientName.value.trim()) return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const scopes = apiClientScopes.value
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const result = await apiRequest<RecordValue>('/api-gateway/clients', {
+      method: 'POST',
+      body: JSON.stringify({ name: apiClientName.value.trim(), scopes }),
+    });
+    revealedSecret.value = text(result.clientSecret ?? result.client_secret, '');
+    revealedSecretLabel.value = apiClientName.value.trim();
+    showApiClientForm.value = false;
+    notice.value = 'API client created.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function rotateSecret(row: Row) {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const result = await apiRequest<RecordValue>(`/api-gateway/clients/${row.id}/rotate-secret`, {
+      method: 'POST',
+      body: '{}',
+    });
+    revealedSecret.value = text(result.clientSecret ?? result.client_secret, '');
+    revealedSecretLabel.value = row.name;
+    notice.value = 'API client secret rotated.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function revokeClient(row: Row) {
+  if (!confirm(`Revoke API client ${row.name}? Applications using it will lose access.`)) return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/api-gateway/clients/${row.id}`, { method: 'DELETE' });
+    notice.value = 'API client revoked.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+function copySecret() {
+  if (revealedSecret.value && navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(revealedSecret.value);
+    notice.value = 'Secret copied to clipboard.';
+  }
+}
+
+async function saveSetting(item: RecordValue) {
+  const settingKey = String(item.key);
+  const type = String(item.type ?? 'string');
+  const raw = settingDrafts.value[settingKey] ?? '';
+  let value: unknown = raw;
+  if (type === 'number') value = Number(raw);
+  else if (type === 'boolean') value = raw === 'true' || raw === '1';
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/system/settings/${encodeURIComponent(settingKey)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+    notice.value = `Setting ${settingKey} updated.`;
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+function downloadClientCsv(
+  filename: string,
+  headers: Array<{ label: string; value: (raw: RecordValue) => string }>,
+  records: RecordValue[],
+) {
+  const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+  const lines = [headers.map((column) => escape(column.label)).join(',')];
+  for (const record of records)
+    lines.push(headers.map((column) => escape(column.value(record))).join(','));
+  saveDownloadedFile(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), filename);
+}
+function exportQueueCsv() {
+  downloadClientCsv('jkannel-queues.csv', queueColumns, cursorItems.value);
+  notice.value = `Exported ${cursorItems.value.length} loaded queued rows as CSV.`;
+}
+async function exportDlrCsv() {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const params = new URLSearchParams();
+    if (query.value.trim()) params.set('query', query.value.trim());
+    if (dlrSmscId.value.trim()) params.set('smscId', dlrSmscId.value.trim());
+    params.set('limit', '5000');
+    const exported = await apiDownloadFile(`/reports/delivery/export.csv?${params.toString()}`);
+    saveDownloadedFile(exported.blob, exported.filename);
+    notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'} delivery reports.`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function exportSimple(base: string, format: 'csv' | 'pdf') {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const exported = await apiDownloadFile(`${base}.${format}`);
+    saveDownloadedFile(exported.blob, exported.filename);
+    notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'all'} rows as ${format.toUpperCase()}.`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+function applyDlrFilter() {
+  resetCursor();
+  void load();
 }
 
 async function loadDeliverySummary() {
@@ -654,6 +1371,14 @@ async function markNotificationRead(row: Row) {
 async function primaryAction() {
   const value = workspace.value;
   if (!value) return;
+  if (key.value === 'api-gateway') {
+    openApiClientForm();
+    return;
+  }
+  if (key.value === 'backup') {
+    await createBackup();
+    return;
+  }
   if (!value.actionEndpoint) {
     await load();
     return;
@@ -884,11 +1609,12 @@ async function checkRetention(apply = false) {
 }
 
 watch(query, (value) => {
-  if (!grid.value) return;
+  if (!grid.value && !isCursor.value) return;
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     if (value === appliedSearch) return;
     offset.value = 0;
+    resetCursor();
     void load();
   }, 300);
 });
@@ -902,8 +1628,20 @@ watch(
     state.value = 'All';
     showComposer.value = false;
     showSendForm.value = false;
+    showCreateUser.value = false;
+    showApiClientForm.value = false;
+    detailOpen.value = false;
+    detail.value = null;
+    editing.value = false;
+    revealedSecret.value = '';
+    restoreRow.value = null;
+    restoreReason.value = '';
+    dlrSmscId.value = '';
     deliverySummary.value = null;
     deliveryUnavailable.value = false;
+    sourceUnavailable.value = false;
+    sourceMessage.value = '';
+    resetCursor();
     gridFilters.value = {};
     const defaultSort = workspace.value?.grid?.defaultSort ?? '';
     sortField.value = defaultSort.replace(/^-/, '');
@@ -1013,6 +1751,51 @@ onUnmounted(() => {
           Export PDF
         </button>
       </template>
+      <button
+        v-if="key === 'users' && canManageUsers"
+        class="secondary-button"
+        data-testid="create-user"
+        :disabled="loading"
+        @click="openCreateUser"
+      >
+        Create user
+      </button>
+      <template v-if="key === 'backup'">
+        <button
+          class="secondary-button"
+          data-testid="export-backup-csv"
+          :disabled="loading"
+          @click="exportSimple('/backups/export', 'csv')"
+        >
+          Export CSV
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="export-backup-pdf"
+          :disabled="loading"
+          @click="exportSimple('/backups/export', 'pdf')"
+        >
+          Export PDF
+        </button>
+      </template>
+      <template v-if="key === 'api-gateway'">
+        <button
+          class="secondary-button"
+          data-testid="export-api-csv"
+          :disabled="loading"
+          @click="exportSimple('/api-gateway/clients/export', 'csv')"
+        >
+          Export CSV
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="export-api-pdf"
+          :disabled="loading"
+          @click="exportSimple('/api-gateway/clients/export', 'pdf')"
+        >
+          Export PDF
+        </button>
+      </template>
       <div v-if="grid?.filters.length" class="grid-filters">
         <label v-for="field in grid.filters" :key="field.field" class="filter-select">
           <span>{{ field.label }}</span>
@@ -1048,6 +1831,399 @@ onUnmounted(() => {
         Expected endpoint: <code>GET {{ workspace.endpoint }}</code>
       </p>
       <button class="secondary-button" :disabled="loading" @click="load()">Retry</button>
+    </section>
+
+    <section
+      v-if="sourceUnavailable"
+      class="panel help-box"
+      role="status"
+      data-testid="source-unavailable"
+    >
+      <h2>Planned — not yet available</h2>
+      <p>{{ sourceMessage }}</p>
+    </section>
+
+    <section v-if="revealedSecret" class="panel secret-box" role="alert" data-testid="secret-box">
+      <h2>Save this secret now</h2>
+      <p class="secret-warning">
+        The client secret for “{{ revealedSecretLabel }}” is shown only once and cannot be retrieved
+        again.
+      </p>
+      <div class="secret-value">
+        <code data-testid="secret-value">{{ revealedSecret }}</code>
+        <button class="secondary-button" data-testid="secret-copy" @click="copySecret">Copy</button>
+      </div>
+      <button class="secondary-button" data-testid="secret-dismiss" @click="revealedSecret = ''">
+        Dismiss
+      </button>
+    </section>
+
+    <section
+      v-if="key === 'configuration' && !error"
+      class="panel help-box"
+      data-testid="configuration-help"
+    >
+      <h2>How to fill in a configuration</h2>
+      <p>
+        A configuration renders the Kamex engine files JKANNEL deploys. The <strong>scope</strong>
+        decides which part of the estate a version applies to.
+      </p>
+      <ul>
+        <li>
+          <code>gateway</code> — the whole engine (bearerbox + smsbox); use for global settings.
+        </li>
+        <li>
+          <code>smsc:&lt;engine-id&gt;</code> — an override scoped to a single SMSC connection.
+        </li>
+        <li>
+          <strong>Admin port</strong> (default <code>13000</code>) — the Kannel admin/status
+          interface.
+        </li>
+        <li>
+          <strong>Bearerbox/SMSBox port</strong> (default <code>13001</code>) — the sendsms/smsbox
+          interface.
+        </li>
+        <li>
+          <strong>SQLBox</strong> toggle — store and forward through PostgreSQL SQLBox for auditing
+          and retention.
+        </li>
+      </ul>
+      <p>Secrets are referenced by environment variables only; plaintext is never stored.</p>
+    </section>
+
+    <section v-if="key === 'plugins' && !error" class="panel help-box" data-testid="plugins-help">
+      <h2>How plugins work</h2>
+      <p>
+        Plugins run out-of-process with least-privilege permissions and only receive the events they
+        declare.
+      </p>
+      <ul>
+        <li>
+          <strong>Install</strong> the signed bundle, then <strong>validate</strong> its manifest.
+        </li>
+        <li>
+          <strong>Enable</strong> to start receiving events; <strong>disable</strong> to pause it.
+        </li>
+        <li><strong>Uninstall</strong> to remove it entirely.</li>
+        <li>Each plugin is limited to the permissions and events listed below.</li>
+      </ul>
+    </section>
+
+    <section v-if="key === 'backup' && !error" class="panel help-box" data-testid="backup-help">
+      <h2>Backup &amp; restore</h2>
+      <p>
+        The disaster-recovery job produces binary backup artifacts. Restore requests are authorized
+        and audited rather than executed inline.
+      </p>
+      <ul>
+        <li>Recovery time objective (RTO): under 1 hour.</li>
+        <li>Recovery point objective (RPO): under 15 minutes.</li>
+        <li><strong>Verify</strong> validates a backup's checksum before you rely on it.</li>
+        <li>
+          <strong>Restore</strong> records an authorized request with a reason for the runbook.
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="showCreateUser"
+      class="panel composer"
+      aria-label="Create user"
+      data-testid="create-user-form"
+    >
+      <h2>Create user</h2>
+      <label>
+        Username
+        <input v-model="newUsername" data-testid="new-username" />
+      </label>
+      <label>
+        Password (min 12 characters)
+        <input v-model="newPassword" type="password" data-testid="new-password" />
+      </label>
+      <p v-if="newPassword && newPassword.length < 12" class="form-hint">
+        Password must be at least 12 characters.
+      </p>
+      <label>
+        Roles
+        <select v-model="newRoleIds" multiple class="multi-select" data-testid="new-roles">
+          <option v-for="role in roleOptions" :key="String(role.id)" :value="String(role.id)">
+            {{ text(role.name)
+            }}{{ role.user_count !== undefined ? ` (${role.user_count} users)` : '' }}
+          </option>
+        </select>
+      </label>
+      <div>
+        <button
+          class="primary-button"
+          data-testid="create-user-submit"
+          :disabled="loading || !newUsername.trim() || newPassword.length < 12"
+          @click="createUser"
+        >
+          Create user
+        </button>
+        <button class="secondary-button" @click="showCreateUser = false">Cancel</button>
+      </div>
+    </section>
+
+    <section
+      v-if="showApiClientForm"
+      class="panel composer"
+      aria-label="Create API client"
+      data-testid="api-client-form"
+    >
+      <h2>Create API client</h2>
+      <label>
+        Name
+        <input v-model="apiClientName" data-testid="api-client-name" />
+      </label>
+      <label>
+        Scopes (comma-separated)
+        <input
+          v-model="apiClientScopes"
+          data-testid="api-client-scopes"
+          placeholder="messages.read, messages.send"
+        />
+      </label>
+      <div>
+        <button
+          class="primary-button"
+          data-testid="api-client-submit"
+          :disabled="loading || !apiClientName.trim()"
+          @click="createApiClient"
+        >
+          Create client
+        </button>
+        <button class="secondary-button" @click="showApiClientForm = false">Cancel</button>
+      </div>
+    </section>
+
+    <section
+      v-if="restoreRow"
+      class="panel composer"
+      aria-label="Restore backup"
+      data-testid="restore-form"
+    >
+      <h2>Restore from {{ restoreRow.name }}</h2>
+      <p class="form-hint">
+        Restores are recorded as authorized requests. Provide a reason for the audit trail.
+      </p>
+      <label>
+        Reason
+        <input v-model="restoreReason" data-testid="restore-reason" />
+      </label>
+      <div>
+        <button
+          class="primary-button danger-button"
+          data-testid="restore-submit"
+          :disabled="loading || !restoreReason.trim()"
+          @click="confirmRestore"
+        >
+          Request restore
+        </button>
+        <button class="secondary-button" @click="restoreRow = null">Cancel</button>
+      </div>
+    </section>
+
+    <section v-if="detailOpen" class="panel detail-panel" data-testid="detail-panel">
+      <header>
+        <h2>
+          {{ key === 'users' ? 'User detail' : key === 'smsc' ? 'SMSC detail' : 'Audit event' }}
+        </h2>
+        <button class="secondary-button" data-testid="detail-close" @click="closeDetail">
+          Close
+        </button>
+      </header>
+      <p v-if="detailLoading" class="form-hint" data-testid="detail-loading">Loading…</p>
+      <p v-else-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
+      <template v-else-if="detail">
+        <template v-if="key === 'users'">
+          <dl class="detail-grid">
+            <dt>Username</dt>
+            <dd>{{ text(detail.username) }}</dd>
+            <dt>Status</dt>
+            <dd data-testid="user-detail-status">{{ text(detail.status) }}</dd>
+            <dt>Roles</dt>
+            <dd>
+              <span class="chip-list">
+                <span v-for="role in detailArray('roles')" :key="String(role.id)" class="chip">{{
+                  text(role.name)
+                }}</span>
+                <span v-if="!detailArray('roles').length">—</span>
+              </span>
+            </dd>
+            <dt>Permissions</dt>
+            <dd>
+              <span class="chip-list">
+                <span
+                  v-for="permission in stringArray('permissions')"
+                  :key="permission"
+                  class="chip muted"
+                  >{{ permission }}</span
+                >
+                <span v-if="!stringArray('permissions').length">—</span>
+              </span>
+            </dd>
+            <dt>Created</dt>
+            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+          </dl>
+          <div v-if="canManageUsers && !editing" class="detail-actions">
+            <button class="secondary-button" data-testid="detail-edit" @click="editing = true">
+              Edit
+            </button>
+            <button
+              class="secondary-button danger-button"
+              data-testid="user-archive"
+              @click="archiveUser"
+            >
+              Archive
+            </button>
+          </div>
+          <div v-if="canManageUsers && editing" class="composer" data-testid="user-edit-form">
+            <label>
+              Status
+              <select v-model="editUserStatus" data-testid="user-status">
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+                <option value="locked">locked</option>
+                <option value="archived">archived</option>
+              </select>
+            </label>
+            <label>
+              Roles
+              <select
+                v-model="editUserRoleIds"
+                multiple
+                class="multi-select"
+                data-testid="user-roles"
+              >
+                <option v-for="role in roleOptions" :key="String(role.id)" :value="String(role.id)">
+                  {{ text(role.name) }}
+                </option>
+              </select>
+            </label>
+            <label>
+              Reset password (optional, min 12)
+              <input v-model="editUserPassword" type="password" data-testid="user-reset-password" />
+            </label>
+            <div>
+              <button
+                class="primary-button"
+                data-testid="user-save"
+                :disabled="loading"
+                @click="saveUser"
+              >
+                Save changes
+              </button>
+              <button class="secondary-button" @click="editing = false">Cancel</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else-if="key === 'smsc'">
+          <dl class="detail-grid">
+            <dt>Name</dt>
+            <dd>{{ text(detail.name) }}</dd>
+            <dt>Host</dt>
+            <dd>{{ text(detail.host) }}</dd>
+            <dt>Port</dt>
+            <dd>{{ text(detail.port) }}</dd>
+            <dt>TPS</dt>
+            <dd>{{ text(detail.tps) }}</dd>
+            <dt>Enabled</dt>
+            <dd>{{ text(detail.enabled) }}</dd>
+            <dt>Lifecycle</dt>
+            <dd>{{ text(detail.lifecycle_state ?? detail.lifecycleState) }}</dd>
+          </dl>
+          <h3>Recent health</h3>
+          <ul class="sample-list" data-testid="smsc-health">
+            <li v-for="(sample, index) in detailArray('health')" :key="index">
+              <span class="dot" :class="healthDotClass(sample.state)"></span>
+              {{ text(sample.state) }} — {{ text(sample.detail) }}
+              <small
+                >{{ text(sample.latency_ms ?? sample.latencyMs) }} ms ·
+                {{ text(sample.observed_at ?? sample.observedAt) }}</small
+              >
+            </li>
+            <li v-if="!detailArray('health').length">No health samples recorded.</li>
+          </ul>
+          <h3>Recent operations</h3>
+          <ul class="sample-list" data-testid="smsc-deployments">
+            <li v-for="(op, index) in detailArray('deployments')" :key="index">
+              {{ text(op.operation) }} — {{ text(op.status) }}: {{ text(op.detail) }}
+              <small>{{ text(op.created_at ?? op.createdAt) }}</small>
+            </li>
+            <li v-if="!detailArray('deployments').length">No recent operations.</li>
+          </ul>
+          <div v-if="canManageSystem && !editing" class="detail-actions">
+            <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
+              Edit
+            </button>
+          </div>
+          <div v-if="canManageSystem && editing" class="composer" data-testid="smsc-edit-form">
+            <label>
+              Name
+              <input v-model="editSmscName" data-testid="smsc-edit-name" />
+            </label>
+            <label>
+              Host
+              <input v-model="editSmscHost" data-testid="smsc-edit-host" />
+            </label>
+            <label>
+              Port
+              <input v-model.number="editSmscPort" type="number" data-testid="smsc-edit-port" />
+            </label>
+            <label>
+              TPS
+              <input v-model.number="editSmscTps" type="number" data-testid="smsc-edit-tps" />
+            </label>
+            <label class="checkbox-row">
+              <input v-model="editSmscEnabled" type="checkbox" data-testid="smsc-edit-enabled" />
+              Enabled
+            </label>
+            <div>
+              <button
+                class="primary-button"
+                data-testid="smsc-save"
+                :disabled="loading"
+                @click="saveSmsc"
+              >
+                Save changes
+              </button>
+              <button class="secondary-button" @click="editing = false">Cancel</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <dl class="detail-grid">
+            <dt>When</dt>
+            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+            <dt>Actor</dt>
+            <dd>{{ text(detail.actor_id ?? detail.actorId) }}</dd>
+            <dt>Action</dt>
+            <dd>{{ text(detail.action) }}</dd>
+            <dt>Entity</dt>
+            <dd>
+              {{ text(detail.entity_type ?? detail.entityType) }}
+              {{ text(detail.entity_id ?? detail.entityId, '') }}
+            </dd>
+            <dt>Reason</dt>
+            <dd>{{ text(detail.reason) }}</dd>
+            <dt>Correlation</dt>
+            <dd>{{ text(detail.correlation_id ?? detail.correlationId) }}</dd>
+            <dt>Source IP</dt>
+            <dd>{{ text(detail.source_ip ?? detail.sourceIp) }}</dd>
+          </dl>
+          <h3>Old value</h3>
+          <pre class="json-block" data-testid="audit-old">{{
+            prettyJson(detail.old_value ?? detail.oldValue)
+          }}</pre>
+          <h3>New value</h3>
+          <pre class="json-block" data-testid="audit-new">{{
+            prettyJson(detail.new_value ?? detail.newValue)
+          }}</pre>
+        </template>
+      </template>
     </section>
 
     <section v-if="showSendForm" class="panel composer" aria-label="Send message">
@@ -1315,7 +2491,7 @@ onUnmounted(() => {
       <p v-else class="form-hint">Loading delivery report summary…</p>
     </section>
 
-    <section v-if="!error" class="panel">
+    <section v-if="!error && !customRender" class="panel">
       <header class="panel-header">
         <div>
           <h2>{{ route.meta.title }}</h2>
@@ -1343,7 +2519,13 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in visibleRows" :key="row.id" :data-testid="`record-${row.id}`">
+            <tr
+              v-for="row in visibleRows"
+              :key="row.id"
+              :data-testid="`record-${row.id}`"
+              :class="{ 'clickable-row': detailModule }"
+              @click="detailModule && openDetail(row)"
+            >
               <template v-if="columns">
                 <td v-for="column in columns" :key="column.header" :class="{ mono: column.mono }">
                   {{ column.value(row.raw) }}
@@ -1356,12 +2538,23 @@ onUnmounted(() => {
                 </td>
                 <td>{{ row.detail }}</td>
                 <td>
-                  <span class="status-badge">{{ row.status }}</span>
+                  <div class="cell-status">
+                    <span
+                      v-if="key === 'smsc'"
+                      class="dot"
+                      :class="smscDotClass(row.raw)"
+                      :data-testid="`smsc-dot-${row.id}`"
+                    ></span>
+                    <span class="status-badge">{{ row.status }}</span>
+                    <small v-if="key === 'smsc' && smscHealthText(row.raw)" class="cell-health">{{
+                      smscHealthText(row.raw)
+                    }}</small>
+                  </div>
                 </td>
                 <td>{{ row.updated }}</td>
               </template>
-              <td v-if="key === 'smsc'" class="row-actions">
-                <button class="secondary-button" @click="rowAction(row, 'test')">Test</button>
+              <td v-if="key === 'smsc'" class="row-actions" @click.stop>
+                <button class="secondary-button" @click="testSmsc(row)">Test</button>
                 <button class="secondary-button" @click="rowAction(row, 'reconnect')">
                   Reconnect
                 </button>
@@ -1401,6 +2594,57 @@ onUnmounted(() => {
                   Mark read
                 </button>
               </td>
+              <td v-else-if="key === 'plugins'" class="row-actions">
+                <template v-if="canManageSystem">
+                  <button
+                    class="secondary-button"
+                    :data-testid="`plugin-enable-${row.id}`"
+                    @click="pluginAction(row, 'enable')"
+                  >
+                    Enable
+                  </button>
+                  <button
+                    class="secondary-button"
+                    :data-testid="`plugin-disable-${row.id}`"
+                    @click="pluginAction(row, 'disable')"
+                  >
+                    Disable
+                  </button>
+                </template>
+                <span v-else class="cell-health">Requires system.manage</span>
+              </td>
+              <td v-else-if="key === 'backup'" class="row-actions">
+                <button
+                  class="secondary-button"
+                  :data-testid="`backup-verify-${row.id}`"
+                  @click="verifyBackup(row)"
+                >
+                  Verify
+                </button>
+                <button
+                  class="secondary-button"
+                  :data-testid="`backup-restore-${row.id}`"
+                  @click="openRestore(row)"
+                >
+                  Restore
+                </button>
+              </td>
+              <td v-else-if="key === 'api-gateway'" class="row-actions">
+                <button
+                  class="secondary-button"
+                  :data-testid="`client-rotate-${row.id}`"
+                  @click="rotateSecret(row)"
+                >
+                  Rotate secret
+                </button>
+                <button
+                  class="secondary-button danger-button"
+                  :data-testid="`client-revoke-${row.id}`"
+                  @click="revokeClient(row)"
+                >
+                  Revoke
+                </button>
+              </td>
             </tr>
             <tr v-if="!loading && !visibleRows.length">
               <td :colspan="columnCount" class="empty-cell" data-testid="empty-state">
@@ -1435,6 +2679,277 @@ onUnmounted(() => {
           </button>
         </div>
       </footer>
+    </section>
+
+    <section v-if="isQueue && !error" class="panel" data-testid="queue-panel">
+      <header class="panel-header">
+        <div>
+          <h2>Message queue</h2>
+          <p aria-live="polite">
+            {{
+              loading ? 'Loading queued messages…' : `${cursorItems.length} queued messages shown`
+            }}
+          </p>
+        </div>
+        <button
+          class="secondary-button"
+          data-testid="queue-export"
+          :disabled="loading || !cursorItems.length"
+          @click="exportQueueCsv"
+        >
+          Export CSV
+        </button>
+      </header>
+      <div class="summary-strip">
+        <div class="metric">
+          <strong data-testid="queue-depth">{{ (cursorSummary?.queued as number) ?? 0 }}</strong>
+          <small>Queue depth</small>
+        </div>
+        <div class="metric">
+          <strong>{{ text(cursorSummary?.oldestEpoch) }}</strong>
+          <small>Oldest (epoch)</small>
+        </div>
+      </div>
+      <p v-if="cursorSourceUnavailable" class="source-note" data-testid="queue-source-note">
+        Queue data is unavailable; the message store could not be reached.
+      </p>
+      <p v-else class="source-note">Source: {{ cursorSourceLabel }}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th v-for="column in queueColumns" :key="column.label" scope="col">
+                {{ column.label }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(item, index) in cursorItems"
+              :key="String(item.id ?? index)"
+              :data-testid="`queue-row-${index}`"
+            >
+              <td v-for="column in queueColumns" :key="column.label">{{ column.value(item) }}</td>
+            </tr>
+            <tr v-if="!loading && !cursorItems.length">
+              <td :colspan="queueColumns.length" class="empty-cell">No queued messages.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <footer class="cursor-pager">
+        <button
+          class="secondary-button"
+          data-testid="cursor-prev"
+          :disabled="loading || !cursorHistory.length"
+          @click="turnCursor(-1)"
+        >
+          Previous
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="cursor-next"
+          :disabled="loading || !cursorNext"
+          @click="turnCursor(1)"
+        >
+          Load more
+        </button>
+      </footer>
+    </section>
+
+    <section v-if="isDlr && !error" class="panel" data-testid="dlr-panel">
+      <header class="panel-header">
+        <div>
+          <h2>Delivery reports</h2>
+          <p aria-live="polite">
+            {{
+              loading ? 'Loading delivery reports…' : `${cursorItems.length} delivery reports shown`
+            }}
+          </p>
+        </div>
+        <div class="pager-buttons">
+          <label class="filter-select">
+            <span>SMSC</span>
+            <input
+              v-model="dlrSmscId"
+              data-testid="dlr-smsc-filter"
+              placeholder="SMSC id"
+              @change="applyDlrFilter"
+              @keyup.enter="applyDlrFilter"
+            />
+          </label>
+          <button
+            class="secondary-button"
+            data-testid="dlr-export"
+            :disabled="loading"
+            @click="exportDlrCsv"
+          >
+            Export CSV
+          </button>
+        </div>
+      </header>
+      <div class="summary-strip">
+        <div class="metric">
+          <strong data-testid="dlr-total">{{ (cursorSummary?.total as number) ?? 0 }}</strong>
+          <small>Delivery receipts</small>
+        </div>
+      </div>
+      <p v-if="cursorSourceUnavailable" class="source-note" data-testid="dlr-source-note">
+        Delivery report data is unavailable; the SQLBox message store could not be reached.
+      </p>
+      <p v-else class="source-note">Source: {{ cursorSourceLabel }}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th v-for="column in dlrColumns" :key="column.label" scope="col">
+                {{ column.label }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(item, index) in cursorItems"
+              :key="String(item.id ?? index)"
+              :data-testid="`dlr-row-${index}`"
+            >
+              <td v-for="column in dlrColumns" :key="column.label">{{ column.value(item) }}</td>
+            </tr>
+            <tr v-if="!loading && !cursorItems.length">
+              <td :colspan="dlrColumns.length" class="empty-cell">No delivery reports.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <footer class="cursor-pager">
+        <button
+          class="secondary-button"
+          data-testid="cursor-prev"
+          :disabled="loading || !cursorHistory.length"
+          @click="turnCursor(-1)"
+        >
+          Previous
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="cursor-next"
+          :disabled="loading || !cursorNext"
+          @click="turnCursor(1)"
+        >
+          Load more
+        </button>
+      </footer>
+    </section>
+
+    <section v-if="isDocker && !error" class="panel" data-testid="docker-panel">
+      <header class="panel-header">
+        <div>
+          <h2>Runtime containers</h2>
+          <p aria-live="polite">
+            {{ loading ? 'Probing containers…' : `${containers.length} containers` }}
+            <template v-if="containersObservedAt"> · observed {{ containersObservedAt }}</template>
+          </p>
+        </div>
+      </header>
+      <p class="source-note">
+        Services the API cannot probe are reported as “unknown” rather than assumed healthy.
+      </p>
+      <div class="container-grid">
+        <article
+          v-for="(container, index) in containers"
+          :key="String(container.name ?? index)"
+          class="container-card"
+          :data-testid="`container-${index}`"
+        >
+          <header>
+            <span class="dot" :class="containerDotClass(container)"></span>
+            <strong>{{ text(container.name) }}</strong>
+            <span
+              class="observe-badge"
+              :class="container.observed ? 'live' : 'declared'"
+              :data-testid="`container-observe-${index}`"
+            >
+              {{ container.observed ? 'observed live' : 'declared' }}
+            </span>
+          </header>
+          <dl>
+            <dt>Service</dt>
+            <dd>{{ text(container.service) }}</dd>
+            <dt>Image</dt>
+            <dd>{{ text(container.image) }}</dd>
+            <dt>Network</dt>
+            <dd>{{ text(container.network) }}</dd>
+            <dt>Status</dt>
+            <dd>{{ text(container.status) }}</dd>
+            <dt>Health</dt>
+            <dd>{{ text(container.health) }}</dd>
+            <dt v-if="container.detail">Detail</dt>
+            <dd v-if="container.detail">{{ text(container.detail) }}</dd>
+          </dl>
+        </article>
+        <p v-if="!loading && !containers.length" class="empty-cell">No containers reported.</p>
+      </div>
+    </section>
+
+    <section v-if="isSystem && !error" class="panel" data-testid="system-panel">
+      <header class="panel-header">
+        <div>
+          <h2>System settings</h2>
+          <p aria-live="polite">
+            {{ loading ? 'Loading settings…' : `${settingItems.length} settings` }}
+          </p>
+        </div>
+      </header>
+      <div
+        v-for="group in settingGroups"
+        :key="group.name"
+        class="settings-group"
+        :data-testid="`settings-group-${group.name}`"
+      >
+        <h3>{{ group.name }}</h3>
+        <div
+          v-for="item in group.items"
+          :key="String(item.key)"
+          class="setting-row"
+          :data-testid="`setting-${item.key}`"
+        >
+          <div class="setting-meta">
+            <strong>{{ text(item.key) }}</strong>
+            <small>{{ text(item.description) }}</small>
+            <div class="setting-value">
+              Current: {{ item.is_secret || item.isSecret ? '••••••' : text(item.value) }}
+            </div>
+          </div>
+          <div v-if="item.editable" class="setting-control">
+            <select
+              v-if="item.type === 'boolean'"
+              v-model="settingDrafts[String(item.key)]"
+              :data-testid="`setting-input-${item.key}`"
+            >
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+            <input
+              v-else
+              v-model="settingDrafts[String(item.key)]"
+              :type="item.type === 'number' ? 'number' : 'text'"
+              :data-testid="`setting-input-${item.key}`"
+            />
+            <button
+              class="secondary-button"
+              :data-testid="`setting-save-${item.key}`"
+              :disabled="loading"
+              @click="saveSetting(item)"
+            >
+              Save
+            </button>
+          </div>
+          <div v-else class="setting-readonly" :data-testid="`setting-readonly-${item.key}`">
+            Read-only
+          </div>
+        </div>
+      </div>
+      <p v-if="!loading && !settingItems.length" class="empty-cell">No settings available.</p>
     </section>
   </section>
   <section v-else class="panel empty-state" data-testid="restricted-state">

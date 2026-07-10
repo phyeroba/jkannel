@@ -37,7 +37,14 @@ export class SessionAdminRepository {
 
   async listSessions(
     actor: SessionActor,
-    options: { userId?: string; active?: boolean; limit: number; offset: number },
+    options: {
+      userId?: string;
+      active?: boolean;
+      search?: string;
+      sort?: string;
+      limit: number;
+      offset: number;
+    },
   ): Promise<SessionPage> {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const params: unknown[] = [];
@@ -47,13 +54,33 @@ export class SessionAdminRepository {
         clauses.push(`s.user_id=$${params.length}`);
       }
       if (options.active) clauses.push('s.revoked_at IS NULL AND s.expires_at>now()');
+      if (options.search && options.search.trim()) {
+        params.push(`%${options.search.trim()}%`);
+        const ref = `$${params.length}`;
+        clauses.push(
+          `(u.username ILIKE ${ref} OR s.ip_address::text ILIKE ${ref} OR s.user_agent ILIKE ${ref})`,
+        );
+      }
       const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+      // Whitelisted sort mapping; defaults to newest first.
+      const sortColumns: Record<string, string> = {
+        createdAt: 's.created_at',
+        lastSeenAt: 's.last_seen_at',
+        expiresAt: 's.expires_at',
+        username: 'u.username',
+      };
+      let orderBy = 's.created_at DESC';
+      if (options.sort) {
+        const desc = options.sort.startsWith('-');
+        const col = sortColumns[options.sort.replace(/^-/, '')];
+        if (col) orderBy = `${col} ${desc ? 'DESC' : 'ASC'}`;
+      }
       params.push(options.limit);
       const limit = `$${params.length}`;
       params.push(options.offset);
       const offset = `$${params.length}`;
       const result = await client.query<SessionRow & { __total: string }>(
-        `SELECT s.id,s.user_id,u.username,s.created_at,s.last_seen_at,s.expires_at,s.revoked_at,s.ip_address,s.user_agent,count(*) OVER() AS __total FROM auth_sessions s JOIN users u ON u.id=s.user_id ${where} ORDER BY s.created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+        `SELECT s.id,s.user_id,u.username,s.created_at,s.last_seen_at,s.expires_at,s.revoked_at,s.ip_address,s.user_agent,count(*) OVER() AS __total FROM auth_sessions s JOIN users u ON u.id=s.user_id ${where} ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`,
         params,
       );
       const total = result.rows.length ? Number(result.rows[0].__total) : 0;

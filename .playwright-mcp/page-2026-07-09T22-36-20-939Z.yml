@@ -1,0 +1,41 @@
+- main [ref=f1e3]:
+  - region "JKANNEL platform overview" [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - img [ref=f1e6]
+      - strong [ref=f1e8]: JKANNEL
+    - generic [ref=f1e9]:
+      - article [ref=f1e12]:
+        - strong [ref=f1e13]: Throughput
+        - generic [ref=f1e14]: Current traffic
+        - generic [ref=f1e24]:
+          - generic [ref=f1e25]: 16k
+          - emphasis [ref=f1e26]: +8.2%
+      - article [ref=f1e27]:
+        - strong [ref=f1e28]: Delivery rate
+        - generic [ref=f1e29]: Last hour
+        - generic [ref=f1e39]:
+          - generic [ref=f1e40]: 98.7%
+          - emphasis [ref=f1e41]: +1.4%
+      - article [ref=f1e42]:
+        - generic [ref=f1e43]: Connected SMSCs
+        - strong [ref=f1e44]: "12"
+    - paragraph [ref=f1e45]: Interface with and extend Kamex or Kannel from one friendly control room for messaging, analytics and safe AI-assisted operations.
+  - generic [ref=f1e47]:
+    - generic [ref=f1e48]: Admin Console
+    - heading "Welcome to JKANNEL!" [level=1] [ref=f1e49]: Welcome to JKANNEL! 👋
+    - paragraph [ref=f1e50]: Please sign in to your account and start managing.
+    - generic [ref=f1e51]:
+      - generic [ref=f1e52]: Email or Username
+      - textbox "Email or Username" [ref=f1e53]
+      - generic [ref=f1e54]:
+        - generic [ref=f1e55]: Password
+        - link "Forgot Password?" [ref=f1e56] [cursor=pointer]:
+          - /url: /reset-password
+      - generic [ref=f1e57]:
+        - textbox "Password" [ref=f1e58]
+        - button "Show password" [ref=f1e59] [cursor=pointer]:
+          - img [ref=f1e60]
+      - generic [ref=f1e63] [cursor=pointer]:
+        - checkbox "Remember Me" [ref=f1e64]
+        - generic [ref=f1e65]: Remember Me
+      - button "Sign in" [ref=f1e66] [cursor=pointer]

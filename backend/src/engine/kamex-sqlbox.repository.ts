@@ -256,6 +256,43 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       ],
     };
   }
+  /** Lists queued (pending) messages from send_sms as a paginated grid. */
+  async listQueue(options: SqlboxListOptions = {}) {
+    const size = Math.min(Math.max(options.limit ?? 100, 1), 500);
+    const params: any[] = [];
+    const clauses: string[] = [];
+    if (options.allowedSmscIds) {
+      params.push(options.allowedSmscIds);
+      clauses.push(`smsc_id = ANY($${params.length})`);
+    }
+    if (options.cursor) {
+      params.push(options.cursor);
+      clauses.push(`sql_id < $${params.length}`);
+    }
+    if (options.smscId) {
+      params.push(options.smscId);
+      clauses.push(`smsc_id = $${params.length}`);
+    }
+    if (options.query) {
+      params.push(`%${options.query}%`);
+      clauses.push(
+        `(sender ILIKE $${params.length} OR receiver ILIKE $${params.length} OR msgdata ILIKE $${params.length})`,
+      );
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(size + 1);
+    const result = await this.required().query(
+      `SELECT sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id FROM send_sms ${where} ORDER BY sql_id DESC LIMIT $${params.length}`,
+      params,
+    );
+    const rows = result.rows.slice(0, size).map((row) => this.normalize(row, 'send_sms'));
+    return {
+      items: rows,
+      nextCursor: result.rows.length > size ? Number(result.rows[size].sql_id) : null,
+      total: rows.length,
+    };
+  }
+
   async queueSummary(allowedSmscIds?: string[]) {
     const params: any[] = [];
     let where = '';

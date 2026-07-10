@@ -21,6 +21,8 @@ import { NotificationDeliveryService } from '../monitoring/notification-delivery
 import { AnomalyDetectionService } from '../monitoring/anomaly-detection.service';
 import { ExportService } from '../platform/export.service';
 import { ReportJobsService } from '../reporting/report-jobs.service';
+import { ReportingAnalyticsService } from '../reporting/reporting-analytics.service';
+import { ReportingAnalyticsController } from '../reporting/reporting-analytics.controller';
 import { NotificationsController, VolumeReportsController } from './notifications.controllers';
 @Module({
   imports: [AuthModule, EngineModule],
@@ -34,6 +36,7 @@ import { NotificationsController, VolumeReportsController } from './notification
     ReadModelsController,
     NotificationsController,
     VolumeReportsController,
+    ReportingAnalyticsController,
   ],
   providers: [
     DatabaseService,
@@ -47,6 +50,7 @@ import { NotificationsController, VolumeReportsController } from './notification
     AnomalyDetectionService,
     ExportService,
     ReportJobsService,
+    ReportingAnalyticsService,
   ],
 })
 export class ConsoleModule {}

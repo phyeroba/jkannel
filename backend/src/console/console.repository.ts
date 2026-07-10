@@ -3,6 +3,7 @@ import { PoolClient, QueryResultRow } from 'pg';
 import { randomBytes, createHash } from 'node:crypto';
 import { DatabaseService } from '../database/database.service';
 import { GridDefinition, buildGridSql, parseListQuery } from '../platform/list-query';
+import { DEFAULT_SETTINGS } from './settings-defaults';
 
 export interface Actor {
   tenantId: string;
@@ -788,11 +789,46 @@ export class ConsoleRepository {
     );
   }
 
-  listSettings(actor: Actor) {
-    return this.list(
-      actor,
-      'SELECT key,CASE WHEN is_secret THEN \'"[redacted]"\'::jsonb ELSE value END value,is_secret,updated_by,updated_at FROM system_settings ORDER BY key',
-    );
+  /**
+   * Lists system settings, seeding the canonical defaults on first access and
+   * decorating each row with its group, type, description and editability so the
+   * console can render a grouped, documented settings screen.
+   */
+  async listSettings(actor: Actor) {
+    return this.inTenant(actor, async (c) => {
+      // Seed any missing defaults (idempotent; never overwrites operator values).
+      for (const d of DEFAULT_SETTINGS) {
+        await c.query(
+          `INSERT INTO system_settings(tenant_id,key,value,is_secret,updated_by)
+           VALUES($1,$2,$3,false,'system') ON CONFLICT(tenant_id,key) DO NOTHING`,
+          [actor.tenantId, d.key, JSON.stringify(d.value)],
+        );
+      }
+      const rows = (
+        await c.query<{
+          key: string;
+          value: unknown;
+          is_secret: boolean;
+          updated_by: string;
+          updated_at: Date;
+        }>(
+          `SELECT key,CASE WHEN is_secret THEN '"[redacted]"'::jsonb ELSE value END value,is_secret,updated_by,updated_at
+             FROM system_settings ORDER BY key`,
+        )
+      ).rows;
+      const meta = new Map(DEFAULT_SETTINGS.map((d) => [d.key, d]));
+      const items = rows.map((row) => {
+        const m = meta.get(row.key);
+        return {
+          ...row,
+          group: m?.group ?? 'Other',
+          type: m?.type ?? 'string',
+          description: m?.description ?? '',
+          editable: m ? m.editable : true,
+        };
+      });
+      return { items, total: items.length, limit: items.length, offset: 0 };
+    });
   }
   async putSetting(actor: Actor, key: string, value: any) {
     return this.inTenant(actor, async (c) => {
@@ -819,6 +855,105 @@ export class ConsoleRepository {
       CONSOLE_GRIDS.users,
       query,
     );
+  }
+  listRoles(actor: Actor) {
+    return this.list(
+      actor,
+      "SELECT r.id,r.name,r.description,(SELECT count(*)::int FROM user_roles ur WHERE ur.role_id=r.id) AS user_count,(SELECT COALESCE(array_agg(p.code),'{}') FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=r.id) permissions FROM roles r ORDER BY r.name",
+    );
+  }
+  async getUser(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const row = (
+        await c.query(
+          `SELECT u.id,u.username,u.status,u.failed_login_count,u.locked_until,u.created_at,u.updated_at,
+                  (SELECT COALESCE(json_agg(json_build_object('id',r.id,'name',r.name)),'[]') FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id) roles,
+                  (SELECT COALESCE(array_agg(DISTINCT p.code),'{}') FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=u.id) permissions
+             FROM users u WHERE u.id=$1`,
+          [id],
+        )
+      ).rows[0];
+      if (!row) throw new NotFoundException('User not found');
+      return row;
+    });
+  }
+  async createUser(
+    actor: Actor,
+    value: { username: string; passwordHash: string; roleIds?: string[]; status?: string },
+  ) {
+    return this.inTenant(actor, async (c) => {
+      const user = (
+        await c.query(
+          'INSERT INTO users(tenant_id,username,password_hash,status) VALUES($1,$2,$3,$4) RETURNING id,username,status,created_at',
+          [actor.tenantId, value.username, value.passwordHash, value.status ?? 'active'],
+        )
+      ).rows[0];
+      for (const roleId of value.roleIds ?? []) {
+        await c.query(
+          'INSERT INTO user_roles(tenant_id,user_id,role_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+          [actor.tenantId, user.id, roleId],
+        );
+      }
+      await this.audit(c, actor, 'user.created', 'user', user.id, null, {
+        username: user.username,
+        roleIds: value.roleIds ?? [],
+      });
+      return user;
+    });
+  }
+  async updateUser(
+    actor: Actor,
+    id: string,
+    value: { status?: string; roleIds?: string[]; passwordHash?: string; reason?: string },
+  ) {
+    return this.inTenant(actor, async (c) => {
+      const old = (await c.query('SELECT id,username,status FROM users WHERE id=$1', [id])).rows[0];
+      if (!old) throw new NotFoundException('User not found');
+      if (value.status || value.passwordHash) {
+        await c.query(
+          `UPDATE users SET status=COALESCE($2,status),
+             password_hash=COALESCE($3,password_hash),
+             failed_login_count=CASE WHEN $2='active' THEN 0 ELSE failed_login_count END,
+             locked_until=CASE WHEN $2='active' THEN NULL ELSE locked_until END,
+             updated_at=now() WHERE id=$1`,
+          [id, value.status ?? null, value.passwordHash ?? null],
+        );
+      }
+      if (Array.isArray(value.roleIds)) {
+        await c.query('DELETE FROM user_roles WHERE user_id=$1', [id]);
+        for (const roleId of value.roleIds) {
+          await c.query(
+            'INSERT INTO user_roles(tenant_id,user_id,role_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+            [actor.tenantId, id, roleId],
+          );
+        }
+      }
+      const updated = (
+        await c.query('SELECT id,username,status,updated_at FROM users WHERE id=$1', [id])
+      ).rows[0];
+      await this.audit(c, actor, 'user.updated', 'user', id, old, updated, value.reason);
+      return updated;
+    });
+  }
+  async archiveUser(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const old = (await c.query('SELECT id,username,status FROM users WHERE id=$1', [id])).rows[0];
+      if (!old) throw new NotFoundException('User not found');
+      if (old.id === actor.userId)
+        throw new ConflictException('You cannot archive your own account');
+      const updated = (
+        await c.query(
+          "UPDATE users SET status='archived',updated_at=now() WHERE id=$1 RETURNING id,username,status",
+          [id],
+        )
+      ).rows[0];
+      await c.query(
+        'UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+        [id],
+      );
+      await this.audit(c, actor, 'user.archived', 'user', id, old, updated);
+      return updated;
+    });
   }
   listInvitations(actor: Actor, query: Record<string, unknown> = {}) {
     return this.grid(
@@ -915,6 +1050,26 @@ export class ConsoleRepository {
       return row;
     });
   }
+  /** Returns a notification's full detail and marks it read (open == read). */
+  async openNotification(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const existing = (
+        await c.query(
+          'SELECT id,category,title,body,data,read_at,created_at FROM user_notifications WHERE id=$1 AND user_id=$2',
+          [id, actor.userId],
+        )
+      ).rows[0];
+      if (!existing) throw new NotFoundException('Notification not found');
+      const wasUnread = !existing.read_at;
+      const readAt = (
+        await c.query(
+          'UPDATE user_notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND user_id=$2 RETURNING read_at',
+          [id, actor.userId],
+        )
+      ).rows[0].read_at;
+      return { ...existing, read_at: readAt, wasUnread };
+    });
+  }
   async markAllNotificationsRead(actor: Actor) {
     return this.inTenant(actor, async (c) => {
       const result = await c.query(
@@ -922,6 +1077,39 @@ export class ConsoleRepository {
         [actor.userId],
       );
       return { marked: result.rowCount ?? 0 };
+    });
+  }
+
+  async getAuditEvent(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const row = (
+        await c.query(
+          'SELECT uuid id,actor_id,action,entity_type,entity_id,old_value,new_value,reason,correlation_id,source_ip,created_at FROM audit_log WHERE uuid=$1',
+          [id],
+        )
+      ).rows[0];
+      if (!row) throw new NotFoundException('Audit event not found');
+      return row;
+    });
+  }
+  /** SMSC detail: definition, recent health samples, and recent operations. */
+  async getSmscDetail(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const smsc = (await c.query('SELECT * FROM smsc_definitions WHERE id=$1', [id])).rows[0];
+      if (!smsc) throw new NotFoundException('SMSC not found');
+      const health = (
+        await c.query(
+          'SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=$1 ORDER BY observed_at DESC LIMIT 10',
+          [id],
+        )
+      ).rows;
+      const deployments = (
+        await c.query(
+          'SELECT id,operation,status,detail,created_at,completed_at FROM smsc_deployments WHERE smsc_id=$1 ORDER BY created_at DESC LIMIT 10',
+          [id],
+        )
+      ).rows;
+      return { ...smsc, health, deployments };
     });
   }
 

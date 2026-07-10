@@ -3,6 +3,7 @@ import OperationsOverview from '../views/OperationsOverview.vue';
 import ModuleWorkspace from '../views/ModuleWorkspace.vue';
 import CopilotView from '../views/CopilotView.vue';
 import SessionsView from '../views/SessionsView.vue';
+import AnalyticsView from '../views/AnalyticsView.vue';
 import { canAccess, session } from '../stores/session';
 import { initializeSession, isAuthenticated } from '../stores/session';
 import LoginView from '../views/LoginView.vue';
@@ -47,7 +48,6 @@ const modules = [
     'Review report deliveries and platform notices for your account.',
     '',
   ],
-  ['/reports', 'Reports', 'Build and export operational reports.', 'reports.view'],
   [
     '/customers',
     'Customers',
@@ -138,6 +138,17 @@ const routes: RouteRecordRaw[] = [
       description: 'Ask read-only, advisory questions about platform telemetry.',
       breadcrumb: ['AI Copilot'],
       permission: 'monitoring.view',
+    },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: AnalyticsView,
+    meta: {
+      title: 'Reports',
+      description: 'Build and export operational reports.',
+      breadcrumb: ['Reports'],
+      permission: 'reports.view',
     },
   },
   {

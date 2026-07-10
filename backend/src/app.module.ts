@@ -8,6 +8,7 @@ import { DomainModule } from './domain.module';
 import { ConsoleModule } from './console/console.module';
 import { AiOperationsModule } from './ai-operations/ai-operations.module';
 import { AiCopilotModule } from './ai-copilot/ai-copilot.module';
+import { PlatformConsoleModule } from './platform-console/platform-console.module';
 import { SecurityHeadersMiddleware } from './platform/security-headers.middleware';
 import { MetricsController } from './monitoring/metrics.controller';
 import { DatabaseService } from './database/database.service';
@@ -29,6 +30,7 @@ import { MetricsInterceptor } from './monitoring/metrics.interceptor';
     ConsoleModule,
     AiOperationsModule,
     AiCopilotModule,
+    PlatformConsoleModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

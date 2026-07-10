@@ -863,3 +863,220 @@ th {
   font-size: 12.5px;
   word-break: break-all;
 }
+
+/* Reusable dependency-free SVG chart (MiniChart.vue). */
+.mini-chart {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.mini-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+.mini-chart-grid line {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.mini-chart-tick {
+  fill: var(--muted);
+  font-size: 10px;
+  text-anchor: end;
+  font-variant-numeric: tabular-nums;
+}
+.mini-chart-axis .mini-chart-tick {
+  text-anchor: middle;
+}
+.mini-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mini-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mini-chart-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* Analytics & Reports dashboard (AnalyticsView.vue). */
+.range-select {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--surface-2);
+  padding: 3px;
+  border-radius: 8px;
+}
+.range-button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.range-button:hover {
+  color: var(--text-strong);
+}
+.range-button.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: var(--shadow);
+}
+.breakdown {
+  display: grid;
+  gap: 14px;
+}
+.breakdown-row {
+  display: grid;
+  gap: 6px;
+}
+.breakdown-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text);
+}
+.breakdown-label strong {
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.breakdown-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.breakdown-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+}
+.breakdown-row:nth-child(2) .breakdown-fill {
+  background: var(--info);
+}
+.breakdown-total {
+  color: var(--muted);
+}
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.catalog-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 15px 16px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.catalog-card h3 {
+  font-size: 14px;
+  color: var(--text-strong);
+  margin: 0;
+}
+.catalog-card > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.catalog-kinds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.catalog-kinds li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.status-badge.muted {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+/* Clickable notification items + notification detail dialog. */
+.notification-item-button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 8px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.notification-item-button:hover,
+.notification-item-button:focus-visible {
+  background: var(--surface-muted, rgba(115, 103, 240, 0.06));
+  outline: none;
+}
+.notification-unread-tag {
+  color: var(--brand);
+  font-weight: 600;
+}
+.notification-detail-dialog {
+  max-width: 460px;
+}
+.notification-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.notification-detail-body {
+  color: var(--text-strong);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.notification-detail-data {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 6px 16px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-muted, rgba(115, 103, 240, 0.06));
+}
+.notification-detail-data dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.notification-detail-data dd {
+  margin: 0;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.notification-detail-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}

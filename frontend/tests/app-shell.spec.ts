@@ -109,10 +109,18 @@ describe('application shell', () => {
     ];
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/notifications/unread-count')) return Promise.resolve(envelope({ unread }));
-      if (url.includes('/notifications/n1/read') && init?.method === 'POST') {
+      // Opening a notification detail: GET /notifications/n1 marks it read and
+      // returns the full record including its data payload.
+      if (/\/notifications\/n1(\?|$)/.test(String(url)) && (!init || init.method === undefined)) {
         unread = 2;
         notifications[0].read_at = '2026-07-09T06:00:00Z';
-        return Promise.resolve(envelope({ id: 'n1' }));
+        return Promise.resolve(
+          envelope({
+            ...notifications[0],
+            read_at: '2026-07-09T06:00:00Z',
+            data: { messages: 120, dlrs: 118, periodType: 'daily' },
+          }),
+        );
       }
       if (url.includes('/notifications?'))
         return Promise.resolve(
@@ -132,16 +140,16 @@ describe('application shell', () => {
     );
     expect(wrapper.get('[data-testid="notification-n1"]').classes()).toContain('unread');
 
-    await wrapper.get('[data-testid="shell-mark-read-n1"]').trigger('click');
+    // Clicking the notification opens its detail and marks it read (open == read).
+    await wrapper.get('[data-testid="notification-n1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="notification-detail"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="notification-detail"]').text()).toContain('120');
     await vi.waitFor(() => expect(wrapper.get('[data-testid="unread-count"]').text()).toBe('2'));
     expect(
-      fetchMock.mock.calls.some(
-        (call) =>
-          String(call[0]).includes('/notifications/n1/read') &&
-          (call[1] as RequestInit | undefined)?.method === 'POST',
-      ),
+      fetchMock.mock.calls.some((call) => /\/notifications\/n1(\?|$)/.test(String(call[0]))),
     ).toBe(true);
-    expect(wrapper.find('[data-testid="shell-mark-read-n1"]').exists()).toBe(false);
   });
 
   it('marks every notification read from the panel header', async () => {
