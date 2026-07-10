@@ -25,8 +25,11 @@ import { MetricsInterceptor } from './monitoring/metrics.interceptor';
 import { BackupDrModule } from './backup-dr/backup-dr.module';
 import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.module';
 import { CustomersModule } from './customers/customers.module';
+import { CustomersDepthModule } from './customers-depth/customers-depth.module';
 import { MessagingDepthModule } from './messaging-depth/messaging-depth.module';
 import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
+import { RoutingDepthModule } from './routing-depth/routing-depth.module';
+import { ApiGatewayModule } from './api-gateway/api-gateway.module';
 
 @Module({
   imports: [
@@ -44,8 +47,11 @@ import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
     BackupDrModule,
     MonitoringDepthModule,
     CustomersModule,
+    CustomersDepthModule,
     MessagingDepthModule,
     ReportingDepthModule,
+    RoutingDepthModule,
+    ApiGatewayModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [
