@@ -1,7 +1,20 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PoolClient, QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
-import { GridDefinition, buildGridSql, parseListQuery } from '../platform/list-query';
+import {
+  GridDefinition,
+  buildGridSql,
+  buildGridWhere,
+  parseListQuery,
+} from '../platform/list-query';
+import {
+  CursorPage,
+  buildCursorPage,
+  buildCursorSql,
+  parseCursorQuery,
+  usesCursor,
+} from '../platform/cursor';
+import { parseFieldSelection, projectItems } from '../platform/field-selection';
 
 export interface Actor {
   tenantId: string;
@@ -87,6 +100,9 @@ const DEFINITION_GRID: GridDefinition = {
 const COLUMNS =
   'id,name,report_type,parameters,schedule,format,enabled,created_by,created_at,updated_at';
 
+/** Whitelist for ?fields= projection: exactly the columns this endpoint returns. */
+const ALLOWED_FIELDS = COLUMNS.split(',');
+
 /**
  * Persistence for saved report definitions (migration 021). Every access runs
  * inside a tenant transaction so PostgreSQL row level security enforces
@@ -130,7 +146,29 @@ export class ReportDefinitionsRepository {
     );
   }
 
-  list(actor: Actor, query: Record<string, unknown> = {}): Promise<GridPage<ReportDefinitionRow>> {
+  /**
+   * Lists saved definitions. Offset pagination is the default (unchanged
+   * contract: { items, total, limit, offset }). Two additive, opt-in
+   * capabilities layer on top of the shared grid helpers:
+   *   - ?cursor / ?paginate=cursor -> stable keyset pagination returning
+   *     { items, nextCursor, limit } (see platform/cursor.ts);
+   *   - ?fields=a,b,c -> whitelist-validated projection of each returned object.
+   */
+  list(
+    actor: Actor,
+    query: Record<string, unknown> = {},
+  ): Promise<GridPage<Partial<ReportDefinitionRow>> | CursorPage<Partial<ReportDefinitionRow>>> {
+    const fields = parseFieldSelection((query as { fields?: unknown }).fields, ALLOWED_FIELDS);
+    return usesCursor(query)
+      ? this.listByCursor(actor, query, fields)
+      : this.listByOffset(actor, query, fields);
+  }
+
+  private listByOffset(
+    actor: Actor,
+    query: Record<string, unknown>,
+    fields: string[] | null,
+  ): Promise<GridPage<Partial<ReportDefinitionRow>>> {
     const parsed = parseListQuery(query, DEFINITION_GRID);
     const fragments = buildGridSql(parsed, DEFINITION_GRID, []);
     const where = fragments.andWhere ? `WHERE ${fragments.andWhere.slice(' AND '.length)}` : '';
@@ -143,11 +181,42 @@ export class ReportDefinitionsRepository {
       const total = result.rows.length ? Number(result.rows[0].__total) : 0;
       const items = result.rows.map(({ __total, ...row }) => row as ReportDefinitionRow);
       return {
-        items,
+        items: projectItems(items, fields),
         total,
         limit: parsed.limit,
         offset: parsed.offset,
-      } satisfies GridPage<ReportDefinitionRow>;
+      };
+    });
+  }
+
+  private listByCursor(
+    actor: Actor,
+    query: Record<string, unknown>,
+    fields: string[] | null,
+  ): Promise<CursorPage<Partial<ReportDefinitionRow>>> {
+    const cursorQuery = parseCursorQuery(query, {
+      grid: DEFINITION_GRID,
+      defaultSortField: 'createdAt',
+      defaultDirection: 'DESC',
+    });
+    // Reuse the shared whitelisted search/filter WHERE builder, then append the keyset.
+    const listParsed = parseListQuery(query, DEFINITION_GRID);
+    const filterWhere = buildGridWhere(listParsed, DEFINITION_GRID, []);
+    const keyset = buildCursorSql(cursorQuery, 'id', filterWhere.params);
+    const whereFragment = `${filterWhere.andWhere}${keyset.andWhere}`;
+    const where = whereFragment ? `WHERE ${whereFragment.slice(' AND '.length)}` : '';
+    const sql = `SELECT ${COLUMNS} FROM report_definitions ${where} ${keyset.orderBy} ${keyset.limit}`;
+    return this.inTenant(actor, async (client) => {
+      const rows = (await client.query<ReportDefinitionRow>(sql, keyset.params)).rows;
+      const page = buildCursorPage(rows, cursorQuery, {
+        sortVal: (row) => (row as unknown as Record<string, unknown>)[cursorQuery.sqlExpr] as never,
+        id: (row) => row.id,
+      });
+      return {
+        items: projectItems(page.items, fields),
+        nextCursor: page.nextCursor,
+        limit: page.limit,
+      };
     });
   }
 

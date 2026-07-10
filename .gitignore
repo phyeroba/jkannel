@@ -19,6 +19,10 @@ Thumbs.db
 *.tar
 *.tar.gz
 *.tgz
+# TLS certificates for the reverse proxy (never publish private keys)
+infrastructure/nginx/certs/*.crt
+infrastructure/nginx/certs/*.key
+infrastructure/nginx/certs/*.pem
 # Backup artifacts (full database dumps — contain all data, never publish)
 runtime/**/backups/
 *.dump

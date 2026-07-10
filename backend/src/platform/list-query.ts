@@ -84,19 +84,22 @@ function boundedNumber(
   return parsed;
 }
 
-export interface GridSql {
-  /** WHERE fragment beginning with AND (or empty); append after fixed predicates. */
+export interface GridWhere {
+  /** WHERE fragment beginning with " AND " (or empty); append after fixed predicates. */
   andWhere: string;
-  orderBy: string;
-  limitOffset: string;
   params: unknown[];
 }
 
-export function buildGridSql(
+/**
+ * Builds only the search + filter WHERE fragment (no ORDER BY / LIMIT / OFFSET),
+ * so keyset/cursor pagination can reuse the exact same whitelisted, parameterized
+ * predicate building as the offset grid.
+ */
+export function buildGridWhere(
   query: ParsedListQuery,
   grid: GridDefinition,
   existingParams: unknown[] = [],
-): GridSql {
+): GridWhere {
   const params = [...existingParams];
   const clauses: string[] = [];
   if (query.search && grid.searchColumns.length) {
@@ -110,6 +113,24 @@ export function buildGridSql(
     params.push(filter.value);
     clauses.push(`${grid.filterColumns[filter.field]}::text = $${params.length}`);
   }
+  return { andWhere: clauses.length ? ` AND ${clauses.join(' AND ')}` : '', params };
+}
+
+export interface GridSql {
+  /** WHERE fragment beginning with AND (or empty); append after fixed predicates. */
+  andWhere: string;
+  orderBy: string;
+  limitOffset: string;
+  params: unknown[];
+}
+
+export function buildGridSql(
+  query: ParsedListQuery,
+  grid: GridDefinition,
+  existingParams: unknown[] = [],
+): GridSql {
+  const where = buildGridWhere(query, grid, existingParams);
+  const params = where.params;
   const orderBy = query.sort.length
     ? `ORDER BY ${query.sort
         .map((entry) => `${grid.sortColumns[entry.field]} ${entry.direction}`)
@@ -120,7 +141,7 @@ export function buildGridSql(
   params.push(query.offset);
   const offsetClause = `OFFSET $${params.length}`;
   return {
-    andWhere: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
+    andWhere: where.andWhere,
     orderBy,
     limitOffset: `${limitClause} ${offsetClause}`,
     params,

@@ -1,5 +1,25 @@
 name: jkannel
 
+# ---------------------------------------------------------------------------
+# Networks (service isolation per DOCKER_DEPLOYMENT spec §6).
+#   edge   — public entrypoint: reverse-proxy <-> frontend/backend only.
+#   appnet — application plane: backend <-> engine (kamex) services.
+#   datanet— data plane: backend/workers <-> postgres, redis (NOT reachable
+#            from the edge/proxy network, so the database is never exposed to
+#            the public entrypoint).
+#   obsnet — observability plane: prometheus/grafana/loki/promtail, plus the
+#            scrape targets (backend, kamex-bearerbox).
+# ---------------------------------------------------------------------------
+networks:
+  edge:
+    driver: bridge
+  appnet:
+    driver: bridge
+  datanet:
+    driver: bridge
+  obsnet:
+    driver: bridge
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -10,11 +30,19 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./database/migrations:/migrations:ro
+    networks:
+      - datanet
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
+    # Hardening: no privilege escalation. read_only/cap_drop are intentionally
+    # NOT applied — the official postgres entrypoint chowns its data dir and
+    # manages its own unprivileged 'postgres' user at runtime; forcing them
+    # risks breaking the live database. See infrastructure/README.md.
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   redis:
@@ -22,17 +50,24 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
+    networks:
+      - datanet
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+    # Hardening: no privilege escalation. read_only left off because the redis
+    # entrypoint chowns /data and drops privileges via gosu on start.
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
-    environment:
+    image: jkannel-backend:local
+    environment: &backend-env
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -75,6 +110,11 @@ services:
     volumes:
       - ./runtime/kamex:/var/lib/jkannel
       - ./database/migrations:/app/database/migrations:ro
+    networks:
+      - edge
+      - appnet
+      - datanet
+      - obsnet
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,6 +127,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    # Hardening: no privilege escalation. read_only left off — the app writes
+    # encrypted backup artifacts into /var/lib/jkannel (a bind mount).
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   frontend:
@@ -96,9 +140,15 @@ services:
       # Use 127.0.0.1 (IPv4) rather than localhost: on Windows/macOS the browser
       # resolves localhost to IPv6 ::1 first, but Docker publishes ports on IPv4,
       # so API calls to http://localhost:3000 fail with "Failed to fetch".
+      #
+      # To route the SPA through the reverse proxy instead of the direct backend
+      # port, set VITE_API_BASE_URL=http://localhost:${PROXY_HTTP_PORT}/api and
+      # add that origin to FRONTEND_ORIGIN (see .env.example).
       VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-3000}/api
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
+    networks:
+      - edge
     depends_on:
       backend:
         condition: service_healthy
@@ -107,6 +157,45 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # --- Reverse proxy: single HTTP entrypoint in front of frontend + backend ---
+  # nginx-unprivileged runs entirely as the non-root uid 101, listens on 8080
+  # (and optionally 8443 for TLS — see infrastructure/nginx/conf.d/tls.conf.example).
+  reverse-proxy:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    volumes:
+      - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "${PROXY_HTTP_PORT:-8080}:8080"
+      # Uncomment after enabling TLS (see conf.d/tls.conf.example):
+      # - "${PROXY_HTTPS_PORT:-8443}:8443"
+    networks:
+      - edge
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Hardening: fully non-root, read-only rootfs with tmpfs for the paths nginx
+    # must write, all Linux capabilities dropped.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,mode=0755
+      - /var/run:size=1m,mode=0755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   kamex-bearerbox:
@@ -122,11 +211,19 @@ services:
       - kamex-logs:/var/log/kamex
     ports:
       - "${KAMEX_ADMIN_PORT:-13000}:13000"
+    networks:
+      - appnet
+      - obsnet
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:13000/status.json?password=$${KAMEX_STATUS_PASSWORD}\" >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 12
+    # Hardening: no privilege escalation. The upstream kamex image writes spool
+    # and logs and is not designed for a read-only rootfs / dropped caps, so
+    # those are intentionally left off (documented in infrastructure/README.md).
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   kamex-validator:
@@ -138,6 +235,8 @@ services:
       KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - appnet
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/health"]
       interval: 10s
@@ -166,6 +265,8 @@ services:
       - kamex-logs:/var/log/kamex
     ports:
       - "${KAMEX_SENDSMS_PORT:-13013}:13013"
+    networks:
+      - appnet
     depends_on:
       kamex-sqlbox:
         condition: service_healthy
@@ -174,6 +275,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   kamex-sqlbox:
@@ -188,6 +291,9 @@ services:
     volumes:
       - ./infrastructure/kannel/sqlbox.conf:/etc/kamex/sqlbox.conf:ro
       - kamex-logs:/var/log/kamex
+    networks:
+      - appnet
+      - datanet
     depends_on:
       postgres:
         condition: service_healthy
@@ -198,6 +304,98 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # --- Optional split-out workers (profile: workers) ------------------------
+  # The report and backup schedulers currently run IN-PROCESS inside the
+  # backend by default. These services reuse the backend image to run the same
+  # schedulers as dedicated containers. The backup scheduler is safe to run in
+  # parallel with the backend (it holds a PostgreSQL advisory lock, so only one
+  # replica executes a cycle). The report scheduler only has an in-process
+  # guard, so to avoid duplicate report generation set REPORT_JOBS_ENABLED=false
+  # on the backend when you enable the 'scheduler' worker (see .env.example).
+  scheduler:
+    profiles: ["workers"]
+    image: jkannel-backend:local
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-env
+      MIGRATIONS_ON_BOOT: "false"
+      REPORT_JOBS_ENABLED: "true"
+      BACKUP_SCHEDULER_ENABLED: "false"
+    volumes:
+      - ./runtime/kamex:/var/lib/jkannel
+      - ./database/migrations:/app/database/migrations:ro
+    networks:
+      - appnet
+      - datanet
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  backup-service:
+    profiles: ["workers"]
+    image: jkannel-backend:local
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-env
+      MIGRATIONS_ON_BOOT: "false"
+      REPORT_JOBS_ENABLED: "false"
+      BACKUP_SCHEDULER_ENABLED: "true"
+    volumes:
+      - ./runtime/kamex:/var/lib/jkannel
+      - ./database/migrations:/app/database/migrations:ro
+    networks:
+      - appnet
+      - datanet
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # --- Watchdog: restarts containers stuck in an unhealthy state ------------
+  watchdog:
+    profiles: ["watchdog"]
+    image: docker:27-cli
+    entrypoint: ["/bin/sh", "/opt/watchdog/watchdog.sh"]
+    environment:
+      HOME: /tmp
+      WATCHDOG_PROJECT: jkannel
+      WATCHDOG_INTERVAL: ${WATCHDOG_INTERVAL:-30}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/watchdog/watchdog.sh:/opt/watchdog/watchdog.sh:ro
+    networks:
+      - edge
+    # Hardening: read-only rootfs, tmpfs for HOME, all caps dropped. It only
+    # talks to the Docker socket (as its root owner), which does not require any
+    # Linux capability inside the container.
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   prometheus:
@@ -212,9 +410,15 @@ services:
       - prometheus-data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - obsnet
     depends_on:
       backend:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   grafana:
@@ -230,8 +434,64 @@ services:
       - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
+    networks:
+      - obsnet
     depends_on:
       - prometheus
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # --- Centralized logging (profile: observability) ------------------------
+  loki:
+    profiles: ["observability"]
+    image: grafana/loki:3.3.2
+    user: "10001:10001"
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./infrastructure/loki/loki-config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - obsnet
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready | grep -q ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  promtail:
+    profiles: ["observability"]
+    image: grafana/promtail:3.3.2
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./infrastructure/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-data:/data
+    networks:
+      - obsnet
+    depends_on:
+      - loki
+    # Hardening: read-only rootfs, all caps dropped, no privilege escalation.
+    # Runs as root (default) because it reads the Docker socket for service
+    # discovery; as the socket's owner it needs no extra capability.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 volumes:
@@ -241,3 +501,5 @@ volumes:
   kamex-logs:
   prometheus-data:
   grafana-data:
+  loki-data:
+  promtail-data:

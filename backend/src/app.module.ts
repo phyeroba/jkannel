@@ -16,7 +16,7 @@ import { DatabaseService } from './database/database.service';
 import { IdempotencyService } from './platform/idempotency.service';
 import { IdempotencyInterceptor } from './platform/idempotency.interceptor';
 import { AuditTrailInterceptor } from './platform/audit-trail.interceptor';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_INTERCEPTOR, DiscoveryModule } from '@nestjs/core';
 import { JobsController } from './platform/jobs.controller';
 import { JobsService } from './platform/jobs.service';
 import { OpenApiController } from './platform/openapi.controller';
@@ -30,9 +30,12 @@ import { MessagingDepthModule } from './messaging-depth/messaging-depth.module';
 import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
 import { RoutingDepthModule } from './routing-depth/routing-depth.module';
 import { ApiGatewayModule } from './api-gateway/api-gateway.module';
+import { DataModelModule } from './data-model/data-model.module';
 
 @Module({
   imports: [
+    // Provides DiscoveryService so OpenApiController can reflect the live route table.
+    DiscoveryModule,
     AuthModule,
     EngineModule,
     DomainModule,
@@ -52,6 +55,7 @@ import { ApiGatewayModule } from './api-gateway/api-gateway.module';
     ReportingDepthModule,
     RoutingDepthModule,
     ApiGatewayModule,
+    DataModelModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

@@ -1,0 +1,2 @@
+# TLS certificates for the reverse proxy live here (jkannel.crt / jkannel.key).
+# Generate dev certs with ../generate-dev-certs.sh. Real certs are gitignored.
