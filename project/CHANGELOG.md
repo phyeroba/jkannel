@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-10 (Claude cycle 4: user-reported fixes + Customers domain)
+
+- Fixed the **AI Copilot "Failed to fetch"** — the `x-jkannel-ai-opt-in` consent header was missing from the CORS allowlist, so the browser preflight blocked the request (curl worked). Added it.
+- **Messages** rows are now clickable and open a message trace/detail drawer.
+- **SMSC Connections**: click-to-edit plus a Delete/Archive action (`DELETE /smscs/:id`, 409 when referenced by routes); connection status dots retained.
+- **Routing**: Target SMSC and Fallback SMSC are now dropdowns populated from the SMSC list instead of free-text ids.
+- **Configuration**: a "Load baseline" starter configuration (`GET /configurations/baseline`) and an Edit action that loads a version's content into the form to save as a new immutable version.
+- **Volume report snapshots** are clickable to a detail view showing the full period breakdown (total + per-SMSC + per-route) via `GET /reports/volume/:id`.
+- **Customers domain** implemented (migration 020): a `customers` table (name, code, status, contact, daily quota, per-minute rate limit, allowed sender IDs, notes) with tenant-scoped CRUD, a create form, detail/edit/archive, and a help panel explaining the concept.
+- **API Gateway**: an API-documentation/how-to panel (client creation, one-time secret, bearer auth, scopes, rate limits, OpenAPI reference).
+- **Plugins**: a downloadable sample plugin manifest (`GET /plugins/sample-manifest`) and a developer-portal panel (manifest fields, lifecycle, permission/event model, packaging).
+- **Backup & Restore**: create now opens a modal to name the backup and choose scope (Full / Database / Configurations); a Restore action (confirm + reason, restores into an isolated verify database); Verify action; pointed at the real `/backup-dr` endpoints. Configurations-scope backups dump only the config tables.
+- **Users & Roles**: role assignment is now a labelled checkbox list (name + description) in both create and edit, with roles shown as chips in the detail drawer.
+- Verification: backend 45 suites / 189 tests, frontend 12 files / 67 tests, both typecheck + build clean; migration 020 applied on the live stack; new endpoints and the Customers UI smoke-tested live.
+
+
 ## 2026-07-10 (Claude cycle 3: platform modules, analytics, and console completeness)
 
 - Built the previously-missing Platform modules end to end (migration 016): **API Gateway** clients (create with one-time secret, rotate, revoke, export), **Plugins** (seeded examples with enable/disable and manifest install), **Backups** (logical-checkpoint catalog with create/verify/restore-request and export), **Runtime Containers** (declared Compose services with live-probed health for PostgreSQL/engine/SQLBox and honest "unknown" for the rest), and a **Customers** honest-unavailable placeholder — every one previously returned "Workspace API not available yet".

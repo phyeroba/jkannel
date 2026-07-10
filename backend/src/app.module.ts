@@ -23,6 +23,7 @@ import { MetricsRegistry } from './monitoring/metrics.registry';
 import { MetricsInterceptor } from './monitoring/metrics.interceptor';
 import { BackupDrModule } from './backup-dr/backup-dr.module';
 import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.modul
     PlatformConsoleModule,
     BackupDrModule,
     MonitoringDepthModule,
+    CustomersModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

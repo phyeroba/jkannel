@@ -37,6 +37,7 @@ const baseRecord = (over: Partial<BackupRecord> = {}): BackupRecord => ({
   id: '11111111-1111-4111-8111-111111111111',
   label: 'nightly',
   kind: 'full',
+  scope: 'full',
   status: 'running',
   size_bytes: null,
   checksum: null,
@@ -133,6 +134,61 @@ describe('BackupDrService.createBackup', () => {
     await expect(service.createBackup(actor, { kind: 'bogus' })).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+
+  it('rejects an unknown backup scope', async () => {
+    const service = new TestService({} as any);
+    await expect(service.createBackup(actor, { scope: 'bogus' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('runs a config-only pg_dump for scope=configurations and records the scope', async () => {
+    const captured: string[][] = [];
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord({ scope: 'configurations' })),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.exec = async (_tool, args) => {
+      captured.push(args);
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP-config-only'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, { scope: 'configurations', retentionClass: 'manual' });
+    expect(repository.insertRunning.mock.calls[0][1].scope).toBe('configurations');
+    const dumpArgs = captured[0];
+    expect(dumpArgs).toEqual(
+      expect.arrayContaining([
+        '--table=configuration_versions',
+        '--table=smsc_definitions',
+        '--table=routing_rules',
+        '--table=system_settings',
+      ]),
+    );
+  });
+
+  it("treats scope='app' as a full database backup", async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.exec = async (_tool, args) => {
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP-full'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, { scope: 'app' });
+    expect(repository.insertRunning.mock.calls[0][1].scope).toBe('full');
+    expect(repository.completeBackup.mock.calls[0][2].detail).toMatch(/treated as 'full'/);
   });
 });
 

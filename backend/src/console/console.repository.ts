@@ -284,6 +284,41 @@ export class ConsoleRepository {
       return row;
     });
   }
+  /**
+   * Archives an SMSC (lifecycle_state='archived', enabled=false). Refuses with a
+   * 409 if any routing rule still references it as a target or fallback, so an
+   * SMSC in active use cannot be silently removed. Never hard-deletes.
+   */
+  async archiveSmsc(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const old = (await c.query('SELECT * FROM smsc_definitions WHERE id=$1', [id])).rows[0];
+      if (!old) throw new NotFoundException('SMSC not found');
+      const references = (
+        await c.query<{ id: string; name: string; role: string }>(
+          `SELECT id, name, 'target' role FROM routing_rules WHERE target_smsc_id=$1
+             UNION ALL
+           SELECT id, name, 'fallback' role FROM routing_rules WHERE fallback_smsc_id=$1
+           ORDER BY name LIMIT 20`,
+          [id],
+        )
+      ).rows;
+      if (references.length) {
+        const names = [...new Set(references.map((r) => r.name))].join(', ');
+        throw new ConflictException(
+          `This SMSC is referenced by ${references.length} routing rule(s) (${names}). ` +
+            'Repoint or remove those routes before archiving it.',
+        );
+      }
+      const row = (
+        await c.query(
+          "UPDATE smsc_definitions SET lifecycle_state='archived',enabled=false,updated_at=now() WHERE id=$1 RETURNING *",
+          [id],
+        )
+      ).rows[0];
+      await this.audit(c, actor, 'smsc.archived', 'smsc', id, old, row);
+      return row;
+    });
+  }
   async beginSmscOperation(
     actor: Actor,
     smscId: string,
@@ -1015,6 +1050,30 @@ export class ConsoleRepository {
       CONSOLE_GRIDS.reportSnapshots,
       query,
     );
+  }
+  /**
+   * A report snapshot by uuid plus the other snapshots for the SAME period
+   * (tenant + period_type + period_start): the total and per-SMSC / per-route
+   * breakdown, so opening one snapshot shows the full period. RLS scopes both
+   * queries to the caller's tenant.
+   */
+  async getReportSnapshotDetail(actor: Actor, id: string) {
+    const columns =
+      'id,period_type,period_start,period_end,scope,scope_key,scope_label,message_count,dlr_count,details,generated_at';
+    return this.inTenant(actor, async (c) => {
+      const snapshot = (await c.query(`SELECT ${columns} FROM report_snapshots WHERE id=$1`, [id]))
+        .rows[0];
+      if (!snapshot) throw new NotFoundException('Report snapshot not found');
+      const related = (
+        await c.query(
+          `SELECT ${columns} FROM report_snapshots
+            WHERE period_type=$1 AND period_start=$2 AND id<>$3
+            ORDER BY scope, scope_label`,
+          [snapshot.period_type, snapshot.period_start, id],
+        )
+      ).rows;
+      return { snapshot, related };
+    });
   }
   listNotifications(actor: Actor, query: Record<string, unknown> = {}) {
     return this.grid(

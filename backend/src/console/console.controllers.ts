@@ -195,6 +195,12 @@ export class SmscController {
   @Get(':id') @RequirePermissions('smsc.view') detail(@Req() r: Request, @Param('id') id: string) {
     return this.repository.getSmscDetail(actor(r), uuid(id, 'id'));
   }
+  @Delete(':id') @RequirePermissions('smsc.manage') archive(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.archiveSmsc(actor(r), uuid(id, 'id'));
+  }
   @Post(':id/actions/:operation') @RequirePermissions('smsc.manage') async operate(
     @Req() r: Request,
     @Param('id') id: string,
@@ -753,6 +759,53 @@ export class ConfigurationsController {
       r.principal!.username ?? r.principal!.userId,
       describeFilters(q),
     );
+  }
+  // Declared before ':id' so the literal path matches first. Returns a documented
+  // STARTER configuration (matching the EngineConfiguration shape that
+  // ConfigurationGeneratorService.generate expects) that a user can edit and POST
+  // back to /configurations to create the first version.
+  @Get('baseline') @RequirePermissions('configuration.view') baseline() {
+    const content: EngineConfiguration = {
+      adminPort: 13000,
+      smsboxPort: 13001,
+      adminSecretRef: 'secret://kamex/admin-password',
+      logLevel: 1,
+      sqlbox: {
+        enabled: true,
+        host: 'postgres',
+        port: 5432,
+        database: 'jkannel',
+        usernameEnv: 'JKANNEL_SQLBOX_USER',
+        passwordEnv: 'JKANNEL_SQLBOX_PASSWORD',
+      },
+      smsc: [
+        {
+          id: 'example-smsc',
+          type: 'smpp',
+          host: 'smsc.example.com',
+          port: 2775,
+          usernameSecretRef: 'secret://kamex/example-smsc',
+          enabled: true,
+        },
+      ],
+    };
+    return {
+      scope: 'gateway',
+      content,
+      description:
+        'A baseline Kamex gateway configuration: one admin port, one SMSBox port, ' +
+        'SQLBox persistence enabled, and one example SMPP SMSC. Edit it, then POST ' +
+        'to /configurations to create the first version, or to /configurations/generate ' +
+        'to render and natively validate it first.',
+      notes: [
+        'Replace example-smsc with your real SMSC id, host, port and credential reference.',
+        'The scope ("gateway") groups a versioned configuration; creating from an edited ' +
+          'baseline appends a new version rather than mutating an existing one.',
+        'adminSecretRef and each SMSC usernameSecretRef must be secret:// references, ' +
+          'never inline credentials.',
+        'SQLBox usernameEnv/passwordEnv are environment variable names resolved at runtime.',
+      ],
+    };
   }
   @Get('diff/:id1/:id2') @RequirePermissions('configuration.view') async diff(
     @Req() r: Request,

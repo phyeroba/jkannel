@@ -17,11 +17,14 @@ export interface GridPage<T> {
 
 export type RetentionClass = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual';
 export type BackupKind = 'full' | 'schema' | 'incremental';
+/** What the artifact covers: whole DB ('full'/'database') or config-only. */
+export type BackupScope = 'full' | 'database' | 'configurations';
 
 export interface BackupRecord {
   id: string;
   label: string;
   kind: string;
+  scope: string;
   status: string;
   size_bytes: string | null;
   checksum: string | null;
@@ -86,7 +89,7 @@ export const BACKUP_DR_GRIDS = {
 } satisfies Record<string, GridDefinition>;
 
 const BACKUP_COLUMNS =
-  'id,label,kind,status,size_bytes,checksum,location,encrypted,detail,retention_class,' +
+  'id,label,kind,scope,status,size_bytes,checksum,location,encrypted,detail,retention_class,' +
   'verified_at,artifact_path,platform_version,database_version,started_at,completed_at,created_by';
 
 const SCHEDULE_COLUMNS =
@@ -183,6 +186,7 @@ export class BackupDrRepository {
     value: {
       label: string;
       kind: BackupKind;
+      scope: BackupScope;
       retentionClass: RetentionClass;
       artifactPath: string;
       platformVersion: string | null;
@@ -193,18 +197,21 @@ export class BackupDrRepository {
       const row = (
         await client.query<BackupRecord>(
           `INSERT INTO backup_records
-             (tenant_id,label,kind,status,retention_class,artifact_path,platform_version,database_version,encrypted,detail,created_by)
-           VALUES ($1,$2,$3,'running',$4,$5,$6,$7,true,$8,$9)
+             (tenant_id,label,kind,scope,status,retention_class,artifact_path,platform_version,database_version,encrypted,detail,created_by)
+           VALUES ($1,$2,$3,$4,'running',$5,$6,$7,$8,true,$9,$10)
            RETURNING ${BACKUP_COLUMNS}`,
           [
             actor.tenantId,
             value.label,
             value.kind,
+            value.scope,
             value.retentionClass,
             value.artifactPath,
             value.platformVersion,
             value.databaseVersion,
-            'Whole-database pg_dump in progress.',
+            value.scope === 'configurations'
+              ? 'Configuration-only pg_dump in progress.'
+              : 'Whole-database pg_dump in progress.',
             actor.userId,
           ],
         )

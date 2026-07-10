@@ -293,6 +293,45 @@ async function loadVolume() {
   }
 }
 
+// --- Volume snapshot detail drawer ------------------------------------------
+const snapshotOpen = ref(false);
+const snapshotLoading = ref(false);
+const snapshotError = ref('');
+const snapshotDetail = ref<RecordValue | null>(null);
+const snapshotRelated = computed<RecordValue[]>(() => {
+  const related = snapshotDetail.value?.related;
+  return Array.isArray(related) ? (related as RecordValue[]) : [];
+});
+
+async function openSnapshot(row: RecordValue) {
+  const id = text(row.id ?? row.uuid, '');
+  if (!id || id === '—') return;
+  snapshotOpen.value = true;
+  snapshotLoading.value = true;
+  snapshotError.value = '';
+  snapshotDetail.value = null;
+  try {
+    snapshotDetail.value = await apiRequest<RecordValue>(`/reports/volume/${id}`);
+  } catch (reason) {
+    snapshotError.value = messageFrom(reason, 'The snapshot detail could not be loaded.');
+  } finally {
+    snapshotLoading.value = false;
+  }
+}
+function closeSnapshot() {
+  snapshotOpen.value = false;
+  snapshotDetail.value = null;
+}
+
+function prettyJson(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 async function exportVolume(format: 'csv' | 'pdf') {
   busy.value = true;
   volumeNotice.value = '';
@@ -623,7 +662,13 @@ onMounted(() => void refreshAll());
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in volumeRows" :key="text(row.id)">
+            <tr
+              v-for="row in volumeRows"
+              :key="text(row.id)"
+              class="clickable-row"
+              :data-testid="`snapshot-${text(row.id)}`"
+              @click="openSnapshot(row)"
+            >
               <td>{{ text(row.period_start ?? row.periodStart) }}</td>
               <td>{{ text(row.period_type ?? row.periodType) }}</td>
               <td>{{ text(row.scope) }}</td>
@@ -643,6 +688,47 @@ onMounted(() => void refreshAll());
           </tbody>
         </table>
       </div>
+      <p v-if="volumeState === 'ok' && volumeRows.length" class="source-note">
+        Select a snapshot to view its total plus per-SMSC and per-route breakdown.
+      </p>
+    </section>
+
+    <section
+      v-if="snapshotOpen"
+      class="panel detail-panel"
+      data-testid="snapshot-panel"
+      aria-label="Volume snapshot detail"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Volume snapshot detail</h2>
+        </div>
+        <button class="secondary-button" data-testid="snapshot-close" @click="closeSnapshot">
+          Close
+        </button>
+      </header>
+      <p v-if="snapshotLoading" class="chart-empty" data-testid="snapshot-loading">Loading…</p>
+      <p v-else-if="snapshotError" class="chart-empty" role="alert" data-testid="snapshot-error">
+        {{ snapshotError }}
+      </p>
+      <template v-else-if="snapshotDetail">
+        <h3>Snapshot</h3>
+        <pre class="json-block" data-testid="snapshot-summary">{{
+          prettyJson(snapshotDetail.snapshot)
+        }}</pre>
+        <h3>Related breakdown</h3>
+        <ul class="sample-list" data-testid="snapshot-related">
+          <li v-for="(item, index) in snapshotRelated" :key="index">
+            {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
+            {{ text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0') }}
+            messages
+            <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
+          </li>
+          <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
+        </ul>
+      </template>
     </section>
   </div>
 </template>
+
+<style src="./workspace-extras.css"></style>

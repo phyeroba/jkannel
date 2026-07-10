@@ -83,6 +83,7 @@ export class BackupDrController {
       kind: b?.kind,
       retentionClass: b?.retentionClass,
       label: b?.label,
+      scope: b?.scope,
     });
   }
 

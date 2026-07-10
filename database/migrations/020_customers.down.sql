@@ -1,0 +1,4 @@
+BEGIN;
+ALTER TABLE backup_records DROP COLUMN IF EXISTS scope;
+DROP TABLE IF EXISTS customers;
+COMMIT;

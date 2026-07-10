@@ -1,4 +1,14 @@
-import { Controller, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { ConsoleRepository, Actor } from './console.repository';
@@ -10,6 +20,14 @@ const actor = (request: Request): Actor => ({
   tenantId: request.principal!.tenantId,
   userId: request.principal!.userId,
 });
+const uuid = (value: unknown, name: string) => {
+  if (typeof value !== 'string' || !value.trim())
+    throw new BadRequestException(`${name} is required`);
+  const v = value.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v))
+    throw new BadRequestException(`${name} must be a UUID`);
+  return v;
+};
 
 const VOLUME_EXPORT_COLUMNS: ExportColumn[] = [
   { key: 'period_type', header: 'Period' },
@@ -80,6 +98,14 @@ export class VolumeReportsController {
   @Post('run') @RequirePermissions('system.manage') async run() {
     const results = await this.jobs!.runPending();
     return { results };
+  }
+  // Declared after the literal export/run routes so those match first. Returns a
+  // snapshot plus the rest of its period (total + per-SMSC + per-route breakdown).
+  @Get(':id') @RequirePermissions('reports.view') detail(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.getReportSnapshotDetail(actor(r), uuid(id, 'id'));
   }
   private async export(r: Request, format: 'csv' | 'pdf', q: any, response: any) {
     const page = await this.repository.listReportSnapshots(actor(r), {

@@ -179,6 +179,42 @@ describe('Analytics & Reports view', () => {
     click.mockRestore();
   });
 
+  it('opens a snapshot detail drawer with the related breakdown', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const target = String(url);
+      if (/\/reports\/volume\/v1$/.test(target) && (!init || init.method === undefined))
+        return apiResponse({
+          snapshot: { id: 'v1', message_count: 120 },
+          related: [{ scope: 'smsc', label: 'primary', message_count: 80, dlr_count: 60 }],
+        });
+      if (target.includes('/reports/volume/run') && init?.method === 'POST')
+        return apiResponse({ results: [] });
+      if (target.includes('/reports/volume')) return apiResponse(volumePage);
+      if (target.includes('/reports/analytics/overview')) return apiResponse(overview);
+      if (target.includes('/reports/analytics/traffic-trend')) return apiResponse(trend30);
+      if (target.includes('/reports/analytics/delivery-breakdown')) return apiResponse(breakdown);
+      if (target.includes('/reports/analytics/per-smsc')) return apiResponse(perGroup);
+      if (target.includes('/reports/analytics/per-route')) return apiResponse(perGroup);
+      if (target.includes('/reports/analytics/catalog')) return apiResponse(catalog);
+      return apiResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(AnalyticsView);
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="snapshot-v1"]').exists()).toBe(true));
+
+    await wrapper.get('[data-testid="snapshot-v1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="snapshot-panel"]').exists()).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('smsc'),
+    );
+    expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('80');
+    expect(
+      fetchMock.mock.calls.some((call) => /\/reports\/volume\/v1$/.test(String(call[0]))),
+    ).toBe(true);
+  });
+
   it('shows honest empty states when there are no snapshots yet', async () => {
     const emptyMock = vi.fn().mockImplementation((url: string) => {
       const target = String(url);

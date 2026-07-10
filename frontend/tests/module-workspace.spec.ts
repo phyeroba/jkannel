@@ -69,25 +69,44 @@ describe('module workspace behavior', () => {
     expect(wrapper.get('.empty-cell').text()).toBe('No records match these filters.');
   });
 
-  it('creates a draft through the primary action and labels row actions for assistive technology', async () => {
-    const fetchMock = vi.fn().mockImplementation(() => apiResponse(gridPage(records)));
+  it('creates a route with target/fallback SMSC dropdowns and labels row actions for assistive technology', async () => {
+    const smscRows = [
+      { id: 'smsc-1', engine_id: 'primary-smpp', name: 'Primary SMPP' },
+      { id: 'smsc-2', engine_id: 'backup-smpp', name: 'Backup SMPP' },
+    ];
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/smscs')) return apiResponse(gridPage(smscRows));
+      return apiResponse(gridPage(records));
+    });
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/routing', 'Routing');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
     await wrapper.get('[data-testid="primary-action"]').trigger('click');
     expect(wrapper.get('section[aria-label="Create route"] h2').text()).toBe('Create route');
+
+    // Target/fallback are dropdowns populated from GET /smscs (value = SMSC id).
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="draft-target"]').findAll('option').length).toBe(3),
+    );
+    expect(wrapper.get('[data-testid="draft-fallback"]').findAll('option').length).toBe(3);
+    expect(wrapper.get('[data-testid="draft-target"]').text()).toContain('primary-smpp');
+
     await wrapper.get('[data-testid="draft-name"]').setValue('East Africa fallback');
-    await wrapper
-      .get('[data-testid="draft-target"]')
-      .setValue('6ffe1b64-c20d-46d7-b584-b31483ba68e9');
+    await wrapper.get('[data-testid="draft-target"]').setValue('smsc-1');
+    await wrapper.get('[data-testid="draft-fallback"]').setValue('smsc-2');
     await wrapper.get('[data-testid="save-draft"]').trigger('click');
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
-      name: 'East Africa fallback',
-      priority: 100,
-      targetSmscId: '6ffe1b64-c20d-46d7-b584-b31483ba68e9',
+    await vi.waitFor(() => {
+      const post = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith('/routes') && call[1]?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+        name: 'East Africa fallback',
+        priority: 100,
+        targetSmscId: 'smsc-1',
+        fallbackSmscId: 'smsc-2',
+      });
     });
-    expect(fetchMock.mock.calls[1][1].method).toBe('POST');
     expect(wrapper.get('th').attributes('scope')).toBe('col');
   });
 

@@ -8,7 +8,6 @@ import { RuntimeContainersService } from './runtime-containers.service';
 import {
   ApiGatewayController,
   BackupsController,
-  CustomersController,
   PluginsController,
   RuntimeContainersController,
 } from './platform.controllers';
@@ -20,7 +19,6 @@ import {
     PluginsController,
     BackupsController,
     RuntimeContainersController,
-    CustomersController,
   ],
   providers: [DatabaseService, PlatformConsoleRepository, RuntimeContainersService, ExportService],
 })

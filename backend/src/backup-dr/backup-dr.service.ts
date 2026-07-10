@@ -10,10 +10,23 @@ import {
   BackupDrRepository,
   BackupKind,
   BackupRecord,
+  BackupScope,
   RetentionClass,
 } from './backup-dr.repository';
 
 const KINDS: BackupKind[] = ['full', 'schema', 'incremental'];
+const SCOPES: BackupScope[] = ['full', 'database', 'configurations'];
+/**
+ * Tables captured by a configuration-only (scope='configurations') dump. These
+ * hold the operator-authored gateway configuration; message/DLR data lives in
+ * SQLBox and is intentionally excluded.
+ */
+const CONFIG_TABLES = [
+  'configuration_versions',
+  'smsc_definitions',
+  'routing_rules',
+  'system_settings',
+];
 const RETENTION_CLASSES: RetentionClass[] = [
   'hourly',
   'daily',
@@ -84,10 +97,11 @@ export class BackupDrService {
   // ---- createBackup -------------------------------------------------------
   async createBackup(
     actor: Actor,
-    input: { kind?: string; retentionClass?: string; label?: string },
+    input: { kind?: string; retentionClass?: string; label?: string; scope?: string },
   ): Promise<BackupRecord> {
     const kind = this.validKind(input.kind);
     const retentionClass = this.validRetention(input.retentionClass);
+    const { scope, scopeNote } = this.validScope(input.scope);
     const label =
       (typeof input.label === 'string' && input.label.trim()) ||
       `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -102,6 +116,7 @@ export class BackupDrService {
     const record = await this.repository.insertRunning(actor, {
       label,
       kind,
+      scope,
       retentionClass,
       artifactPath,
       platformVersion: PLATFORM_VERSION,
@@ -120,7 +135,7 @@ export class BackupDrService {
     const dumpPath = join(tmpdir(), `jkannel-dump-${randomBytes(6).toString('hex')}.dump`);
     try {
       await this.ensureDir(dir);
-      const dumpArgs = this.pgDumpArgs(kind, dumpPath, connectionString);
+      const dumpArgs = this.pgDumpArgs(kind, scope, dumpPath, connectionString);
       const result = await this.execTool('pg_dump', dumpArgs);
       if (result.missing) {
         return this.repository.failBackup(actor, record.id, MISSING_PG_DUMP);
@@ -136,13 +151,17 @@ export class BackupDrService {
       const checksum = createHash('sha256').update(plain).digest('hex');
       const encrypted = this.encrypt(plain);
       await writeFile(artifactPath, encrypted);
+      const coverage =
+        scope === 'configurations'
+          ? `Configuration-only pg_dump (tables: ${CONFIG_TABLES.join(', ')})`
+          : `Whole-database ${kind} pg_dump`;
       return this.repository.completeBackup(actor, record.id, {
         sizeBytes: plain.length,
         checksum,
         location: `file://${artifactPath}`,
         detail:
-          `Whole-database ${kind} pg_dump (custom format), AES-256-GCM encrypted at rest. ` +
-          `Logical size ${plain.length} bytes.`,
+          `${coverage} (custom format), AES-256-GCM encrypted at rest. ` +
+          `Logical size ${plain.length} bytes.${scopeNote}`,
       });
     } catch (error) {
       return this.repository.failBackup(
@@ -321,9 +340,34 @@ export class BackupDrService {
     );
   }
 
-  private pgDumpArgs(kind: BackupKind, dumpPath: string, connectionString: string): string[] {
+  private validScope(scope: unknown): { scope: BackupScope; scopeNote: string } {
+    if (scope === undefined || scope === null || scope === '')
+      return { scope: 'full', scopeNote: '' };
+    if (typeof scope !== 'string')
+      throw new BadRequestException(`scope must be one of ${SCOPES.join(', ')}, or 'app'`);
+    // Application code lives in git, so an 'app' scope is not a database concern:
+    // treat it as a full database backup and say so honestly in the detail.
+    if (scope === 'app')
+      return {
+        scope: 'full',
+        scopeNote:
+          " Requested scope 'app' was treated as 'full': application code is versioned in git, not the database.",
+      };
+    if (!SCOPES.includes(scope as BackupScope))
+      throw new BadRequestException(`scope must be one of ${SCOPES.join(', ')}, or 'app'`);
+    return { scope: scope as BackupScope, scopeNote: '' };
+  }
+
+  private pgDumpArgs(
+    kind: BackupKind,
+    scope: BackupScope,
+    dumpPath: string,
+    connectionString: string,
+  ): string[] {
     const args = ['--format=custom', '--no-owner', '--no-acl', `--file=${dumpPath}`];
     if (kind === 'schema') args.push('--schema-only');
+    if (scope === 'configurations')
+      for (const table of CONFIG_TABLES) args.push(`--table=${table}`);
     args.push(`--dbname=${connectionString}`);
     return args;
   }

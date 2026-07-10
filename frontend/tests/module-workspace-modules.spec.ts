@@ -82,14 +82,13 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/users', 'Users');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    // Create user with a role.
+    // Create user with a role (roles render as a labelled checkbox list).
     await wrapper.get('[data-testid="create-user"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="new-roles"]').findAll('option').length).toBe(2),
-    );
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid^="new-role-"]').length).toBe(2));
+    expect(wrapper.get('[data-testid="new-roles"]').text()).toContain('Ops');
     await wrapper.get('[data-testid="new-username"]').setValue('joel');
     await wrapper.get('[data-testid="new-password"]').setValue('longenoughpwd');
-    await wrapper.get('[data-testid="new-roles"]').setValue(['r1']);
+    await wrapper.get('[data-testid="new-role-r1"]').get('input').setValue(true);
     await wrapper.get('[data-testid="create-user-submit"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
@@ -323,18 +322,20 @@ describe('module workspace per-module enhancements', () => {
     );
   });
 
-  it('creates a backup and records an authorized restore with a reason', async () => {
+  it('creates a scoped backup through a naming/scope modal and restores with a reason', async () => {
     vi.stubGlobal(
       'confirm',
       vi.fn(() => true),
     );
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url.endsWith('/backups') && init?.method === 'POST') return apiResponse({ id: 'b2' });
-      if (url.includes('/backups/b1/restore') && init?.method === 'POST') return apiResponse({});
+      if (url.endsWith('/backup-dr') && init?.method === 'POST') return apiResponse({ id: 'b2' });
+      if (url.includes('/backup-dr/b1/restore') && init?.method === 'POST') return apiResponse({});
+      if (url.includes('/backup-dr/b1/verify')) return apiResponse({ status: 'verified' });
       return apiResponse([
         {
           id: 'b1',
           label: 'nightly',
+          scope: 'full',
           kind: 'full',
           status: 'complete',
           size_bytes: 2048000,
@@ -348,17 +349,40 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/backup', 'Backup');
     await vi.waitFor(() => expect(wrapper.text()).toContain('nightly'));
     expect(wrapper.find('[data-testid="backup-help"]').exists()).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain('/backup-dr');
 
+    // The primary action opens a modal to name the backup and choose its scope.
     await wrapper.get('[data-testid="primary-action"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="backup-modal"]').exists()).toBe(true),
+    );
+    await wrapper.get('[data-testid="backup-label"]').setValue('pre-upgrade');
+    await wrapper.get('[data-testid="backup-scope-database"]').setValue();
+    await wrapper.get('[data-testid="backup-submit"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
-        (call) => String(call[0]).endsWith('/backups') && call[1]?.method === 'POST',
+        (call) => String(call[0]).endsWith('/backup-dr') && call[1]?.method === 'POST',
       );
       expect(post).toBeTruthy();
-      expect(bodyOf(post)).toEqual({ kind: 'full' });
+      expect(bodyOf(post)).toEqual({
+        kind: 'full',
+        retentionClass: 'manual',
+        scope: 'database',
+        label: 'pre-upgrade',
+      });
     });
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
+    // Verify uses GET /backup-dr/:id/verify.
+    await wrapper.get('[data-testid="backup-verify-b1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('/backup-dr/b1/verify')),
+      ).toBe(true),
+    );
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // Restore requires a reason and posts confirm:true to /backup-dr/:id/restore.
     await wrapper.get('[data-testid="backup-restore-b1"]').trigger('click');
     await vi.waitFor(() =>
       expect(wrapper.find('[data-testid="restore-form"]').exists()).toBe(true),
@@ -369,10 +393,10 @@ describe('module workspace per-module enhancements', () => {
     await wrapper.get('[data-testid="restore-submit"]').trigger('click');
     await vi.waitFor(() => {
       const restore = fetchMock.mock.calls.find((call) =>
-        String(call[0]).includes('/backups/b1/restore'),
+        String(call[0]).includes('/backup-dr/b1/restore'),
       );
       expect(restore).toBeTruthy();
-      expect(bodyOf(restore)).toEqual({ reason: 'DR drill' });
+      expect(bodyOf(restore)).toEqual({ confirm: true, reason: 'DR drill' });
     });
   });
 
@@ -514,5 +538,309 @@ describe('module workspace per-module enhancements', () => {
       'Customer management is planned',
     );
     expect(wrapper.find('[data-testid="api-state"]').exists()).toBe(false);
+  });
+
+  it('opens a message trace drawer with events and summary when a row is clicked', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (/\/messages\/m1\/trace$/.test(url))
+        return apiResponse({
+          id: 'm1',
+          events: [
+            { type: 'accepted', detail: 'queued', at: 't0', status: 'ok' },
+            { type: 'delivered', detail: 'DLR received', at: 't1', status: 'ok' },
+          ],
+          summary: { status: 'delivered', direction: 'MT' },
+        });
+      return apiResponse([
+        {
+          id: 'm1',
+          sender: 'JKANNEL',
+          receiver: '+256700',
+          smsc: 'primary',
+          status: 'delivered',
+          direction: 'MT',
+        },
+      ]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/messages', 'Messages');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-m1"]').exists()).toBe(true));
+
+    await wrapper.get('[data-testid="record-m1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="message-trace-panel"]').exists()).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="message-trace-events"]').text()).toContain('delivered'),
+    );
+    expect(wrapper.get('[data-testid="message-trace-events"]').text()).toContain('DLR received');
+    expect(wrapper.get('[data-testid="message-trace-panel"]').text()).toContain('+256700');
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes('/messages/m1/trace')),
+    ).toBe(true);
+  });
+
+  it('edits and archives an SMSC, surfacing the 409 referenced-by-routes message', async () => {
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+    let deleteCalls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (/\/smscs\/s1$/.test(url) && init?.method === 'PATCH') return apiResponse({ id: 's1' });
+      if (/\/smscs\/s1$/.test(url) && init?.method === 'DELETE') {
+        deleteCalls += 1;
+        if (deleteCalls === 1)
+          return apiResponse('SMSC is referenced by 2 routes and cannot be archived.', 409);
+        return apiResponse({ id: 's1' });
+      }
+      if (/\/smscs\/s1$/.test(url))
+        return apiResponse({
+          id: 's1',
+          name: 'Primary SMPP',
+          host: 'smpp.example',
+          port: 2775,
+          tps: 20,
+          enabled: true,
+          lifecycle_state: 'active',
+          health: [],
+          deployments: [],
+        });
+      return apiResponse(
+        gridPage([{ id: 's1', name: 'Primary SMPP', enabled: true, lifecycle_state: 'active' }]),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="record-s1"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="smsc-edit"]').exists()).toBe(true));
+
+    // Edit the SMSC.
+    await wrapper.get('[data-testid="smsc-edit"]').trigger('click');
+    await wrapper.get('[data-testid="smsc-edit-host"]').setValue('smpp2.example');
+    await wrapper.get('[data-testid="smsc-edit-tps"]').setValue(50);
+    await wrapper.get('[data-testid="smsc-save"]').trigger('click');
+    await vi.waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        (call) => /\/smscs\/s1$/.test(String(call[0])) && call[1]?.method === 'PATCH',
+      );
+      expect(patch).toBeTruthy();
+      expect(bodyOf(patch)).toMatchObject({ host: 'smpp2.example', tps: 50, enabled: true });
+    });
+
+    // First archive returns 409 (referenced by routes) shown honestly.
+    await wrapper.get('[data-testid="record-s1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="smsc-archive"]').exists()).toBe(true),
+    );
+    await wrapper.get('[data-testid="smsc-archive"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="api-state"]').text()).toContain('referenced by 2 routes'),
+    );
+
+    // Second archive succeeds.
+    await wrapper.get('[data-testid="smsc-archive"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          (call) => /\/smscs\/s1$/.test(String(call[0])) && call[1]?.method === 'DELETE',
+        ).length,
+      ).toBe(2),
+    );
+  });
+
+  it('loads a configuration baseline into the create form and edits a version as a new one', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/configurations/baseline'))
+        return apiResponse({
+          scope: 'gateway',
+          content: { adminPort: 13000, smsc: [{ id: 'fake', type: 'fake' }] },
+          description: 'A working starter configuration.',
+          notes: ['Uses a fake SMSC for development.'],
+        });
+      if (/\/configurations\/cfg-1$/.test(url) && (!init || init.method === undefined))
+        return apiResponse({ id: 'cfg-1', scope: 'gateway', content: { adminPort: 14000 } });
+      if (url.endsWith('/configurations') && init?.method === 'POST')
+        return apiResponse({ id: 'v2' });
+      return apiResponse(
+        gridPage([{ id: 'cfg-1', scope: 'gateway', version_number: 3, status: 'deployed' }]),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/configuration', 'Configuration');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // Load baseline pre-fills the composer with the starter config + description/notes.
+    await wrapper.get('[data-testid="load-baseline"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="configuration-baseline-info"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="configuration-baseline-info"]').text()).toContain(
+      'working starter configuration',
+    );
+    expect(wrapper.get('[data-testid="configuration-baseline-content"]').text()).toContain(
+      'adminPort',
+    );
+    await wrapper.get('[data-testid="save-draft"]').trigger('click');
+    await vi.waitFor(() => {
+      const post = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith('/configurations') && call[1]?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(bodyOf(post)).toMatchObject({ scope: 'gateway' });
+      expect(bodyOf(post).content).toMatchObject({ adminPort: 13000 });
+    });
+
+    // Edit a row loads that version's content for a new version.
+    await wrapper.get('[data-testid="config-edit-cfg-1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="configuration-baseline-content"]').text()).toContain(
+        '14000',
+      ),
+    );
+  });
+
+  it('creates a customer and edits from the detail drawer', async () => {
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/customers') && init?.method === 'POST') return apiResponse({ id: 'cu2' });
+      if (/\/customers\/cu1$/.test(url) && init?.method === 'PATCH')
+        return apiResponse({ id: 'cu1' });
+      if (/\/customers\/cu1$/.test(url))
+        return apiResponse({
+          id: 'cu1',
+          name: 'Acme',
+          code: 'ACME',
+          status: 'active',
+          contact_email: 'ops@acme.test',
+          quota_daily: 1000,
+          rate_limit_per_min: 60,
+          allowed_sender_ids: ['ACME'],
+          notes: 'VIP',
+        });
+      return apiResponse(gridPage([{ id: 'cu1', name: 'Acme', code: 'ACME', status: 'active' }]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/customers', 'Customers');
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Acme'));
+    expect(wrapper.find('[data-testid="customers-help"]').exists()).toBe(true);
+
+    // Create a customer.
+    await wrapper.get('[data-testid="primary-action"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="create-customer-form"]').exists()).toBe(true),
+    );
+    await wrapper.get('[data-testid="customer-name"]').setValue('Globex');
+    await wrapper.get('[data-testid="customer-code"]').setValue('GLBX');
+    await wrapper.get('[data-testid="customer-senders"]').setValue('GLBX, INFO');
+    await wrapper.get('[data-testid="customer-quota"]').setValue(500);
+    await wrapper.get('[data-testid="customer-submit"]').trigger('click');
+    await vi.waitFor(() => {
+      const post = fetchMock.mock.calls.find(
+        (call) => String(call[0]).endsWith('/customers') && call[1]?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(bodyOf(post)).toMatchObject({
+        name: 'Globex',
+        code: 'GLBX',
+        allowedSenderIds: ['GLBX', 'INFO'],
+        quotaDaily: 500,
+        status: 'active',
+      });
+    });
+
+    // Open detail and edit.
+    await wrapper.get('[data-testid="record-cu1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="customer-detail-status"]').text()).toBe('active'),
+    );
+    await wrapper.get('[data-testid="customer-edit"]').trigger('click');
+    await wrapper.get('[data-testid="customer-edit-status"]').setValue('suspended');
+    await wrapper.get('[data-testid="customer-save"]').trigger('click');
+    await vi.waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        (call) => /\/customers\/cu1$/.test(String(call[0])) && call[1]?.method === 'PATCH',
+      );
+      expect(patch).toBeTruthy();
+      expect(bodyOf(patch)).toMatchObject({ status: 'suspended' });
+    });
+  });
+
+  it('downloads a sample plugin manifest as plugin.json', async () => {
+    const click = stubDownloads();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/plugins/sample-manifest'))
+        return apiResponse({ pluginId: 'sample', name: 'Sample', version: '1.0.0' });
+      return apiResponse([]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/plugins', 'Plugins');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    expect(wrapper.find('[data-testid="plugins-developer"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="download-sample-plugin"]').trigger('click');
+    await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes('/plugins/sample-manifest')),
+    ).toBe(true);
+  });
+
+  it('renders an API gateway documentation panel', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => apiResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/api-gateway', 'API Gateway');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    const docs = wrapper.get('[data-testid="api-gateway-docs"]').text();
+    expect(docs).toContain('shown exactly once');
+    expect(docs).toContain('openapi.json');
+    expect(docs).toContain('Bearer');
+  });
+
+  it('opens a volume snapshot detail with related breakdown from the reports grid', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (/\/reports\/volume\/rep-1$/.test(url))
+        return apiResponse({
+          snapshot: { id: 'rep-1', message_count: 120 },
+          related: [
+            { scope: 'smsc', label: 'primary', message_count: 80, dlr_count: 60 },
+            { scope: 'route', label: 'east', message_count: 40, dlr_count: 30 },
+          ],
+        });
+      if (url.includes('/reports/delivery'))
+        return apiResponse({ items: [], summary: { total: 0 }, source: 'kamex-sqlbox' });
+      return apiResponse(
+        gridPage([
+          {
+            id: 'rep-1',
+            period_type: 'daily',
+            period_start: '2026-07-08',
+            scope: 'total',
+            message_count: 120,
+            dlr_count: 88,
+            generated_at: '2026-07-09',
+          },
+        ]),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/reports', 'Reports');
+    await vi.waitFor(() => expect(wrapper.text()).toContain('120'));
+
+    await wrapper.get('[data-testid="record-rep-1"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="snapshot-panel"]').exists()).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('smsc'),
+    );
+    const related = wrapper.get('[data-testid="snapshot-related"]').text();
+    expect(related).toContain('route');
+    expect(related).toContain('80');
+    expect(related).toContain('40');
   });
 });

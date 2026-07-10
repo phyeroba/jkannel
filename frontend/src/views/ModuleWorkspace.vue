@@ -270,7 +270,14 @@ const definitions: Record<string, Workspace> = {
     action: 'Add customer',
     actionEndpoint: '/customers',
     actionMethod: 'POST',
-    creatable: true,
+    columns: [
+      { header: 'Customer', value: (raw) => text(raw.name) },
+      { header: 'Code', value: (raw) => text(raw.code), mono: true },
+      { header: 'Contact', value: (raw) => text(raw.contact_email ?? raw.contactEmail) },
+      { header: 'Daily quota', value: (raw) => text(raw.quota_daily ?? raw.quotaDaily) },
+      { header: 'Rate/min', value: (raw) => text(raw.rate_limit_per_min ?? raw.rateLimitPerMin) },
+      { header: 'Status', value: (raw) => text(raw.status) },
+    ],
   },
   'api-gateway': {
     noun: 'API client',
@@ -351,12 +358,13 @@ const definitions: Record<string, Workspace> = {
   backup: {
     noun: 'backup',
     search: 'Backup name, date, type, or status',
-    endpoint: '/backups',
+    endpoint: '/backup-dr',
     action: 'Create backup',
-    actionEndpoint: '/backups',
+    actionEndpoint: '/backup-dr',
     actionMethod: 'POST',
     columns: [
       { header: 'Label', value: (raw) => text(raw.label) },
+      { header: 'Scope', value: (raw) => text(raw.scope) },
       { header: 'Kind', value: (raw) => text(raw.kind) },
       { header: 'Status', value: (raw) => text(raw.status) },
       { header: 'Size', value: (raw) => formatBytes(raw.size_bytes ?? raw.sizeBytes) },
@@ -503,6 +511,53 @@ const revealedSecretLabel = ref('');
 const restoreRow = ref<Row | null>(null);
 const restoreReason = ref('');
 
+/* Backup create modal (label + scope). */
+const showBackupModal = ref(false);
+const backupLabel = ref('');
+const backupScope = ref<'full' | 'database' | 'configurations'>('full');
+
+/* Message trace drawer. */
+const messageOpen = ref(false);
+const messageLoading = ref(false);
+const messageError = ref('');
+const messageRow = ref<RecordValue | null>(null);
+const messageTrace = ref<RecordValue | null>(null);
+
+/* Route target/fallback SMSC dropdown options (value = SMSC id). */
+const routeSmscOptions = ref<Array<{ value: string; label: string }>>([]);
+const routeSmscError = ref('');
+
+/* Configuration baseline + edit-as-new-version prefill. */
+const configBaseline = ref<RecordValue | null>(null);
+const configPrefillContent = ref<RecordValue | null>(null);
+
+/* Volume report snapshot detail (reports module). */
+const snapshotOpen = ref(false);
+const snapshotLoading = ref(false);
+const snapshotError = ref('');
+const snapshotDetail = ref<RecordValue | null>(null);
+
+/* Customers create + detail. */
+const showCreateCustomer = ref(false);
+const custName = ref('');
+const custCode = ref('');
+const custEmail = ref('');
+const custQuotaDaily = ref<number | null>(null);
+const custRateLimit = ref<number | null>(null);
+const custSenderIds = ref('');
+const custNotes = ref('');
+const custStatus = ref('active');
+const editCustName = ref('');
+const editCustEmail = ref('');
+const editCustQuotaDaily = ref<number | null>(null);
+const editCustRateLimit = ref<number | null>(null);
+const editCustSenderIds = ref('');
+const editCustNotes = ref('');
+const editCustStatus = ref('active');
+
+const apiBaseUrl = '/api/v1';
+const openApiUrl = '/api/v1/openapi.json';
+
 const key = computed(() => String(route.name));
 const workspace = computed(() => definitions[key.value]);
 const grid = computed(() => workspace.value?.grid);
@@ -551,7 +606,11 @@ const isDocker = computed(() => key.value === 'docker');
 const isSystem = computed(() => key.value === 'system');
 const customRender = computed(() => isCursor.value || isDocker.value || isSystem.value);
 const detailModule = computed(
-  () => key.value === 'users' || key.value === 'smsc' || key.value === 'logs-audit',
+  () =>
+    key.value === 'users' ||
+    key.value === 'smsc' ||
+    key.value === 'logs-audit' ||
+    key.value === 'customers',
 );
 const settingGroups = computed(() => {
   const groups: Record<string, RecordValue[]> = {};
@@ -899,9 +958,26 @@ async function openDetail(row: Row) {
         ? `/users/${row.id}`
         : key.value === 'smsc'
           ? `/smscs/${row.id}`
-          : `/audit-events/${row.id}`;
+          : key.value === 'customers'
+            ? `/customers/${row.id}`
+            : `/audit-events/${row.id}`;
     const record = await apiRequest<RecordValue>(endpoint);
     detail.value = record;
+    if (key.value === 'customers') {
+      editCustName.value = text(record.name, '') === '—' ? '' : String(record.name ?? '');
+      editCustEmail.value =
+        text(record.contact_email ?? record.contactEmail, '') === '—'
+          ? ''
+          : String(record.contact_email ?? record.contactEmail ?? '');
+      const quota = record.quota_daily ?? record.quotaDaily;
+      editCustQuotaDaily.value = quota === null || quota === undefined ? null : Number(quota);
+      const rate = record.rate_limit_per_min ?? record.rateLimitPerMin;
+      editCustRateLimit.value = rate === null || rate === undefined ? null : Number(rate);
+      const senders = record.allowed_sender_ids ?? record.allowedSenderIds;
+      editCustSenderIds.value = Array.isArray(senders) ? senders.map(String).join(', ') : '';
+      editCustNotes.value = text(record.notes, '') === '—' ? '' : String(record.notes ?? '');
+      editCustStatus.value = text(record.status, 'active');
+    }
     if (key.value === 'users') {
       editUserStatus.value = text(record.status, 'active');
       editUserRoleIds.value = Array.isArray(record.roles)
@@ -928,6 +1004,139 @@ function closeDetail() {
   detailOpen.value = false;
   detail.value = null;
   editing.value = false;
+}
+
+const clickableRow = computed(
+  () => detailModule.value || key.value === 'messages' || key.value === 'reports',
+);
+const messageTraceEvents = computed<RecordValue[]>(() => {
+  const events = messageTrace.value?.events;
+  return Array.isArray(events) ? (events as RecordValue[]) : [];
+});
+const snapshotRelated = computed<RecordValue[]>(() => {
+  const related = snapshotDetail.value?.related;
+  return Array.isArray(related) ? (related as RecordValue[]) : [];
+});
+function onRowClick(row: Row) {
+  if (key.value === 'messages') void openMessageTrace(row);
+  else if (key.value === 'reports') void openSnapshot(row);
+  else if (detailModule.value) void openDetail(row);
+}
+
+async function openMessageTrace(row: Row) {
+  if (key.value !== 'messages') return;
+  messageOpen.value = true;
+  messageLoading.value = true;
+  messageError.value = '';
+  messageRow.value = row.raw;
+  messageTrace.value = null;
+  try {
+    messageTrace.value = await apiRequest<RecordValue>(`/messages/${row.id}/trace`);
+  } catch (reason) {
+    messageError.value =
+      reason instanceof Error ? reason.message : 'The message trace could not be loaded.';
+  } finally {
+    messageLoading.value = false;
+  }
+}
+function closeMessageTrace() {
+  messageOpen.value = false;
+  messageRow.value = null;
+  messageTrace.value = null;
+}
+
+async function openCreateCustomer() {
+  showCreateCustomer.value = true;
+  custName.value = '';
+  custCode.value = '';
+  custEmail.value = '';
+  custQuotaDaily.value = null;
+  custRateLimit.value = null;
+  custSenderIds.value = '';
+  custNotes.value = '';
+  custStatus.value = 'active';
+}
+function senderIdList(value: string): string[] {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+async function createCustomer() {
+  if (!custName.value.trim()) return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const senders = senderIdList(custSenderIds.value);
+    await apiRequest('/customers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: custName.value.trim(),
+        ...(custCode.value.trim() ? { code: custCode.value.trim() } : {}),
+        ...(custEmail.value.trim() ? { contactEmail: custEmail.value.trim() } : {}),
+        ...(custQuotaDaily.value !== null ? { quotaDaily: custQuotaDaily.value } : {}),
+        ...(custRateLimit.value !== null ? { rateLimitPerMin: custRateLimit.value } : {}),
+        ...(senders.length ? { allowedSenderIds: senders } : {}),
+        ...(custNotes.value.trim() ? { notes: custNotes.value.trim() } : {}),
+        status: custStatus.value,
+      }),
+    });
+    showCreateCustomer.value = false;
+    notice.value = 'Customer created.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function saveCustomer() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/customers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        name: editCustName.value.trim(),
+        contactEmail: editCustEmail.value.trim(),
+        quotaDaily: editCustQuotaDaily.value,
+        rateLimitPerMin: editCustRateLimit.value,
+        allowedSenderIds: senderIdList(editCustSenderIds.value),
+        notes: editCustNotes.value.trim(),
+        status: editCustStatus.value,
+      }),
+    });
+    notice.value = 'Customer updated.';
+    await openDetail({ id } as Row);
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function archiveCustomer() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  if (!confirm(`Archive customer ${text(detail.value.name, id)}? This suspends their traffic.`))
+    return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/customers/${id}`, { method: 'DELETE' });
+    notice.value = 'Customer archived.';
+    closeDetail();
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function openCreateUser() {
@@ -1030,6 +1239,36 @@ async function saveSmsc() {
     loading.value = false;
   }
 }
+async function archiveSmsc() {
+  if (!detail.value) return;
+  const id = String(detail.value.id);
+  if (
+    !confirm(
+      `Archive SMSC ${text(detail.value.name, id)}? Routes referencing it must be repointed first.`,
+    )
+  )
+    return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    await apiRequest(`/smscs/${id}`, { method: 'DELETE' });
+    notice.value = 'SMSC archived.';
+    closeDetail();
+    await load(true);
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 409) {
+      error.value =
+        reason.message ||
+        'This SMSC is still referenced by one or more routes and cannot be archived.';
+    } else {
+      error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function testSmsc(row: Row) {
   loading.value = true;
   error.value = '';
@@ -1067,13 +1306,27 @@ async function pluginAction(row: Row, operation: 'enable' | 'disable') {
   }
 }
 
-async function createBackup() {
+function openBackupModal() {
+  showBackupModal.value = true;
+  backupLabel.value = '';
+  backupScope.value = 'full';
+}
+async function submitBackup() {
   loading.value = true;
   error.value = '';
   notice.value = '';
   try {
-    await apiRequest('/backups', { method: 'POST', body: JSON.stringify({ kind: 'full' }) });
-    notice.value = 'Full backup requested.';
+    await apiRequest('/backup-dr', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'full',
+        retentionClass: 'manual',
+        scope: backupScope.value,
+        ...(backupLabel.value.trim() ? { label: backupLabel.value.trim() } : {}),
+      }),
+    });
+    showBackupModal.value = false;
+    notice.value = 'Backup requested.';
     await load(true);
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'The operation failed.';
@@ -1086,8 +1339,11 @@ async function verifyBackup(row: Row) {
   error.value = '';
   notice.value = '';
   try {
-    await apiRequest(`/backups/${row.id}/verify`, { method: 'POST', body: '{}' });
-    notice.value = `Verification requested for ${row.name}.`;
+    const result = await apiRequest<RecordValue>(`/backup-dr/${row.id}/verify`);
+    notice.value = `Verification for ${row.name}: ${text(
+      result.status ?? result.detail ?? result.state,
+      'completed',
+    )}.`;
     await load(true);
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'The operation failed.';
@@ -1103,18 +1359,20 @@ async function confirmRestore() {
   if (!restoreRow.value || !restoreReason.value.trim()) return;
   const target = restoreRow.value;
   if (
-    !confirm(`Authorize restore from ${target.name}? This records an authorized restore request.`)
+    !confirm(
+      `Authorize restore from ${target.name}? The backup is restored into an isolated verify database, not the live system.`,
+    )
   )
     return;
   loading.value = true;
   error.value = '';
   notice.value = '';
   try {
-    await apiRequest(`/backups/${target.id}/restore`, {
+    await apiRequest(`/backup-dr/${target.id}/restore`, {
       method: 'POST',
-      body: JSON.stringify({ reason: restoreReason.value.trim() }),
+      body: JSON.stringify({ confirm: true, reason: restoreReason.value.trim() }),
     });
-    notice.value = 'Authorized restore request recorded.';
+    notice.value = 'Restore into the isolated verify database was requested.';
     restoreRow.value = null;
     restoreReason.value = '';
     await load(true);
@@ -1123,6 +1381,100 @@ async function confirmRestore() {
   } finally {
     loading.value = false;
   }
+}
+
+async function downloadSamplePlugin() {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const manifest = await apiRequest<RecordValue>('/plugins/sample-manifest');
+    saveDownloadedFile(
+      new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
+      'plugin.json',
+    );
+    notice.value = 'Sample plugin manifest downloaded as plugin.json.';
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The sample could not be downloaded.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadRouteSmscOptions() {
+  routeSmscError.value = '';
+  try {
+    const page = normalize(await apiRequest<unknown>('/smscs?limit=500&offset=0'));
+    routeSmscOptions.value = page.items.map((row) => ({
+      value: row.id,
+      label: `${row.name} (${text(row.raw.engine_id ?? row.raw.engineId)})`,
+    }));
+    if (!routeSmscOptions.value.length)
+      routeSmscError.value = 'No SMSC connections are available to target.';
+  } catch (reason) {
+    routeSmscOptions.value = [];
+    routeSmscError.value =
+      reason instanceof Error ? reason.message : 'SMSC connections could not be loaded.';
+  }
+}
+
+async function loadBaseline() {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const baseline = await apiRequest<RecordValue>('/configurations/baseline');
+    configBaseline.value = baseline;
+    configPrefillContent.value = (baseline.content as RecordValue) ?? null;
+    draftName.value = text(baseline.scope, 'gateway') === '—' ? 'gateway' : String(baseline.scope);
+    showComposer.value = true;
+    notice.value = 'Baseline loaded into the create form. Review, then save it as a new version.';
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The baseline could not be loaded.';
+  } finally {
+    loading.value = false;
+  }
+}
+async function editConfiguration(row: Row) {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const record = await apiRequest<RecordValue>(`/configurations/${row.id}`);
+    configBaseline.value = {
+      scope: record.scope,
+      description: `Editing scope "${text(record.scope)}" — saving creates a new immutable version.`,
+      notes: ['Configurations are immutable; saving creates a new version.'],
+    };
+    configPrefillContent.value = (record.content as RecordValue) ?? null;
+    draftName.value = text(record.scope, '') === '—' ? '' : String(record.scope ?? '');
+    showComposer.value = true;
+    notice.value = 'Loaded this version into the form. Modify and save to create a new version.';
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The configuration could not load.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function openSnapshot(row: Row) {
+  if (key.value !== 'reports') return;
+  snapshotOpen.value = true;
+  snapshotLoading.value = true;
+  snapshotError.value = '';
+  snapshotDetail.value = null;
+  try {
+    snapshotDetail.value = await apiRequest<RecordValue>(`/reports/volume/${row.id}`);
+  } catch (reason) {
+    snapshotError.value =
+      reason instanceof Error ? reason.message : 'The snapshot could not be loaded.';
+  } finally {
+    snapshotLoading.value = false;
+  }
+}
+function closeSnapshot() {
+  snapshotOpen.value = false;
+  snapshotDetail.value = null;
 }
 
 function openApiClientForm() {
@@ -1376,7 +1728,11 @@ async function primaryAction() {
     return;
   }
   if (key.value === 'backup') {
-    await createBackup();
+    openBackupModal();
+    return;
+  }
+  if (key.value === 'customers') {
+    await openCreateCustomer();
     return;
   }
   if (!value.actionEndpoint) {
@@ -1385,6 +1741,7 @@ async function primaryAction() {
   }
   if (value.creatable) {
     showComposer.value = true;
+    if (key.value === 'routing') void loadRouteSmscOptions();
     return;
   }
 
@@ -1435,7 +1792,13 @@ async function createRecord() {
       };
     }
 
-    if (value.createKind === 'configuration') {
+    if (value.createKind === 'configuration' && configPrefillContent.value) {
+      payload = {
+        scope: name,
+        reason: 'Saved from a baseline/edit prefill in the JKANNEL console',
+        content: configPrefillContent.value,
+      };
+    } else if (value.createKind === 'configuration') {
       const model = {
         adminPort: configAdminPort.value,
         smsboxPort: configSmsboxPort.value,
@@ -1477,6 +1840,8 @@ async function createRecord() {
     routeDestinationPrefix.value = '';
     routeSender.value = '';
     routeFallback.value = '';
+    configBaseline.value = null;
+    configPrefillContent.value = null;
     notice.value = `${value.noun} created.`;
     await load(true);
   } catch (reason) {
@@ -1630,9 +1995,20 @@ watch(
     showSendForm.value = false;
     showCreateUser.value = false;
     showApiClientForm.value = false;
+    showCreateCustomer.value = false;
+    showBackupModal.value = false;
     detailOpen.value = false;
     detail.value = null;
     editing.value = false;
+    messageOpen.value = false;
+    messageRow.value = null;
+    messageTrace.value = null;
+    snapshotOpen.value = false;
+    snapshotDetail.value = null;
+    configBaseline.value = null;
+    configPrefillContent.value = null;
+    routeSmscOptions.value = [];
+    routeSmscError.value = '';
     revealedSecret.value = '';
     restoreRow.value = null;
     restoreReason.value = '';
@@ -1715,6 +2091,24 @@ onUnmounted(() => {
       >
         Send message
       </button>
+      <button
+        v-if="key === 'configuration'"
+        class="secondary-button"
+        data-testid="load-baseline"
+        :disabled="loading"
+        @click="loadBaseline"
+      >
+        Load baseline
+      </button>
+      <button
+        v-if="key === 'plugins'"
+        class="secondary-button"
+        data-testid="download-sample-plugin"
+        :disabled="loading"
+        @click="downloadSamplePlugin"
+      >
+        Download sample plugin
+      </button>
       <template v-if="grid?.exportBase">
         <button
           class="secondary-button"
@@ -1765,7 +2159,7 @@ onUnmounted(() => {
           class="secondary-button"
           data-testid="export-backup-csv"
           :disabled="loading"
-          @click="exportSimple('/backups/export', 'csv')"
+          @click="exportSimple('/backup-dr/export', 'csv')"
         >
           Export CSV
         </button>
@@ -1773,7 +2167,7 @@ onUnmounted(() => {
           class="secondary-button"
           data-testid="export-backup-pdf"
           :disabled="loading"
-          @click="exportSimple('/backups/export', 'pdf')"
+          @click="exportSimple('/backup-dr/export', 'pdf')"
         >
           Export PDF
         </button>
@@ -1912,15 +2306,111 @@ onUnmounted(() => {
     <section v-if="key === 'backup' && !error" class="panel help-box" data-testid="backup-help">
       <h2>Backup &amp; restore</h2>
       <p>
-        The disaster-recovery job produces binary backup artifacts. Restore requests are authorized
-        and audited rather than executed inline.
+        The disaster-recovery job produces binary backup artifacts.
+        <strong>Create backup</strong> opens a dialog where you name the backup and pick its
+        <strong>scope</strong>.
       </p>
       <ul>
-        <li>Recovery time objective (RTO): under 1 hour.</li>
-        <li>Recovery point objective (RPO): under 15 minutes.</li>
-        <li><strong>Verify</strong> validates a backup's checksum before you rely on it.</li>
+        <li><strong>Database</strong> — the PostgreSQL data store (messages, config, audit).</li>
+        <li><strong>Configurations</strong> — rendered engine configuration versions.</li>
+        <li>Application code is not backed up here: it lives in version control.</li>
+        <li>Recovery time objective (RTO): under 1 hour; RPO: under 15 minutes.</li>
+        <li><strong>Verify</strong> checks a backup's checksum before you rely on it.</li>
         <li>
-          <strong>Restore</strong> records an authorized request with a reason for the runbook.
+          <strong>Restore</strong> requires a reason and restores into an isolated verify database —
+          never the live system inline.
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="key === 'customers' && !error"
+      class="panel help-box"
+      data-testid="customers-help"
+    >
+      <h2>What is a customer?</h2>
+      <p>
+        A customer is an organization or account that consumes messaging on the platform. Each
+        customer owns the routes, sender IDs, and quotas that govern its traffic.
+      </p>
+      <ul>
+        <li><strong>Code</strong> — a short unique identifier used in routing and billing.</li>
+        <li><strong>Daily quota</strong> — the maximum messages the customer may send per day.</li>
+        <li><strong>Rate limit / min</strong> — the per-minute submission ceiling.</li>
+        <li>
+          <strong>Allowed sender IDs</strong> — the sender strings this customer is permitted to
+          use.
+        </li>
+        <li><strong>Status</strong> — active, suspended, or archived.</li>
+      </ul>
+    </section>
+
+    <section
+      v-if="key === 'api-gateway' && !error"
+      class="panel help-box"
+      data-testid="api-gateway-docs"
+    >
+      <h2>Using the JKANNEL API</h2>
+      <p>
+        API clients let external systems call the platform programmatically. Create a client, then
+        authenticate every request with its key.
+      </p>
+      <ul>
+        <li>
+          <strong>Create a client</strong> with the button above and grant only the scopes it needs.
+        </li>
+        <li>
+          The <strong>client secret is shown exactly once</strong> at creation (and on rotate). Copy
+          it immediately — it cannot be retrieved again.
+        </li>
+        <li>
+          <strong>Authenticate</strong> by sending the key as a bearer token:
+          <code>Authorization: Bearer &lt;client-key&gt;</code> against <code>{{ apiBaseUrl }}</code
+          >.
+        </li>
+        <li>
+          <strong>Scopes</strong> (for example <code>messages.send</code>,
+          <code>reports.read</code>) restrict what each client may do.
+        </li>
+        <li>
+          <strong>Rate limits</strong> are enforced per client per minute; exceeding them returns
+          <code>429</code>.
+        </li>
+        <li>
+          The full machine-readable reference is at
+          <code>{{ openApiUrl }}</code> (OpenAPI 3).
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="key === 'plugins' && !error"
+      class="panel help-box"
+      data-testid="plugins-developer"
+    >
+      <h2>Plugin developer portal</h2>
+      <p>
+        Use <strong>Download sample plugin</strong> above to get a working
+        <code>plugin.json</code> manifest to start from. A plugin is a signed bundle with a manifest
+        and a small handler.
+      </p>
+      <ul>
+        <li>
+          <strong>Manifest fields</strong>: <code>pluginId</code>, <code>name</code>,
+          <code>version</code> (semver), <code>publisher</code>, <code>permissions</code> (what it
+          may read), and <code>events</code> (what it subscribes to).
+        </li>
+        <li>
+          <strong>Lifecycle</strong>: install → validate → enable → disable → uninstall. Enabling
+          starts event delivery; disabling pauses it without removing the plugin.
+        </li>
+        <li>
+          <strong>Permission &amp; event model</strong>: plugins run out-of-process with
+          least-privilege and only receive the events they declare — nothing else.
+        </li>
+        <li>
+          <strong>Build &amp; package</strong>: implement the handler, fill in the manifest, then
+          zip the bundle and sign it before uploading for validation.
         </li>
       </ul>
     </section>
@@ -1943,15 +2433,22 @@ onUnmounted(() => {
       <p v-if="newPassword && newPassword.length < 12" class="form-hint">
         Password must be at least 12 characters.
       </p>
-      <label>
-        Roles
-        <select v-model="newRoleIds" multiple class="multi-select" data-testid="new-roles">
-          <option v-for="role in roleOptions" :key="String(role.id)" :value="String(role.id)">
-            {{ text(role.name)
-            }}{{ role.user_count !== undefined ? ` (${role.user_count} users)` : '' }}
-          </option>
-        </select>
-      </label>
+      <fieldset class="role-checkboxes" data-testid="new-roles">
+        <legend>Roles</legend>
+        <label
+          v-for="role in roleOptions"
+          :key="String(role.id)"
+          class="role-option"
+          :data-testid="`new-role-${role.id}`"
+        >
+          <input v-model="newRoleIds" type="checkbox" :value="String(role.id)" />
+          <span class="role-text">
+            <strong>{{ text(role.name) }}</strong>
+            <small>{{ text(role.description) }}</small>
+          </span>
+        </label>
+        <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
+      </fieldset>
       <div>
         <button
           class="primary-button"
@@ -2005,7 +2502,8 @@ onUnmounted(() => {
     >
       <h2>Restore from {{ restoreRow.name }}</h2>
       <p class="form-hint">
-        Restores are recorded as authorized requests. Provide a reason for the audit trail.
+        The backup is restored into an isolated verify database, not the live system. Provide a
+        reason for the audit trail.
       </p>
       <label>
         Reason
@@ -2024,10 +2522,225 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <section
+      v-if="showBackupModal"
+      class="panel composer backup-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create backup"
+      data-testid="backup-modal"
+    >
+      <h2>Create backup</h2>
+      <label>
+        Backup name (label)
+        <input
+          v-model="backupLabel"
+          data-testid="backup-label"
+          placeholder="e.g. pre-upgrade snapshot"
+        />
+      </label>
+      <fieldset class="scope-fieldset">
+        <legend>Scope</legend>
+        <label class="checkbox-row">
+          <input
+            v-model="backupScope"
+            type="radio"
+            value="full"
+            name="backup-scope"
+            data-testid="backup-scope-full"
+          />
+          Full (database + configurations)
+        </label>
+        <label class="checkbox-row">
+          <input
+            v-model="backupScope"
+            type="radio"
+            value="database"
+            name="backup-scope"
+            data-testid="backup-scope-database"
+          />
+          Database only
+        </label>
+        <label class="checkbox-row">
+          <input
+            v-model="backupScope"
+            type="radio"
+            value="configurations"
+            name="backup-scope"
+            data-testid="backup-scope-configurations"
+          />
+          Configurations only
+        </label>
+      </fieldset>
+      <p class="form-hint">Application code is not included — it lives in version control.</p>
+      <div>
+        <button
+          class="primary-button"
+          data-testid="backup-submit"
+          :disabled="loading"
+          @click="submitBackup"
+        >
+          Create backup
+        </button>
+        <button class="secondary-button" @click="showBackupModal = false">Cancel</button>
+      </div>
+    </section>
+
+    <section
+      v-if="showCreateCustomer"
+      class="panel composer"
+      aria-label="Create customer"
+      data-testid="create-customer-form"
+    >
+      <h2>Create customer</h2>
+      <label>
+        Name
+        <input v-model="custName" data-testid="customer-name" />
+      </label>
+      <label>
+        Code
+        <input v-model="custCode" data-testid="customer-code" placeholder="Optional short code" />
+      </label>
+      <label>
+        Contact email
+        <input v-model="custEmail" type="email" data-testid="customer-email" />
+      </label>
+      <label>
+        Daily quota
+        <input v-model.number="custQuotaDaily" type="number" min="0" data-testid="customer-quota" />
+      </label>
+      <label>
+        Rate limit / min
+        <input v-model.number="custRateLimit" type="number" min="0" data-testid="customer-rate" />
+      </label>
+      <label>
+        Allowed sender IDs (comma-separated)
+        <input v-model="custSenderIds" data-testid="customer-senders" placeholder="JKANNEL, INFO" />
+      </label>
+      <label>
+        Notes
+        <input v-model="custNotes" data-testid="customer-notes" />
+      </label>
+      <label>
+        Status
+        <select v-model="custStatus" data-testid="customer-status">
+          <option value="active">active</option>
+          <option value="suspended">suspended</option>
+          <option value="archived">archived</option>
+        </select>
+      </label>
+      <div>
+        <button
+          class="primary-button"
+          data-testid="customer-submit"
+          :disabled="loading || !custName.trim()"
+          @click="createCustomer"
+        >
+          Create customer
+        </button>
+        <button class="secondary-button" @click="showCreateCustomer = false">Cancel</button>
+      </div>
+    </section>
+
+    <section
+      v-if="messageOpen"
+      class="panel detail-panel"
+      data-testid="message-trace-panel"
+      aria-label="Message trace"
+    >
+      <header>
+        <h2>Message trace</h2>
+        <button
+          class="secondary-button"
+          data-testid="message-trace-close"
+          @click="closeMessageTrace"
+        >
+          Close
+        </button>
+      </header>
+      <p v-if="messageLoading" class="form-hint" data-testid="message-trace-loading">Loading…</p>
+      <p v-else-if="messageError" class="form-error" role="alert">{{ messageError }}</p>
+      <template v-else>
+        <dl v-if="messageRow" class="detail-grid">
+          <dt>Message ID</dt>
+          <dd class="mono">{{ text(messageRow.id ?? messageRow.messageId) }}</dd>
+          <dt>Direction</dt>
+          <dd>{{ text(messageRow.direction) }}</dd>
+          <dt>Status</dt>
+          <dd>{{ text(messageRow.status ?? messageRow.state) }}</dd>
+          <dt>Sender</dt>
+          <dd>{{ text(messageRow.sender ?? messageRow.from) }}</dd>
+          <dt>Receiver</dt>
+          <dd>{{ text(messageRow.receiver ?? messageRow.recipient ?? messageRow.to) }}</dd>
+          <dt>SMSC</dt>
+          <dd>{{ text(messageRow.smsc ?? messageRow.smsc_id ?? messageRow.smscId) }}</dd>
+          <dt>Created</dt>
+          <dd>{{ text(messageRow.created_at ?? messageRow.createdAt ?? messageRow.timestamp) }}</dd>
+          <dt>Updated</dt>
+          <dd>{{ text(messageRow.updated_at ?? messageRow.updatedAt) }}</dd>
+        </dl>
+        <p v-if="messageTrace?.summary" class="form-hint" data-testid="message-trace-summary">
+          {{ prettyJson(messageTrace.summary) }}
+        </p>
+        <h3>Trace events</h3>
+        <ul class="sample-list" data-testid="message-trace-events">
+          <li v-for="(event, index) in messageTraceEvents" :key="index">
+            <span class="dot" :class="healthDotClass(event.status ?? event.state)"></span>
+            {{ text(event.type ?? event.event ?? event.status ?? event.state) }} —
+            {{ text(event.detail ?? event.description ?? event.message) }}
+            <small>{{
+              text(event.at ?? event.timestamp ?? event.created_at ?? event.observed_at)
+            }}</small>
+          </li>
+          <li v-if="!messageTraceEvents.length">No trace events recorded for this message.</li>
+        </ul>
+      </template>
+    </section>
+
+    <section
+      v-if="snapshotOpen"
+      class="panel detail-panel"
+      data-testid="snapshot-panel"
+      aria-label="Volume snapshot detail"
+    >
+      <header>
+        <h2>Volume snapshot detail</h2>
+        <button class="secondary-button" data-testid="snapshot-close" @click="closeSnapshot">
+          Close
+        </button>
+      </header>
+      <p v-if="snapshotLoading" class="form-hint" data-testid="snapshot-loading">Loading…</p>
+      <p v-else-if="snapshotError" class="form-error" role="alert">{{ snapshotError }}</p>
+      <template v-else-if="snapshotDetail">
+        <h3>Snapshot</h3>
+        <pre class="json-block" data-testid="snapshot-summary">{{
+          prettyJson(snapshotDetail.snapshot)
+        }}</pre>
+        <h3>Related breakdown</h3>
+        <ul class="sample-list" data-testid="snapshot-related">
+          <li v-for="(item, index) in snapshotRelated" :key="index">
+            {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
+            {{ text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0') }}
+            messages
+            <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
+          </li>
+          <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
+        </ul>
+      </template>
+    </section>
+
     <section v-if="detailOpen" class="panel detail-panel" data-testid="detail-panel">
       <header>
         <h2>
-          {{ key === 'users' ? 'User detail' : key === 'smsc' ? 'SMSC detail' : 'Audit event' }}
+          {{
+            key === 'users'
+              ? 'User detail'
+              : key === 'smsc'
+                ? 'SMSC detail'
+                : key === 'customers'
+                  ? 'Customer detail'
+                  : 'Audit event'
+          }}
         </h2>
         <button class="secondary-button" data-testid="detail-close" @click="closeDetail">
           Close
@@ -2088,19 +2801,22 @@ onUnmounted(() => {
                 <option value="archived">archived</option>
               </select>
             </label>
-            <label>
-              Roles
-              <select
-                v-model="editUserRoleIds"
-                multiple
-                class="multi-select"
-                data-testid="user-roles"
+            <fieldset class="role-checkboxes" data-testid="user-roles">
+              <legend>Roles</legend>
+              <label
+                v-for="role in roleOptions"
+                :key="String(role.id)"
+                class="role-option"
+                :data-testid="`user-role-${role.id}`"
               >
-                <option v-for="role in roleOptions" :key="String(role.id)" :value="String(role.id)">
-                  {{ text(role.name) }}
-                </option>
-              </select>
-            </label>
+                <input v-model="editUserRoleIds" type="checkbox" :value="String(role.id)" />
+                <span class="role-text">
+                  <strong>{{ text(role.name) }}</strong>
+                  <small>{{ text(role.description) }}</small>
+                </span>
+              </label>
+              <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
+            </fieldset>
             <label>
               Reset password (optional, min 12)
               <input v-model="editUserPassword" type="password" data-testid="user-reset-password" />
@@ -2158,6 +2874,13 @@ onUnmounted(() => {
             <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
               Edit
             </button>
+            <button
+              class="secondary-button danger-button"
+              data-testid="smsc-archive"
+              @click="archiveSmsc"
+            >
+              Delete / Archive
+            </button>
           </div>
           <div v-if="canManageSystem && editing" class="composer" data-testid="smsc-edit-form">
             <label>
@@ -2186,6 +2909,96 @@ onUnmounted(() => {
                 data-testid="smsc-save"
                 :disabled="loading"
                 @click="saveSmsc"
+              >
+                Save changes
+              </button>
+              <button class="secondary-button" @click="editing = false">Cancel</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else-if="key === 'customers'">
+          <dl class="detail-grid">
+            <dt>Name</dt>
+            <dd>{{ text(detail.name) }}</dd>
+            <dt>Code</dt>
+            <dd>{{ text(detail.code) }}</dd>
+            <dt>Status</dt>
+            <dd data-testid="customer-detail-status">{{ text(detail.status) }}</dd>
+            <dt>Contact</dt>
+            <dd>{{ text(detail.contact_email ?? detail.contactEmail) }}</dd>
+            <dt>Daily quota</dt>
+            <dd>{{ text(detail.quota_daily ?? detail.quotaDaily) }}</dd>
+            <dt>Rate limit / min</dt>
+            <dd>{{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin) }}</dd>
+            <dt>Sender IDs</dt>
+            <dd>{{ list(detail.allowed_sender_ids ?? detail.allowedSenderIds) }}</dd>
+            <dt>Notes</dt>
+            <dd>{{ text(detail.notes) }}</dd>
+            <dt>Created</dt>
+            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+          </dl>
+          <div v-if="canManageSystem && !editing" class="detail-actions">
+            <button class="secondary-button" data-testid="customer-edit" @click="editing = true">
+              Edit
+            </button>
+            <button
+              class="secondary-button danger-button"
+              data-testid="customer-archive"
+              @click="archiveCustomer"
+            >
+              Archive
+            </button>
+          </div>
+          <div v-if="canManageSystem && editing" class="composer" data-testid="customer-edit-form">
+            <label>
+              Name
+              <input v-model="editCustName" data-testid="customer-edit-name" />
+            </label>
+            <label>
+              Contact email
+              <input v-model="editCustEmail" type="email" data-testid="customer-edit-email" />
+            </label>
+            <label>
+              Daily quota
+              <input
+                v-model.number="editCustQuotaDaily"
+                type="number"
+                min="0"
+                data-testid="customer-edit-quota"
+              />
+            </label>
+            <label>
+              Rate limit / min
+              <input
+                v-model.number="editCustRateLimit"
+                type="number"
+                min="0"
+                data-testid="customer-edit-rate"
+              />
+            </label>
+            <label>
+              Allowed sender IDs (comma-separated)
+              <input v-model="editCustSenderIds" data-testid="customer-edit-senders" />
+            </label>
+            <label>
+              Notes
+              <input v-model="editCustNotes" data-testid="customer-edit-notes" />
+            </label>
+            <label>
+              Status
+              <select v-model="editCustStatus" data-testid="customer-edit-status">
+                <option value="active">active</option>
+                <option value="suspended">suspended</option>
+                <option value="archived">archived</option>
+              </select>
+            </label>
+            <div>
+              <button
+                class="primary-button"
+                data-testid="customer-save"
+                :disabled="loading"
+                @click="saveCustomer"
               >
                 Save changes
               </button>
@@ -2284,10 +3097,18 @@ onUnmounted(() => {
       </label>
 
       <label v-if="workspace.createKind === 'route'">
-        Target SMSC ID
-        <input v-model="draftTarget" data-testid="draft-target" placeholder="UUID" />
+        Target SMSC
+        <select v-model="draftTarget" data-testid="draft-target">
+          <option value="" disabled>Select a target SMSC</option>
+          <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
       </label>
       <template v-if="workspace.createKind === 'route'">
+        <p v-if="routeSmscError" class="form-hint" role="alert" data-testid="route-smsc-error">
+          {{ routeSmscError }}
+        </p>
         <label>
           Destination prefix
           <input v-model="routeDestinationPrefix" placeholder="+256" />
@@ -2297,8 +3118,13 @@ onUnmounted(() => {
           <input v-model="routeSender" placeholder="Optional sender match" />
         </label>
         <label>
-          Fallback SMSC ID
-          <input v-model="routeFallback" placeholder="Optional UUID" />
+          Fallback SMSC
+          <select v-model="routeFallback" data-testid="draft-fallback">
+            <option value="">None</option>
+            <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
         </label>
         <p class="form-hint">
           Routes are validated and dry-run before deployment; duplicate priorities within a scope
@@ -2334,22 +3160,35 @@ onUnmounted(() => {
       </template>
 
       <template v-if="workspace.createKind === 'configuration'">
-        <label>
-          Admin port
-          <input v-model.number="configAdminPort" type="number" min="1" max="65535" />
-        </label>
-        <label>
-          Bearerbox/SMSBox port
-          <input v-model.number="configSmsboxPort" type="number" min="1" max="65535" />
-        </label>
-        <label class="checkbox-row">
-          <input v-model="configSqlbox" type="checkbox" />
-          Enable PostgreSQL SQLBox integration
-        </label>
-        <p class="form-hint">
-          JKANNEL validates and renders deterministic Kamex configuration with environment-only
-          secrets.
-        </p>
+        <div v-if="configBaseline" class="baseline-info" data-testid="configuration-baseline-info">
+          <p class="form-hint">{{ text(configBaseline.description) }}</p>
+          <ul v-if="Array.isArray(configBaseline.notes) && configBaseline.notes.length">
+            <li v-for="(note, index) in configBaseline.notes as unknown[]" :key="index">
+              {{ String(note) }}
+            </li>
+          </ul>
+          <pre class="json-block" data-testid="configuration-baseline-content">{{
+            prettyJson(configPrefillContent)
+          }}</pre>
+        </div>
+        <template v-if="!configPrefillContent">
+          <label>
+            Admin port
+            <input v-model.number="configAdminPort" type="number" min="1" max="65535" />
+          </label>
+          <label>
+            Bearerbox/SMSBox port
+            <input v-model.number="configSmsboxPort" type="number" min="1" max="65535" />
+          </label>
+          <label class="checkbox-row">
+            <input v-model="configSqlbox" type="checkbox" />
+            Enable PostgreSQL SQLBox integration
+          </label>
+          <p class="form-hint">
+            JKANNEL validates and renders deterministic Kamex configuration with environment-only
+            secrets.
+          </p>
+        </template>
       </template>
 
       <div>
@@ -2523,8 +3362,8 @@ onUnmounted(() => {
               v-for="row in visibleRows"
               :key="row.id"
               :data-testid="`record-${row.id}`"
-              :class="{ 'clickable-row': detailModule }"
-              @click="detailModule && openDetail(row)"
+              :class="{ 'clickable-row': clickableRow }"
+              @click="onRowClick(row)"
             >
               <template v-if="columns">
                 <td v-for="column in columns" :key="column.header" :class="{ mono: column.mono }">
@@ -2575,6 +3414,13 @@ onUnmounted(() => {
                 </button>
               </td>
               <td v-else-if="key === 'configuration'" class="row-actions">
+                <button
+                  class="secondary-button"
+                  :data-testid="`config-edit-${row.id}`"
+                  @click="editConfiguration(row)"
+                >
+                  Edit
+                </button>
                 <button class="secondary-button" @click="rowAction(row, 'validate')">
                   Validate
                 </button>

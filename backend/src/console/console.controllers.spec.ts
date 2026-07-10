@@ -5,8 +5,10 @@ import {
   SmscController,
   UsersController,
 } from './console.controllers';
+import { VolumeReportsController } from './notifications.controllers';
 
 const request: any = { principal: { tenantId: '7', userId: 'user-1' } };
+const validUuid = '11111111-1111-4111-8111-111111111111';
 describe('console domain controllers', () => {
   const repository: any = {
     createSmsc: jest.fn(),
@@ -19,6 +21,41 @@ describe('console domain controllers', () => {
       new SmscController(repository).create(request, { name: 'carrier', type: 'smpp', tps: 0 }),
     ).toThrow(BadRequestException);
     expect(repository.createSmsc).not.toHaveBeenCalled();
+  });
+  it('archives an SMSC via DELETE', async () => {
+    const repo: any = {
+      archiveSmsc: jest.fn().mockResolvedValue({ id: validUuid, lifecycle_state: 'archived' }),
+    };
+    await expect(new SmscController(repo).archive(request, validUuid)).resolves.toMatchObject({
+      lifecycle_state: 'archived',
+    });
+    expect(repo.archiveSmsc).toHaveBeenCalledWith({ tenantId: '7', userId: 'user-1' }, validUuid);
+  });
+  it('rejects a non-uuid SMSC id on DELETE', () => {
+    expect(() => new SmscController({} as any).archive(request, 'nope')).toThrow(
+      BadRequestException,
+    );
+  });
+  it('returns a valid, generator-ready configuration baseline', () => {
+    const baseline = new ConfigurationsController({} as any).baseline();
+    expect(baseline.scope).toBe('gateway');
+    expect(baseline.content.smsc[0].id).toBe('example-smsc');
+    expect(baseline.content.adminSecretRef.startsWith('secret://')).toBe(true);
+    expect(Array.isArray(baseline.notes)).toBe(true);
+  });
+  it('returns a report snapshot with its period breakdown', async () => {
+    const repo: any = {
+      getReportSnapshotDetail: jest
+        .fn()
+        .mockResolvedValue({ snapshot: { id: validUuid }, related: [{ id: 'other' }] }),
+    };
+    await expect(
+      new VolumeReportsController(repo).detail(request, validUuid),
+    ).resolves.toMatchObject({ snapshot: { id: validUuid }, related: [{ id: 'other' }] });
+    expect(repo.getReportSnapshotDetail).toHaveBeenCalledWith(
+      { tenantId: '7', userId: 'user-1' },
+      validUuid,
+    );
   });
   it('rejects malformed invitations', () => {
     expect(() =>

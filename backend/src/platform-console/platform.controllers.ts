@@ -36,6 +36,41 @@ const uuid = (value: unknown, name: string) => {
   return v;
 };
 
+/**
+ * A complete, least-privilege sample plugin manifest. Mirrors
+ * docs/specifications/sdk/PLUGIN_DEVELOPMENT_SDK.md §4 and the shipped example at
+ * plugins/examples/safe-monitor/plugin.json. Served as a downloadable starting
+ * point; checksum/signature are placeholders the author replaces at build time.
+ */
+export const SAMPLE_PLUGIN_MANIFEST = {
+  schemaVersion: '1.0',
+  id: 'com.example.health-observer',
+  uuid: '00000000-0000-4000-8000-000000000000',
+  name: 'Health Observer (sample)',
+  vendor: 'Example Vendor',
+  version: '1.0.0',
+  description: 'A least-privilege sample plugin that observes engine health.',
+  category: 'monitoring',
+  sdkVersion: '^1.0.0',
+  jkannelVersion: { min: '1.0.0', max: '<2.0.0' },
+  entrypoint: 'dist/index.js',
+  apiVersion: 'v1',
+  dependencies: { plugins: {}, services: ['metrics.v1'] },
+  permissions: ['monitoring.read'],
+  events: {
+    subscribes: ['engine.health.changed.v1'],
+    publishes: ['plugin.health.observed.v1'],
+  },
+  capabilities: ['monitor.health.summary'],
+  migrations: [],
+  configurationSchema: 'config/schema.json',
+  license: 'Apache-2.0',
+  checksum: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+  signature: 'REPLACE_WITH_BASE64_ED25519_SIGNATURE',
+  supportUrl: 'https://example.com/support',
+  documentationUrl: 'https://example.com/plugins/health-observer',
+} as const;
+
 async function streamExport(
   exporter: ExportService,
   response: any,
@@ -140,6 +175,12 @@ export class PluginsController {
   @Get() @RequirePermissions('system.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listPlugins(actor(r), q);
   }
+  // Declared before ':id' so the literal path matches first. Returns a complete,
+  // downloadable sample plugin.json the frontend offers as a starting point;
+  // mirrors PLUGIN_DEVELOPMENT_SDK §4 and plugins/examples/safe-monitor.
+  @Get('sample-manifest') @RequirePermissions('system.view') sampleManifest() {
+    return SAMPLE_PLUGIN_MANIFEST;
+  }
   @Get(':id') @RequirePermissions('system.view') get(@Req() r: Request, @Param('id') id: string) {
     return this.repository.getPlugin(actor(r), uuid(id, 'id'));
   }
@@ -231,26 +272,5 @@ export class RuntimeContainersController {
   constructor(private readonly runtime: RuntimeContainersService) {}
   @Get('containers') @RequirePermissions('system.view') list() {
     return this.runtime.list();
-  }
-}
-
-@Controller('customers')
-@UseGuards(AuthGuard, PermissionsGuard)
-export class CustomersController {
-  // Customers are a documented Future domain (PRODUCT_SCOPE). The endpoint
-  // exists so the module renders an honest empty state instead of an error.
-  @Get() @RequirePermissions('system.view') list() {
-    return {
-      items: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-      source: {
-        status: 'unavailable',
-        code: 'CUSTOMERS_FUTURE',
-        message:
-          'Customer accounts are a planned future domain. SMSC, routing and reporting operate today without a customer directory.',
-      },
-    };
   }
 }

@@ -1,0 +1,216 @@
+- generic [ref=f8e2]:
+  - link "Skip to workspace" [ref=f8e3] [cursor=pointer]:
+    - /url: "#workspace"
+  - generic [ref=f8e4]:
+    - complementary "Primary navigation" [ref=f8e5]:
+      - generic [ref=f8e6]:
+        - img [ref=f8e8]
+        - generic [ref=f8e10]:
+          - strong [ref=f8e11]: JKANNEL
+          - generic [ref=f8e12]: Kamex control plane
+      - navigation [ref=f8e13]:
+        - generic [ref=f8e14]:
+          - paragraph [ref=f8e15]: Operations
+          - link "Operations" [ref=f8e111] [cursor=pointer]:
+            - /url: /dashboard/operations
+            - img [ref=f8e113]
+            - generic [ref=f8e116]: Operations
+          - link "Monitoring" [ref=f8e117] [cursor=pointer]:
+            - /url: /monitoring
+            - img [ref=f8e119]
+            - generic [ref=f8e122]: Monitoring
+          - link "Alerts" [ref=f8e123] [cursor=pointer]:
+            - /url: /alerts
+            - img [ref=f8e125]
+            - generic [ref=f8e128]: Alerts
+          - link "Notifications" [ref=f8e16] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=f8e18]
+            - generic [ref=f8e21]: Notifications
+        - generic [ref=f8e129]:
+          - paragraph [ref=f8e130]: Messaging
+          - link "Messages" [ref=f8e131] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=f8e133]
+            - generic [ref=f8e135]: Messages
+          - link "Queues" [ref=f8e136] [cursor=pointer]:
+            - /url: /queues
+            - img [ref=f8e138]
+            - generic [ref=f8e141]: Queues
+          - link "Delivery Reports" [ref=f8e142] [cursor=pointer]:
+            - /url: /delivery-reports
+            - img [ref=f8e144]
+            - generic [ref=f8e147]: Delivery Reports
+          - link "SMSC Connections" [ref=f8e148] [cursor=pointer]:
+            - /url: /smsc
+            - img [ref=f8e150]
+            - generic [ref=f8e154]: SMSC Connections
+          - link "Routing" [ref=f8e155] [cursor=pointer]:
+            - /url: /routing
+            - img [ref=f8e157]
+            - generic [ref=f8e161]: Routing
+          - link "Configuration" [ref=f8e162] [cursor=pointer]:
+            - /url: /configuration
+            - img [ref=f8e164]
+            - generic [ref=f8e167]: Configuration
+        - generic [ref=f8e168]:
+          - paragraph [ref=f8e169]: Insights
+          - link "Analytics & Reports" [ref=f8e170] [cursor=pointer]:
+            - /url: /reports
+            - img [ref=f8e172]
+            - generic [ref=f8e175]: Analytics & Reports
+          - link "Customers" [ref=f8e176] [cursor=pointer]:
+            - /url: /customers
+            - img [ref=f8e178]
+            - generic [ref=f8e181]: Customers
+          - link "AI Copilot" [ref=f8e182] [cursor=pointer]:
+            - /url: /copilot
+            - img [ref=f8e184]
+            - generic [ref=f8e187]: AI Copilot
+        - generic [ref=f8e188]:
+          - paragraph [ref=f8e189]: Platform
+          - link "API Gateway" [ref=f8e190] [cursor=pointer]:
+            - /url: /api-gateway
+            - img [ref=f8e192]
+            - generic [ref=f8e194]: API Gateway
+          - link "Runtime Containers" [ref=f8e195] [cursor=pointer]:
+            - /url: /docker
+            - img [ref=f8e197]
+            - generic [ref=f8e200]: Runtime Containers
+          - link "Logs & Audit" [ref=f8e201] [cursor=pointer]:
+            - /url: /logs-audit
+            - img [ref=f8e203]
+            - generic [ref=f8e206]: Logs & Audit
+          - link "Plugins" [ref=f8e207] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=f8e209]
+            - generic [ref=f8e211]: Plugins
+          - link "Backup & Restore" [ref=f8e212] [cursor=pointer]:
+            - /url: /backup
+            - img [ref=f8e214]
+            - generic [ref=f8e217]: Backup & Restore
+          - link "Users & Roles" [ref=f8e218] [cursor=pointer]:
+            - /url: /users
+            - img [ref=f8e220]
+            - generic [ref=f8e222]: Users & Roles
+          - link "Sessions" [ref=f8e223] [cursor=pointer]:
+            - /url: /sessions
+            - img [ref=f8e225]
+            - generic [ref=f8e228]: Sessions
+          - link "System Settings" [ref=f8e229] [cursor=pointer]:
+            - /url: /system
+            - img [ref=f8e231]
+            - generic [ref=f8e234]: System Settings
+      - generic [ref=f8e24]:
+        - strong [ref=f8e25]: Kamex 1.8.3
+        - generic [ref=f8e26]: Messaging engine connected
+    - generic [ref=f8e27]:
+      - banner [ref=f8e28]:
+        - button "Search JKANNEL Ctrl K" [ref=f8e29]:
+          - img [ref=f8e30]
+          - generic [ref=f8e33]: Search JKANNEL
+          - generic [ref=f8e34]: Ctrl K
+        - generic [ref=f8e35]:
+          - button "Toggle theme" [ref=f8e36] [cursor=pointer]:
+            - img [ref=f8e37]
+          - button "Open notifications" [ref=f8e39] [cursor=pointer]:
+            - img [ref=f8e40]
+            - generic [ref=f8e235]: "1"
+          - generic [ref=f8e43]:
+            - generic [ref=f8e44]: o
+            - generic [ref=f8e45]:
+              - strong [ref=f8e46]: operator
+              - generic [ref=f8e47]: administrator
+            - button "Sign out" [ref=f8e48] [cursor=pointer]:
+              - img [ref=f8e49]
+      - main [active] [ref=f8e51]:
+        - navigation "Breadcrumb" [ref=f8e52]:
+          - link "Home" [ref=f8e53] [cursor=pointer]:
+            - /url: /dashboard/operations
+          - generic [ref=f8e60]: /
+          - generic [ref=f8e61]: Customers
+        - generic [ref=f8e62]:
+          - heading "Customers" [level=1] [ref=f8e63]
+          - paragraph [ref=f8e64]: Manage customer accounts, status, limits, and traffic.
+        - generic [ref=f8e65]:
+          - generic [ref=f8e66]:
+            - generic [ref=f8e67]:
+              - generic [ref=f8e68]: Search customer records
+              - textbox "Search customer records" [ref=f8e69]:
+                - /placeholder: Customer, account, status, or limit
+            - generic [ref=f8e70]:
+              - generic [ref=f8e71]: Status
+              - combobox "Status" [ref=f8e72]:
+                - option "All" [selected]
+                - option "active"
+            - button "Add customer" [ref=f8e73] [cursor=pointer]
+          - generic [ref=f8e74]:
+            - heading "What is a customer?" [level=2] [ref=f8e75]
+            - paragraph [ref=f8e76]: A customer is an organization or account that consumes messaging on the platform. Each customer owns the routes, sender IDs, and quotas that govern its traffic.
+            - list [ref=f8e77]:
+              - listitem [ref=f8e78]:
+                - strong [ref=f8e79]: Code
+                - text: — a short unique identifier used in routing and billing.
+              - listitem [ref=f8e80]:
+                - strong [ref=f8e81]: Daily quota
+                - text: — the maximum messages the customer may send per day.
+              - listitem [ref=f8e82]:
+                - strong [ref=f8e83]: Rate limit / min
+                - text: — the per-minute submission ceiling.
+              - listitem [ref=f8e84]:
+                - strong [ref=f8e85]: Allowed sender IDs
+                - text: — the sender strings this customer is permitted to use.
+              - listitem [ref=f8e86]:
+                - strong [ref=f8e87]: Status
+                - text: — active, suspended, or archived.
+          - generic [ref=f8e236]:
+            - generic [ref=f8e237]:
+              - heading "Customer detail" [level=2] [ref=f8e238]
+              - button "Close" [ref=f8e239] [cursor=pointer]
+            - generic [ref=f8e240]:
+              - term [ref=f8e241]: Name
+              - definition [ref=f8e242]: Acme Aggregator
+              - term [ref=f8e243]: Code
+              - definition [ref=f8e244]: ACME
+              - term [ref=f8e245]: Status
+              - definition [ref=f8e246]: active
+              - term [ref=f8e247]: Contact
+              - definition [ref=f8e248]: ops@acme.test
+              - term [ref=f8e249]: Daily quota
+              - definition [ref=f8e250]: "100000"
+              - term [ref=f8e251]: Rate limit / min
+              - definition [ref=f8e252]: "600"
+              - term [ref=f8e253]: Sender IDs
+              - definition [ref=f8e254]: ACME, INFO
+              - term [ref=f8e255]: Notes
+              - definition [ref=f8e256]: —
+              - term [ref=f8e257]: Created
+              - definition [ref=f8e258]: 2026-07-10T16:32:25.213Z
+            - generic [ref=f8e259]:
+              - button "Edit" [ref=f8e260] [cursor=pointer]
+              - button "Archive" [ref=f8e261] [cursor=pointer]
+          - generic [ref=f8e88]:
+            - generic [ref=f8e90]:
+              - heading "Customers" [level=2] [ref=f8e91]
+              - paragraph [ref=f8e92]: 1 records shown
+            - table [ref=f8e94]:
+              - rowgroup [ref=f8e95]:
+                - row "Customer Code Contact Daily quota Rate/min Status" [ref=f8e96]:
+                  - columnheader "Customer" [ref=f8e97]
+                  - columnheader "Code" [ref=f8e98]
+                  - columnheader "Contact" [ref=f8e99]
+                  - columnheader "Daily quota" [ref=f8e100]
+                  - columnheader "Rate/min" [ref=f8e101]
+                  - columnheader "Status" [ref=f8e102]
+              - rowgroup [ref=f8e103]:
+                - row "Acme Aggregator ACME ops@acme.test 100000 600 active" [ref=f8e104] [cursor=pointer]:
+                  - cell "Acme Aggregator" [ref=f8e105]
+                  - cell "ACME" [ref=f8e106]
+                  - cell "ops@acme.test" [ref=f8e107]
+                  - cell "100000" [ref=f8e108]
+                  - cell "600" [ref=f8e109]
+                  - cell "active" [ref=f8e110]
+      - contentinfo [ref=f8e55]:
+        - button "API connected - retry" [ref=f8e262] [cursor=pointer]: API connected - retry
+        - generic [ref=f8e58]: Kamex 1.8.3
+        - generic [ref=f8e59]: JKANNEL 0.1.0
