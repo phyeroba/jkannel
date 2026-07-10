@@ -523,6 +523,26 @@ const messageError = ref('');
 const messageRow = ref<RecordValue | null>(null);
 const messageTrace = ref<RecordValue | null>(null);
 
+/* Message operations (replay / clone / requeue) on the traced message. */
+const traceId = ref('');
+const opBusy = ref(false);
+const opResult = ref<RecordValue | null>(null);
+const opError = ref('');
+const showCloneForm = ref(false);
+const cloneReceiver = ref('');
+const cloneSender = ref('');
+const cloneText = ref('');
+
+/* Configuration templates + drift (configuration workspace). */
+const configTemplates = ref<RecordValue[]>([]);
+const configTemplatesError = ref('');
+const templateView = ref<RecordValue | null>(null);
+const templateViewLoading = ref(false);
+const instantiateResult = ref<RecordValue | null>(null);
+const driftResult = ref<RecordValue | null>(null);
+const driftError = ref('');
+const driftLoading = ref(false);
+
 /* Route target/fallback SMSC dropdown options (value = SMSC id). */
 const routeSmscOptions = ref<Array<{ value: string; label: string }>>([]);
 const routeSmscError = ref('');
@@ -598,6 +618,7 @@ const rangeLabel = computed(() => {
 const canGenerateReports = computed(() => canAccess(session.value, 'system.manage'));
 const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
 const canManageSystem = computed(() => canAccess(session.value, 'system.manage'));
+const canManageConfig = computed(() => canAccess(session.value, 'configuration.manage'));
 
 const isQueue = computed(() => key.value === 'queues');
 const isDlr = computed(() => key.value === 'delivery-reports');
@@ -730,6 +751,7 @@ async function load(preserveNotice = false) {
     loading.value = false;
   }
   if (key.value === 'reports') void loadDeliverySummary();
+  if (key.value === 'configuration') void loadConfigDepth();
 }
 
 async function loadCursorPage() {
@@ -1030,6 +1052,10 @@ async function openMessageTrace(row: Row) {
   messageError.value = '';
   messageRow.value = row.raw;
   messageTrace.value = null;
+  traceId.value = row.id;
+  opResult.value = null;
+  opError.value = '';
+  showCloneForm.value = false;
   try {
     messageTrace.value = await apiRequest<RecordValue>(`/messages/${row.id}/trace`);
   } catch (reason) {
@@ -1043,6 +1069,162 @@ function closeMessageTrace() {
   messageOpen.value = false;
   messageRow.value = null;
   messageTrace.value = null;
+  traceId.value = '';
+  opResult.value = null;
+  opError.value = '';
+  showCloneForm.value = false;
+}
+
+/** Replay / requeue the traced message via the message-ops endpoints. */
+async function messageOp(operation: 'replay' | 'requeue') {
+  if (!traceId.value) return;
+  opBusy.value = true;
+  opError.value = '';
+  opResult.value = null;
+  try {
+    opResult.value = await apiRequest<RecordValue>(
+      `/message-ops/${encodeURIComponent(traceId.value)}/${operation}`,
+      { method: 'POST', body: '{}' },
+    );
+  } catch (reason) {
+    opError.value = reason instanceof Error ? reason.message : 'The operation failed.';
+  } finally {
+    opBusy.value = false;
+  }
+}
+
+function openCloneForm() {
+  showCloneForm.value = true;
+  cloneReceiver.value = '';
+  cloneSender.value = '';
+  cloneText.value = '';
+  opResult.value = null;
+  opError.value = '';
+}
+
+/** Clone the traced message, applying any provided sender/receiver/text overrides. */
+async function submitClone() {
+  if (!traceId.value) return;
+  opBusy.value = true;
+  opError.value = '';
+  opResult.value = null;
+  try {
+    const overrides: RecordValue = {};
+    if (cloneReceiver.value.trim()) overrides.receiver = cloneReceiver.value.trim();
+    if (cloneSender.value.trim()) overrides.sender = cloneSender.value.trim();
+    if (cloneText.value.trim()) overrides.text = cloneText.value;
+    opResult.value = await apiRequest<RecordValue>(
+      `/message-ops/${encodeURIComponent(traceId.value)}/clone`,
+      { method: 'POST', body: JSON.stringify(overrides) },
+    );
+    showCloneForm.value = false;
+  } catch (reason) {
+    opError.value = reason instanceof Error ? reason.message : 'The clone failed.';
+  } finally {
+    opBusy.value = false;
+  }
+}
+
+/** Loads configuration templates + drift status for the configuration workspace. */
+async function loadConfigDepth() {
+  configTemplatesError.value = '';
+  driftError.value = '';
+  try {
+    const page = await apiRequest<RecordValue>('/configurations/templates?limit=100&offset=0');
+    configTemplates.value = Array.isArray(page.items)
+      ? (page.items as RecordValue[])
+      : Array.isArray(page)
+        ? (page as unknown as RecordValue[])
+        : [];
+  } catch (reason) {
+    configTemplates.value = [];
+    configTemplatesError.value =
+      reason instanceof Error ? reason.message : 'Templates could not be loaded.';
+  }
+  try {
+    driftResult.value = await apiRequest<RecordValue>('/configurations/drift');
+  } catch (reason) {
+    driftResult.value = null;
+    driftError.value = reason instanceof Error ? reason.message : 'Drift status is unavailable.';
+  }
+}
+
+async function checkDrift() {
+  driftLoading.value = true;
+  driftError.value = '';
+  try {
+    driftResult.value = await apiRequest<RecordValue>('/configurations/drift/check', {
+      method: 'POST',
+      body: '{}',
+    });
+    notice.value = 'Configuration drift check completed.';
+  } catch (reason) {
+    driftError.value = reason instanceof Error ? reason.message : 'The drift check failed.';
+  } finally {
+    driftLoading.value = false;
+  }
+}
+
+async function viewTemplate(row: RecordValue) {
+  templateView.value = null;
+  templateViewLoading.value = true;
+  instantiateResult.value = null;
+  try {
+    templateView.value = await apiRequest<RecordValue>(
+      `/configurations/templates/${String(row.id)}`,
+    );
+  } catch (reason) {
+    templateView.value = { ...row, __error: reason instanceof Error ? reason.message : 'error' };
+  } finally {
+    templateViewLoading.value = false;
+  }
+}
+function closeTemplateView() {
+  templateView.value = null;
+}
+
+async function instantiateTemplate(row: RecordValue) {
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  instantiateResult.value = null;
+  try {
+    instantiateResult.value = await apiRequest<RecordValue>(
+      `/configurations/templates/${String(row.id)}/instantiate`,
+      { method: 'POST', body: '{}' },
+    );
+    notice.value = `Template “${text(row.name)}” instantiated.`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The template could not be instantiated.';
+  } finally {
+    loading.value = false;
+  }
+}
+function closeInstantiate() {
+  instantiateResult.value = null;
+}
+
+/** Feed an instantiated template's content into the configuration create form. */
+function useInstantiatedInComposer() {
+  const result = instantiateResult.value;
+  if (!result) return;
+  configPrefillContent.value = (result.content as RecordValue) ?? null;
+  configBaseline.value = {
+    scope: result.name,
+    description: `Instantiated from template “${text(result.name)}”. Saving creates a new immutable version.`,
+    notes: text(result.note, '') === '—' ? [] : [String(result.note)],
+  };
+  draftName.value = text(result.name, '') === '—' ? '' : String(result.name ?? '');
+  instantiateResult.value = null;
+  showComposer.value = true;
+  notice.value = 'Template content loaded into the create form. Review, then save it as a version.';
+}
+
+function copyText(value: string) {
+  if (value && navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(value);
+    notice.value = 'Copied to clipboard.';
+  }
 }
 
 async function openCreateCustomer() {
@@ -2003,10 +2185,20 @@ watch(
     messageOpen.value = false;
     messageRow.value = null;
     messageTrace.value = null;
+    traceId.value = '';
+    opResult.value = null;
+    opError.value = '';
+    showCloneForm.value = false;
     snapshotOpen.value = false;
     snapshotDetail.value = null;
     configBaseline.value = null;
     configPrefillContent.value = null;
+    configTemplates.value = [];
+    configTemplatesError.value = '';
+    templateView.value = null;
+    instantiateResult.value = null;
+    driftResult.value = null;
+    driftError.value = '';
     routeSmscOptions.value = [];
     routeSmscError.value = '';
     revealedSecret.value = '';
@@ -2694,6 +2886,85 @@ onUnmounted(() => {
           </li>
           <li v-if="!messageTraceEvents.length">No trace events recorded for this message.</li>
         </ul>
+
+        <template v-if="canManageConfig">
+          <h3>Message operations</h3>
+          <p class="form-hint">
+            Re-submit this message through the engine. Each action creates a new, independently
+            traceable message.
+          </p>
+          <div class="detail-actions" data-testid="message-ops">
+            <button
+              class="secondary-button"
+              data-testid="message-replay"
+              :disabled="opBusy"
+              @click="messageOp('replay')"
+            >
+              Replay
+            </button>
+            <button
+              class="secondary-button"
+              data-testid="message-clone"
+              :disabled="opBusy"
+              @click="openCloneForm"
+            >
+              Clone…
+            </button>
+            <button
+              class="secondary-button"
+              data-testid="message-requeue"
+              :disabled="opBusy"
+              @click="messageOp('requeue')"
+            >
+              Requeue
+            </button>
+          </div>
+          <div v-if="showCloneForm" class="composer" data-testid="message-clone-form">
+            <p class="form-hint">Leave a field blank to keep the original value.</p>
+            <label>
+              Sender override
+              <input v-model="cloneSender" data-testid="clone-sender" placeholder="Original sender" />
+            </label>
+            <label>
+              Recipient override
+              <input
+                v-model="cloneReceiver"
+                data-testid="clone-receiver"
+                placeholder="Original recipient"
+              />
+            </label>
+            <label>
+              Message text override
+              <input v-model="cloneText" data-testid="clone-text" placeholder="Original text" />
+            </label>
+            <div>
+              <button
+                class="primary-button"
+                data-testid="clone-submit"
+                :disabled="opBusy"
+                @click="submitClone"
+              >
+                Submit clone
+              </button>
+              <button class="secondary-button" @click="showCloneForm = false">Cancel</button>
+            </div>
+          </div>
+          <p v-if="opError" class="form-error" role="alert" data-testid="message-op-error">
+            {{ opError }}
+          </p>
+          <div v-if="opResult" class="baseline-info" data-testid="message-op-result">
+            <p class="form-hint">
+              {{ text(opResult.action, 'operation') }} accepted — new SQLBox id
+              <strong>{{
+                text(
+                  (opResult.queued as RecordValue | undefined)?.sqlId ??
+                    (opResult.queued as RecordValue | undefined)?.sql_id,
+                )
+              }}</strong>
+              (foreign id {{ text(opResult.foreignId) }}).
+            </p>
+          </div>
+        </template>
       </template>
     </section>
 
@@ -3311,6 +3582,192 @@ onUnmounted(() => {
           lines detected.
         </p>
         <pre>{{ JSON.stringify(configDiffResult.lines ?? [], null, 2) }}</pre>
+      </div>
+    </section>
+
+    <section
+      v-if="key === 'configuration' && !error"
+      class="panel"
+      data-testid="configuration-drift"
+      aria-label="Configuration drift"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Configuration drift</h2>
+          <p>Compare the deployed configuration against what is live on the engine.</p>
+        </div>
+        <button
+          class="secondary-button"
+          data-testid="drift-check"
+          :disabled="driftLoading"
+          @click="checkDrift"
+        >
+          {{ driftLoading ? 'Checking…' : 'Check now' }}
+        </button>
+      </header>
+      <p v-if="driftError" class="form-error" role="alert" data-testid="drift-error">
+        {{ driftError }}
+      </p>
+      <template v-else-if="driftResult">
+        <div class="summary-strip">
+          <div class="metric">
+            <strong data-testid="drift-status">
+              <span class="dot" :class="driftResult.inSync ? 'good' : 'bad'"></span>
+              {{ driftResult.inSync ? 'In sync' : 'Drift detected' }}
+            </strong>
+            <small>Deployed vs live</small>
+          </div>
+          <div class="metric">
+            <strong class="mono">{{ text(driftResult.deployedVersion) }}</strong>
+            <small>Deployed version</small>
+          </div>
+        </div>
+        <dl class="detail-grid">
+          <dt>Deployed checksum</dt>
+          <dd class="mono">{{ text(driftResult.deployedChecksum) }}</dd>
+          <dt>Live checksum</dt>
+          <dd class="mono">{{ text(driftResult.liveChecksum) }}</dd>
+          <dt>Config path</dt>
+          <dd class="mono">{{ text(driftResult.configPath) }}</dd>
+        </dl>
+        <template
+          v-if="Array.isArray(driftResult.differences) && driftResult.differences.length"
+        >
+          <h3>Differences</h3>
+          <pre class="json-block" data-testid="drift-differences">{{
+            JSON.stringify(driftResult.differences, null, 2)
+          }}</pre>
+        </template>
+        <p v-if="driftResult.note" class="source-note">{{ text(driftResult.note) }}</p>
+      </template>
+      <p v-else class="form-hint">Loading drift status…</p>
+    </section>
+
+    <section
+      v-if="key === 'configuration' && !error"
+      class="panel"
+      data-testid="configuration-templates"
+      aria-label="Configuration templates"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Configuration templates</h2>
+          <p>Reusable starting points. Built-in templates are read-only; instantiate to reuse.</p>
+        </div>
+      </header>
+      <p v-if="configTemplatesError" class="form-error" role="alert" data-testid="templates-error">
+        {{ configTemplatesError }}
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Engine</th>
+              <th scope="col">Description</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="tpl in configTemplates"
+              :key="String(tpl.id)"
+              :data-testid="`template-${tpl.id}`"
+            >
+              <td>
+                <strong>{{ text(tpl.name) }}</strong>
+              </td>
+              <td>{{ text(tpl.engine) }}</td>
+              <td>{{ text(tpl.description) }}</td>
+              <td>
+                <span
+                  class="status-badge"
+                  :class="tpl.builtIn || tpl.built_in ? 'muted' : 'good'"
+                  >{{ tpl.builtIn || tpl.built_in ? 'built-in' : 'custom' }}</span
+                >
+              </td>
+              <td class="row-actions">
+                <button
+                  class="secondary-button"
+                  :data-testid="`template-view-${tpl.id}`"
+                  @click="viewTemplate(tpl)"
+                >
+                  View
+                </button>
+                <button
+                  v-if="canManageConfig"
+                  class="secondary-button"
+                  :data-testid="`template-instantiate-${tpl.id}`"
+                  :disabled="loading"
+                  @click="instantiateTemplate(tpl)"
+                >
+                  Instantiate
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!configTemplates.length && !configTemplatesError">
+              <td colspan="5" class="empty-cell" data-testid="templates-empty">
+                No configuration templates are available.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="templateView" class="baseline-info" data-testid="template-view">
+        <header class="panel-header">
+          <div>
+            <h3>{{ text(templateView.name) }} — content</h3>
+          </div>
+          <button class="secondary-button" data-testid="template-view-close" @click="closeTemplateView">
+            Close
+          </button>
+        </header>
+        <p v-if="templateViewLoading" class="form-hint">Loading…</p>
+        <template v-else>
+          <pre class="json-block" data-testid="template-view-content">{{
+            prettyJson(templateView.content)
+          }}</pre>
+          <button
+            class="secondary-button"
+            data-testid="template-view-copy"
+            @click="copyText(prettyJson(templateView.content))"
+          >
+            Copy content
+          </button>
+        </template>
+      </div>
+
+      <div v-if="instantiateResult" class="baseline-info" data-testid="instantiate-result">
+        <header class="panel-header">
+          <div>
+            <h3>Instantiated: {{ text(instantiateResult.name) }}</h3>
+          </div>
+          <button class="secondary-button" data-testid="instantiate-close" @click="closeInstantiate">
+            Close
+          </button>
+        </header>
+        <p v-if="instantiateResult.note" class="form-hint">{{ text(instantiateResult.note) }}</p>
+        <pre class="json-block" data-testid="instantiate-content">{{
+          prettyJson(instantiateResult.content)
+        }}</pre>
+        <div>
+          <button
+            class="secondary-button"
+            data-testid="instantiate-copy"
+            @click="copyText(prettyJson(instantiateResult.content))"
+          >
+            Copy content
+          </button>
+          <button
+            class="primary-button"
+            data-testid="instantiate-use"
+            @click="useInstantiatedInComposer"
+          >
+            Use in create form
+          </button>
+        </div>
       </div>
     </section>
 

@@ -366,6 +366,336 @@ async function generateNow() {
   }
 }
 
+// --- Success-rate groupings (per SMSC / per route) --------------------------
+interface RateRow {
+  label: string;
+  messages: number;
+  dlrs: number;
+  successRate: number;
+  failureRate: number;
+}
+interface RateGrouping {
+  state: SectionState;
+  missing: boolean;
+  error: string;
+  period: string;
+  groups: RateRow[];
+}
+function newRateGrouping(): RateGrouping {
+  return { state: 'loading', missing: false, error: '', period: '', groups: [] };
+}
+const smscSuccess = ref<RateGrouping>(newRateGrouping());
+const routePerformance = ref<RateGrouping>(newRateGrouping());
+
+function formatRate(value: number): string {
+  return `${Math.round(value * 10) / 10}%`;
+}
+
+async function loadRates(path: string, target: typeof smscSuccess) {
+  target.value = newRateGrouping();
+  try {
+    const data = await apiRequest<{ period?: string; groups?: RateRow[] }>(path);
+    target.value = {
+      state: 'ok',
+      missing: false,
+      error: '',
+      period: text(data.period, ''),
+      groups: (Array.isArray(data.groups) ? data.groups : []).map((g) => ({
+        label: text(g.label, 'Unnamed'),
+        messages: num(g.messages),
+        dlrs: num(g.dlrs),
+        successRate: num(g.successRate),
+        failureRate: num(g.failureRate),
+      })),
+    };
+  } catch (reason) {
+    target.value = {
+      state: 'error',
+      missing: isMissing(reason),
+      error: messageFrom(reason, 'This breakdown could not be loaded.'),
+      period: '',
+      groups: [],
+    };
+  }
+}
+
+// --- Hourly heatmap ---------------------------------------------------------
+interface HeatCell {
+  dow: number;
+  hour: number;
+  count: number;
+}
+const heatState = ref<SectionState>('loading');
+const heatMissing = ref(false);
+const heatError = ref('');
+const heatCells = ref<HeatCell[]>([]);
+const heatMax = ref(0);
+const heatWindow = ref('');
+const heatDays = ref(7);
+const heatDows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const heatHours = Array.from({ length: 24 }, (_, hour) => hour);
+const heatLookup = computed(() => {
+  const map = new Map<string, number>();
+  for (const cell of heatCells.value) map.set(`${cell.dow}:${cell.hour}`, cell.count);
+  return map;
+});
+const hasHeatData = computed(() => heatCells.value.some((cell) => cell.count > 0));
+function heatCount(dow: number, hour: number): number {
+  return heatLookup.value.get(`${dow}:${hour}`) ?? 0;
+}
+function heatIntensity(dow: number, hour: number): number {
+  const count = heatCount(dow, hour);
+  if (count <= 0 || heatMax.value <= 0) return 0;
+  return 0.12 + 0.88 * (count / heatMax.value);
+}
+
+async function loadHeatmap() {
+  heatState.value = 'loading';
+  heatMissing.value = false;
+  heatError.value = '';
+  try {
+    const data = await apiRequest<{
+      cells?: HeatCell[];
+      maxCount?: number;
+      window?: string;
+    }>(`/reports/analytics/hourly-heatmap?days=${heatDays.value}`);
+    heatCells.value = (Array.isArray(data.cells) ? data.cells : []).map((cell) => ({
+      dow: num(cell.dow),
+      hour: num(cell.hour),
+      count: num(cell.count),
+    }));
+    heatMax.value = num(data.maxCount);
+    heatWindow.value = text(data.window, '');
+    heatState.value = 'ok';
+  } catch (reason) {
+    heatCells.value = [];
+    heatMax.value = 0;
+    heatMissing.value = isMissing(reason);
+    heatError.value = messageFrom(reason, 'The hourly heatmap could not be loaded.');
+    heatState.value = 'error';
+  }
+}
+
+// --- Latency / SLA ----------------------------------------------------------
+interface LatencySla {
+  count: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  unit: string;
+  window: string;
+  note: string;
+}
+const latencyState = ref<SectionState>('loading');
+const latencyMissing = ref(false);
+const latencyError = ref('');
+const latency = ref<LatencySla | null>(null);
+const latencyDays = ref(7);
+const hasLatencyData = computed(() => (latency.value ? latency.value.count > 0 : false));
+
+async function loadLatency() {
+  latencyState.value = 'loading';
+  latencyMissing.value = false;
+  latencyError.value = '';
+  try {
+    const data = await apiRequest<Partial<LatencySla>>(
+      `/reports/analytics/latency-sla?days=${latencyDays.value}`,
+    );
+    latency.value = {
+      count: num(data.count),
+      p50: num(data.p50),
+      p95: num(data.p95),
+      p99: num(data.p99),
+      unit: text(data.unit, 'seconds'),
+      window: text(data.window, ''),
+      note: text(data.note, ''),
+    };
+    latencyState.value = 'ok';
+  } catch (reason) {
+    latency.value = null;
+    latencyMissing.value = isMissing(reason);
+    latencyError.value = messageFrom(reason, 'Latency percentiles could not be loaded.');
+    latencyState.value = 'error';
+  }
+}
+
+// --- Saved report definitions ----------------------------------------------
+interface Definition {
+  id: string;
+  name: string;
+  reportType: string;
+  schedule: string;
+  format: string;
+  enabled: boolean;
+  createdAt: string;
+}
+const defState = ref<SectionState>('loading');
+const defMissing = ref(false);
+const defError = ref('');
+const defRows = ref<Definition[]>([]);
+const defTotal = ref(0);
+const defNotice = ref('');
+
+/** Available report kinds (catalog kinds flagged available) for the create form. */
+const availableKinds = computed(() => {
+  const kinds: Array<{ key: string; label: string }> = [];
+  for (const category of catalogCategories.value) {
+    for (const kind of category.kinds) {
+      if (kind.available) kinds.push({ key: kind.key, label: `${category.name} · ${kind.name}` });
+    }
+  }
+  return kinds;
+});
+
+function mapDefinition(raw: RecordValue): Definition {
+  return {
+    id: text(raw.id ?? raw.uuid, ''),
+    name: text(raw.name),
+    reportType: text(raw.report_type ?? raw.reportType),
+    schedule: text(raw.schedule, 'manual'),
+    format: text(raw.format, 'summary'),
+    enabled: raw.enabled === true || raw.enabled === 'true',
+    createdAt: text(raw.created_at ?? raw.createdAt),
+  };
+}
+
+async function loadDefinitions() {
+  defState.value = 'loading';
+  defMissing.value = false;
+  defError.value = '';
+  try {
+    const data = await apiRequest<{ items?: RecordValue[]; total?: number }>(
+      '/reports/definitions?sort=-createdAt&limit=50&offset=0',
+    );
+    defRows.value = (Array.isArray(data.items) ? data.items : [])
+      .filter((item): item is RecordValue => Boolean(item) && typeof item === 'object')
+      .map(mapDefinition);
+    defTotal.value = num(data.total);
+    defState.value = 'ok';
+  } catch (reason) {
+    defRows.value = [];
+    defTotal.value = 0;
+    defMissing.value = isMissing(reason);
+    defError.value = messageFrom(reason, 'Saved report definitions could not be loaded.');
+    defState.value = 'error';
+  }
+}
+
+const showDefForm = ref(false);
+const newDefName = ref('');
+const newDefType = ref('');
+const newDefSchedule = ref<'' | 'hourly' | 'daily' | 'weekly'>('');
+const newDefFormat = ref<'csv' | 'summary'>('summary');
+const newDefEnabled = ref(true);
+
+function openDefForm() {
+  showDefForm.value = true;
+  newDefName.value = '';
+  newDefType.value = availableKinds.value[0]?.key ?? '';
+  newDefSchedule.value = '';
+  newDefFormat.value = 'summary';
+  newDefEnabled.value = true;
+  defError.value = '';
+  defNotice.value = '';
+}
+
+async function createDefinition() {
+  if (!newDefName.value.trim() || !newDefType.value) return;
+  busy.value = true;
+  defError.value = '';
+  defNotice.value = '';
+  try {
+    await apiRequest('/reports/definitions', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: newDefName.value.trim(),
+        reportType: newDefType.value,
+        format: newDefFormat.value,
+        enabled: newDefEnabled.value,
+        ...(newDefSchedule.value ? { schedule: newDefSchedule.value } : {}),
+      }),
+    });
+    showDefForm.value = false;
+    defNotice.value = 'Saved report definition created.';
+    await loadDefinitions();
+  } catch (reason) {
+    defError.value = messageFrom(reason, 'The report definition could not be created.');
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function toggleDefinition(def: Definition) {
+  busy.value = true;
+  defError.value = '';
+  defNotice.value = '';
+  try {
+    await apiRequest(`/reports/definitions/${def.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: !def.enabled }),
+    });
+    defNotice.value = `Definition ${def.enabled ? 'disabled' : 'enabled'}.`;
+    await loadDefinitions();
+  } catch (reason) {
+    defError.value = messageFrom(reason, 'The report definition could not be updated.');
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deleteDefinition(def: Definition) {
+  if (!confirm(`Delete saved report definition “${def.name}”?`)) return;
+  busy.value = true;
+  defError.value = '';
+  defNotice.value = '';
+  try {
+    await apiRequest(`/reports/definitions/${def.id}`, { method: 'DELETE' });
+    defNotice.value = 'Saved report definition deleted.';
+    if (selectedDefId.value === def.id) closeRuns();
+    await loadDefinitions();
+  } catch (reason) {
+    defError.value = messageFrom(reason, 'The report definition could not be deleted.');
+  } finally {
+    busy.value = false;
+  }
+}
+
+const runsOpen = ref(false);
+const runsLoading = ref(false);
+const runsError = ref('');
+const runsRows = ref<RecordValue[]>([]);
+const selectedDefId = ref('');
+const selectedDefName = ref('');
+
+async function openRuns(def: Definition) {
+  runsOpen.value = true;
+  runsLoading.value = true;
+  runsError.value = '';
+  runsRows.value = [];
+  selectedDefId.value = def.id;
+  selectedDefName.value = def.name;
+  try {
+    const data = await apiRequest<{ items?: RecordValue[] } | RecordValue[]>(
+      `/reports/definitions/${def.id}/runs`,
+    );
+    runsRows.value = Array.isArray(data)
+      ? data
+      : Array.isArray(data.items)
+        ? data.items
+        : [];
+  } catch (reason) {
+    runsError.value = messageFrom(reason, 'The run history could not be loaded.');
+  } finally {
+    runsLoading.value = false;
+  }
+}
+function closeRuns() {
+  runsOpen.value = false;
+  runsRows.value = [];
+  selectedDefId.value = '';
+  selectedDefName.value = '';
+}
+
 const lastRefreshed = ref('Not yet');
 
 async function refreshAll() {
@@ -375,8 +705,13 @@ async function refreshAll() {
     loadBreakdown(),
     loadGrouping('/reports/analytics/per-smsc', perSmsc),
     loadGrouping('/reports/analytics/per-route', perRoute),
+    loadRates('/reports/analytics/smsc-success', smscSuccess),
+    loadRates('/reports/analytics/route-performance', routePerformance),
+    loadHeatmap(),
+    loadLatency(),
     loadCatalog(),
     loadVolume(),
+    loadDefinitions(),
   ]);
   lastRefreshed.value = new Date().toLocaleTimeString();
 }
@@ -578,6 +913,149 @@ onMounted(() => void refreshAll());
       </article>
     </section>
 
+    <!-- Success rates (per SMSC / per route) ------------------------------ -->
+    <section class="dashboard-grid">
+      <article
+        v-for="group in [
+          { key: 'smsc-success', title: 'SMSC success rate', data: smscSuccess, unit: 'SMSC' },
+          {
+            key: 'route-performance',
+            title: 'Route performance',
+            data: routePerformance,
+            unit: 'Route',
+          },
+        ]"
+        :key="group.key"
+        class="panel"
+      >
+        <header class="panel-header">
+          <div>
+            <h2>{{ group.title }}</h2>
+            <p>{{ group.data.period ? `Period ${group.data.period}` : 'Latest report period' }}</p>
+          </div>
+        </header>
+        <p v-if="group.data.state === 'loading'" class="chart-empty">Loading…</p>
+        <p
+          v-else-if="group.data.state === 'error'"
+          class="chart-empty"
+          :data-testid="`${group.key}-unavailable`"
+        >
+          {{ group.data.missing ? 'This breakdown is not available yet.' : group.data.error }}
+        </p>
+        <p
+          v-else-if="!group.data.groups.length"
+          class="chart-empty"
+          :data-testid="`${group.key}-empty`"
+        >
+          No traffic recorded for this period yet.
+        </p>
+        <div v-else class="table-wrap" :data-testid="`${group.key}-table`">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">{{ group.unit }}</th>
+                <th scope="col">Messages</th>
+                <th scope="col">DLRs</th>
+                <th scope="col">Success</th>
+                <th scope="col">Failure</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
+                <td>{{ row.label }}</td>
+                <td>{{ row.messages }}</td>
+                <td>{{ row.dlrs }}</td>
+                <td>
+                  <span class="status-badge good">{{ formatRate(row.successRate) }}</span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="row.failureRate > 0 ? 'muted' : ''">{{
+                    formatRate(row.failureRate)
+                  }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- Hourly heatmap ---------------------------------------------------- -->
+    <section class="panel" aria-label="Hourly traffic heatmap">
+      <header class="panel-header">
+        <div>
+          <h2>Hourly traffic heatmap</h2>
+          <p>Message volume by day of week and hour{{ heatWindow ? ` · ${heatWindow}` : '' }}</p>
+        </div>
+      </header>
+      <p v-if="heatState === 'loading'" class="chart-empty">Loading heatmap…</p>
+      <p v-else-if="heatState === 'error'" class="chart-empty" data-testid="heatmap-unavailable">
+        {{ heatMissing ? 'The hourly heatmap is not available yet.' : heatError }}
+      </p>
+      <p v-else-if="!hasHeatData" class="chart-empty" data-testid="heatmap-empty">
+        No traffic has been recorded in this window yet.
+      </p>
+      <div v-else class="heatmap" data-testid="heatmap">
+        <div class="heatmap-row heatmap-head">
+          <span class="heatmap-daylabel"></span>
+          <span v-for="hour in heatHours" :key="`h-${hour}`" class="heatmap-hourlabel">{{
+            hour % 6 === 0 ? hour : ''
+          }}</span>
+        </div>
+        <div v-for="(day, dow) in heatDows" :key="day" class="heatmap-row">
+          <span class="heatmap-daylabel">{{ day }}</span>
+          <span
+            v-for="hour in heatHours"
+            :key="`${dow}-${hour}`"
+            class="heatmap-cell"
+            :style="{ opacity: heatIntensity(dow, hour) || 0.04 }"
+            :title="`${day} ${hour}:00 — ${heatCount(dow, hour)} messages`"
+          ></span>
+        </div>
+        <small class="source-note">Peak hour volume: {{ heatMax }} messages.</small>
+      </div>
+    </section>
+
+    <!-- Latency / SLA ----------------------------------------------------- -->
+    <section class="panel" aria-label="Delivery latency SLA">
+      <header class="panel-header">
+        <div>
+          <h2>Delivery latency (SLA)</h2>
+          <p>Submit-to-DLR latency percentiles{{ latency?.window ? ` · ${latency.window}` : '' }}</p>
+        </div>
+      </header>
+      <p v-if="latencyState === 'loading'" class="chart-empty">Loading latency…</p>
+      <p v-else-if="latencyState === 'error'" class="chart-empty" data-testid="latency-unavailable">
+        {{ latencyMissing ? 'Latency reporting is not available yet.' : latencyError }}
+      </p>
+      <p v-else-if="!hasLatencyData" class="chart-empty" data-testid="latency-empty">
+        No delivery receipts with latency were recorded in this window yet.
+      </p>
+      <template v-else-if="latency">
+        <div class="metrics-grid" data-testid="latency-cards">
+          <MetricCard
+            label="Median (p50)"
+            :value="`${latency.p50} ${latency.unit}`"
+            :detail="`${latency.count} samples`"
+            icon="chart"
+          />
+          <MetricCard
+            label="p95"
+            :value="`${latency.p95} ${latency.unit}`"
+            detail="95th percentile"
+            icon="chart"
+          />
+          <MetricCard
+            label="p99"
+            :value="`${latency.p99} ${latency.unit}`"
+            detail="99th percentile"
+            icon="chart"
+          />
+        </div>
+        <p v-if="latency.note" class="source-note">{{ latency.note }}</p>
+      </template>
+    </section>
+
     <!-- Report catalog ---------------------------------------------------- -->
     <section class="panel" aria-label="Report catalog">
       <header class="panel-header">
@@ -693,6 +1171,206 @@ onMounted(() => void refreshAll());
       </p>
     </section>
 
+    <!-- Saved report definitions ------------------------------------------ -->
+    <section class="panel" aria-label="Saved report definitions">
+      <header class="panel-header">
+        <div>
+          <h2>Saved report definitions</h2>
+          <p aria-live="polite">
+            {{
+              defState === 'loading'
+                ? 'Loading definitions…'
+                : `${defRows.length} of ${defTotal} saved definitions`
+            }}
+          </p>
+        </div>
+        <div class="row-actions">
+          <button
+            v-if="canGenerate"
+            class="primary-button"
+            data-testid="definition-new"
+            :disabled="busy || !availableKinds.length"
+            @click="openDefForm"
+          >
+            New definition
+          </button>
+        </div>
+      </header>
+
+      <p v-if="defNotice" class="notice" role="status" data-testid="definition-notice">
+        {{ defNotice }}
+      </p>
+      <p v-if="defError" class="chart-empty" role="alert" data-testid="definition-error">
+        {{ defError }}
+      </p>
+
+      <section
+        v-if="showDefForm"
+        class="composer"
+        aria-label="Create report definition"
+        data-testid="definition-form"
+      >
+        <label>
+          Name
+          <input v-model="newDefName" data-testid="definition-name" placeholder="Daily volume CSV" />
+        </label>
+        <label>
+          Report type
+          <select v-model="newDefType" data-testid="definition-type">
+            <option v-for="kind in availableKinds" :key="kind.key" :value="kind.key">
+              {{ kind.label }}
+            </option>
+          </select>
+        </label>
+        <label>
+          Schedule
+          <select v-model="newDefSchedule" data-testid="definition-schedule">
+            <option value="">Manual (no schedule)</option>
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </label>
+        <label>
+          Format
+          <select v-model="newDefFormat" data-testid="definition-format">
+            <option value="summary">Summary</option>
+            <option value="csv">CSV</option>
+          </select>
+        </label>
+        <label class="checkbox-row">
+          <input v-model="newDefEnabled" type="checkbox" data-testid="definition-enabled" />
+          Enabled
+        </label>
+        <div>
+          <button
+            class="primary-button"
+            data-testid="definition-submit"
+            :disabled="busy || !newDefName.trim() || !newDefType"
+            @click="createDefinition"
+          >
+            Create definition
+          </button>
+          <button class="secondary-button" @click="showDefForm = false">Cancel</button>
+        </div>
+      </section>
+
+      <p
+        v-if="defState === 'error' && defMissing"
+        class="chart-empty"
+        data-testid="definition-unavailable"
+      >
+        Saved report definitions are not available yet.
+      </p>
+      <div v-else class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Report type</th>
+              <th scope="col">Schedule</th>
+              <th scope="col">Format</th>
+              <th scope="col">Enabled</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="def in defRows" :key="def.id" :data-testid="`definition-${def.id}`">
+              <td>{{ def.name }}</td>
+              <td class="mono">{{ def.reportType }}</td>
+              <td>{{ def.schedule }}</td>
+              <td>{{ def.format }}</td>
+              <td>
+                <span class="status-badge" :class="def.enabled ? 'good' : 'muted'">{{
+                  def.enabled ? 'enabled' : 'disabled'
+                }}</span>
+              </td>
+              <td class="row-actions">
+                <button
+                  class="secondary-button"
+                  :data-testid="`definition-runs-${def.id}`"
+                  @click="openRuns(def)"
+                >
+                  Runs
+                </button>
+                <button
+                  v-if="canGenerate"
+                  class="secondary-button"
+                  :data-testid="`definition-toggle-${def.id}`"
+                  :disabled="busy"
+                  @click="toggleDefinition(def)"
+                >
+                  {{ def.enabled ? 'Disable' : 'Enable' }}
+                </button>
+                <button
+                  v-if="canGenerate"
+                  class="secondary-button danger-button"
+                  :data-testid="`definition-delete-${def.id}`"
+                  :disabled="busy"
+                  @click="deleteDefinition(def)"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+            <tr v-if="defState === 'ok' && !defRows.length">
+              <td colspan="6" class="empty-cell" data-testid="definition-empty">
+                No saved report definitions yet. Create one to schedule recurring reports.
+              </td>
+            </tr>
+            <tr v-if="defState === 'loading'">
+              <td colspan="6" class="empty-cell">Loading definitions…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section
+      v-if="runsOpen"
+      class="panel detail-panel"
+      data-testid="runs-panel"
+      aria-label="Report definition runs"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Runs — {{ selectedDefName }}</h2>
+        </div>
+        <button class="secondary-button" data-testid="runs-close" @click="closeRuns">Close</button>
+      </header>
+      <p v-if="runsLoading" class="chart-empty" data-testid="runs-loading">Loading…</p>
+      <p v-else-if="runsError" class="chart-empty" role="alert" data-testid="runs-error">
+        {{ runsError }}
+      </p>
+      <div v-else class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Status</th>
+              <th scope="col">Rows</th>
+              <th scope="col">Started</th>
+              <th scope="col">Completed</th>
+              <th scope="col">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(run, index) in runsRows" :key="text(run.id, String(index))">
+              <td>{{ text(run.status) }}</td>
+              <td>{{ text(run.row_count ?? run.rowCount, '0') }}</td>
+              <td>{{ text(run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt) }}</td>
+              <td>{{ text(run.completed_at ?? run.completedAt) }}</td>
+              <td>{{ text(run.detail ?? run.error) }}</td>
+            </tr>
+            <tr v-if="!runsRows.length">
+              <td colspan="5" class="empty-cell" data-testid="runs-empty">
+                No runs recorded for this definition yet.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section
       v-if="snapshotOpen"
       class="panel detail-panel"
@@ -732,3 +1410,41 @@ onMounted(() => void refreshAll());
 </template>
 
 <style src="./workspace-extras.css"></style>
+
+<style scoped>
+.heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: auto;
+}
+.heatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.heatmap-daylabel {
+  flex: 0 0 34px;
+  font-size: 0.7rem;
+  color: var(--muted, #64748b);
+  text-align: right;
+  padding-right: 4px;
+}
+.heatmap-hourlabel {
+  flex: 1 1 0;
+  min-width: 14px;
+  font-size: 0.62rem;
+  color: var(--muted, #64748b);
+  text-align: center;
+}
+.heatmap-cell {
+  flex: 1 1 0;
+  min-width: 14px;
+  height: 18px;
+  border-radius: 3px;
+  background: var(--brand, #2563eb);
+}
+.heatmap .source-note {
+  margin-top: 6px;
+}
+</style>

@@ -47,6 +47,13 @@ export const navigation: NavigationItem[] = [
     group: 'Messaging',
   },
   {
+    label: 'Bulk Send',
+    to: '/bulk-send',
+    icon: 'sms',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
     label: 'SMSC Connections',
     to: '/smsc',
     icon: 'server',

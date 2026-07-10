@@ -4,6 +4,7 @@ import ModuleWorkspace from '../views/ModuleWorkspace.vue';
 import CopilotView from '../views/CopilotView.vue';
 import SessionsView from '../views/SessionsView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
+import BulkSendView from '../views/BulkSendView.vue';
 import { canAccess, session } from '../stores/session';
 import { initializeSession, isAuthenticated } from '../stores/session';
 import LoginView from '../views/LoginView.vue';
@@ -149,6 +150,17 @@ const routes: RouteRecordRaw[] = [
       description: 'Build and export operational reports.',
       breadcrumb: ['Reports'],
       permission: 'reports.view',
+    },
+  },
+  {
+    path: '/bulk-send',
+    name: 'bulk-send',
+    component: BulkSendView,
+    meta: {
+      title: 'Bulk Send',
+      description: 'Queue a message to many recipients and track campaign delivery.',
+      breadcrumb: ['Bulk Send'],
+      permission: 'messages.view',
     },
   },
   {
