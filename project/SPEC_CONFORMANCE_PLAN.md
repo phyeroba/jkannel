@@ -50,4 +50,8 @@ We will provide the *software and configuration* to make them achievable (replic
 
 ## Status
 
-Wave 1 in progress. This document is updated as each wave completes; per-requirement status lives in `progress/requirements-traceability.md`.
+- **Wave 1 — complete and pushed.** Identity depth (MFA, token-family revocation, login/password history, API keys), Backup & DR (real encrypted pg_dump, scheduler, retention, restore-verify), Monitoring depth (DB/Redis exporters, escalation, maintenance windows, correlation). Migrations 017–019. Backend 174 tests; live-verified.
+- **User-reported fixes — complete and pushed.** AI Copilot CORS fix; messages clickable; SMSC edit/delete; route SMSC dropdowns; configuration baseline+edit; volume snapshot detail; Customers domain (migration 020); API Gateway docs; plugin sample + developer portal; backup restore modal with scope; roles checkboxes.
+- **Wave 2 — complete and integrated.** Reporting depth (021): per-SMSC success/failure, per-route performance, hourly heatmap, latency/SLA percentiles, saved report definitions + scheduled export delivery. Configuration generator Part 2 (022): reusable templates with seeded built-ins, per-engine rendering hook, drift detection with audit trail. Messaging depth (023): message replay/clone/requeue, bulk-send/campaign jobs with a background processor. Migrations 021–023 applied (schema at 23). Backend 53 suites / 246 tests green; typecheck clean; all new endpoints live-verified (401 guarded unauthenticated, real data authenticated).
+
+This document is updated as each wave completes; per-requirement status lives in `progress/requirements-traceability.md`.

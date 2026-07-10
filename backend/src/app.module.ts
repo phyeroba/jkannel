@@ -6,6 +6,7 @@ import { AuthModule } from './security/auth.module';
 import { EngineModule } from './engine/engine.module';
 import { DomainModule } from './domain.module';
 import { ConsoleModule } from './console/console.module';
+import { ConfigurationDepthModule } from './configuration-depth/configuration-depth.module';
 import { AiOperationsModule } from './ai-operations/ai-operations.module';
 import { AiCopilotModule } from './ai-copilot/ai-copilot.module';
 import { PlatformConsoleModule } from './platform-console/platform-console.module';
@@ -24,12 +25,18 @@ import { MetricsInterceptor } from './monitoring/metrics.interceptor';
 import { BackupDrModule } from './backup-dr/backup-dr.module';
 import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.module';
 import { CustomersModule } from './customers/customers.module';
+import { MessagingDepthModule } from './messaging-depth/messaging-depth.module';
+import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
 
 @Module({
   imports: [
     AuthModule,
     EngineModule,
     DomainModule,
+    // Registered before ConsoleModule so /configurations/templates* and
+    // /configurations/drift* match ahead of ConfigurationsController's
+    // /configurations/:id route.
+    ConfigurationDepthModule,
     ConsoleModule,
     AiOperationsModule,
     AiCopilotModule,
@@ -37,6 +44,8 @@ import { CustomersModule } from './customers/customers.module';
     BackupDrModule,
     MonitoringDepthModule,
     CustomersModule,
+    MessagingDepthModule,
+    ReportingDepthModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

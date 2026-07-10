@@ -35,4 +35,26 @@ export class ReportingAnalyticsController {
   ) {
     return this.analytics.deliveryBreakdown(this.actor(r));
   }
+  @Get('smsc-success') @RequirePermissions('reports.view') smscSuccess(
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.analytics.smscSuccess(this.actor(r));
+  }
+  @Get('route-performance') @RequirePermissions('reports.view') routePerformance(
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.analytics.routePerformance(this.actor(r));
+  }
+  @Get('hourly-heatmap') @RequirePermissions('reports.view') hourlyHeatmap(
+    @Req() r: AuthenticatedRequest,
+    @Query('days') days?: string,
+  ) {
+    return this.analytics.hourlyHeatmap(this.actor(r), days ? Number(days) : 7);
+  }
+  @Get('latency-sla') @RequirePermissions('reports.view') latencySla(
+    @Req() r: AuthenticatedRequest,
+    @Query('days') days?: string,
+  ) {
+    return this.analytics.latencySla(this.actor(r), days ? Number(days) : 7);
+  }
 }
