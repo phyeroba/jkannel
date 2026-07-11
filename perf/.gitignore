@@ -1,0 +1,8 @@
+# Local secrets — never commit real credentials.
+.env
+
+# Generated run artifacts.
+results/*.json
+
+# Node (only if someone installs k6 helper tooling locally).
+node_modules/

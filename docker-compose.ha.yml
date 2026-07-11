@@ -1,0 +1,291 @@
+# ===========================================================================
+# JKANNEL — High Availability / DR overlay (profile: ha)
+# ===========================================================================
+# Additive overlay merged on top of docker-compose.yml. EVERY service here is
+# gated behind the "ha" profile, so the live single-node stack
+# (`docker compose up -d`) is completely unaffected — none of these services
+# start unless you opt in with `--profile ha`.
+#
+# Launch (alongside the core stack):
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up -d
+#
+# Validate parsing only (non-destructive):
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha config
+#
+# What it provides:
+#   1. PostgreSQL streaming replication  — postgres-primary + postgres-standby
+#   2. Redis Sentinel                     — redis-primary + redis-replica + 3 sentinels
+#   3. Stateless-API rolling updates      — backend-replica + reverse-proxy-ha (LB)
+#   4. Distributed locks                  — documented in infrastructure/ha/README.md
+#
+# The HA Postgres/Redis clusters run on distinct service names and volumes and
+# do NOT touch the running postgres-data / redis-data volumes. They are a
+# self-contained, runnable replication/failover demonstration; to actually cut
+# the app over to them you repoint DATABASE_URL/REDIS_URL (see the README).
+# ===========================================================================
+
+services:
+  # -------------------------------------------------------------------------
+  # 1. PostgreSQL streaming replication
+  # -------------------------------------------------------------------------
+  postgres-primary:
+    profiles: ["ha"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Physical-replication role (created once by primary-init.sh).
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - wal_log_hints=on        # required for pg_rewind after a failover
+      - -c
+      - listen_addresses=*
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql/data
+      - ./infrastructure/ha/postgres/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+    networks:
+      - datanet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  postgres-standby:
+    profiles: ["ha"]
+    image: postgres:17-alpine
+    entrypoint: ["/usr/local/bin/standby-entrypoint.sh"]
+    environment:
+      # Not used for init (the node is cloned, not initdb'd) but kept so tools
+      # inside the container have consistent defaults.
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PRIMARY_HOST: postgres-primary
+      PRIMARY_PORT: "5432"
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      REPLICATION_SLOT: ${REPLICATION_SLOT:-standby_slot}
+    volumes:
+      - postgres-standby-data:/var/lib/postgresql/data
+      - ./infrastructure/ha/postgres/standby-entrypoint.sh:/usr/local/bin/standby-entrypoint.sh:ro
+    networks:
+      - datanet
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      # Reports healthy once the node accepts connections (in hot-standby mode
+      # it accepts read-only queries).
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 2. Redis Sentinel (1 master + 1 replica + 3 sentinels, quorum 2)
+  # -------------------------------------------------------------------------
+  redis-primary:
+    profiles: ["ha"]
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-ha-primary-data:/data
+    networks:
+      - datanet
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  redis-replica:
+    profiles: ["ha"]
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--replicaof", "redis-primary", "6379"]
+    volumes:
+      - redis-ha-replica-data:/data
+    networks:
+      - datanet
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  redis-sentinel-1: &redis-sentinel
+    profiles: ["ha"]
+    image: redis:7-alpine
+    entrypoint: ["/usr/local/bin/sentinel-entrypoint.sh"]
+    volumes:
+      - ./infrastructure/ha/redis/sentinel.conf:/etc/redis/sentinel.conf:ro
+      - ./infrastructure/ha/redis/sentinel-entrypoint.sh:/usr/local/bin/sentinel-entrypoint.sh:ro
+    networks:
+      - datanet
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    # Sentinel needs a writable copy of its config (it rewrites it); a per-
+    # container tmpfs at /data keeps it ephemeral and off the read-only mount.
+    tmpfs:
+      - /data:size=4m,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  redis-sentinel-2:
+    <<: *redis-sentinel
+
+  redis-sentinel-3:
+    <<: *redis-sentinel
+
+  # -------------------------------------------------------------------------
+  # 3. Stateless-API rolling updates: a second backend replica + an HA reverse
+  #    proxy that load-balances across both. The app is stateless (JWT auth +
+  #    Postgres/Redis for all shared state), so replicas are safe. In-process
+  #    schedulers are the ONLY non-stateless part, so they are disabled on the
+  #    replica (the primary backend keeps ownership; the backup scheduler is
+  #    additionally advisory-locked). See the README.
+  # -------------------------------------------------------------------------
+  backend-replica:
+    profiles: ["ha"]
+    image: jkannel-backend:local
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_APP_URL: postgresql://jkannel_app:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AUTH_DATABASE_URL: postgresql://jkannel_auth:${POSTGRES_AUTH_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+      POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD}
+      # Replica is a pure stateless API node: never runs migrations or in-process
+      # schedulers, so nothing double-runs across replicas.
+      MIGRATIONS_ON_BOOT: "false"
+      MIGRATIONS_DIR: /app/database/migrations
+      REDIS_URL: redis://redis:6379
+      AUTH_ACCESS_TOKEN_KEY: ${AUTH_ACCESS_TOKEN_KEY:-}
+      AUTH_REFRESH_TOKEN_KEY: ${AUTH_REFRESH_TOKEN_KEY:-}
+      AUTH_SIGNING_KEY: ${AUTH_SIGNING_KEY:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      AI_OPERATIONS_ENABLED: ${AI_OPERATIONS_ENABLED:-false}
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_FROM: ${SMTP_FROM:-jkannel@localhost}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_COPILOT_MODEL: ${AI_COPILOT_MODEL:-claude-sonnet-5}
+      REPORT_JOBS_ENABLED: "false"
+      REPORT_JOBS_INTERVAL_MS: ${REPORT_JOBS_INTERVAL_MS:-900000}
+      BACKUP_DIR: /var/lib/jkannel/backups
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      BACKUP_SCHEDULER_ENABLED: "false"
+      BACKUP_SCHEDULER_INTERVAL_MS: ${BACKUP_SCHEDULER_INTERVAL_MS:-3600000}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
+      KAMEX_BASE_URL: http://kamex-bearerbox:13000
+      KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+      KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
+      KAMEX_CONFIG_PATH: /var/lib/jkannel/kamex.conf
+      KAMEX_VALIDATOR_URL: http://kamex-validator:8080
+      KAMEX_VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
+      KAMEX_SQLBOX_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    # No published host port: traffic reaches it only via reverse-proxy-ha, so it
+    # can scale/restart without host-port collisions.
+    volumes:
+      - ./runtime/kamex:/var/lib/jkannel
+      - ./database/migrations:/app/database/migrations:ro
+    networks:
+      - edge
+      - appnet
+      - datanet
+      - obsnet
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kamex-validator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  reverse-proxy-ha:
+    profiles: ["ha"]
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    volumes:
+      - ./infrastructure/ha/nginx:/etc/nginx/conf.d:ro
+      - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
+    ports:
+      # Distinct host port so it never collides with the live proxy on 8080.
+      - "${PROXY_HA_HTTP_PORT:-8090}:8080"
+    networks:
+      - edge
+    depends_on:
+      backend:
+        condition: service_healthy
+      backend-replica:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,mode=0755
+      - /var/run:size=1m,mode=0755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  postgres-primary-data:
+  postgres-standby-data:
+  redis-ha-primary-data:
+  redis-ha-replica-data:

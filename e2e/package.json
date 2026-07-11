@@ -1,0 +1,23 @@
+{
+  "name": "@jkannel/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright end-to-end acceptance suite for the JKANNEL operations console. Self-contained; runs against an already-running stack.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "list": "playwright test --list",
+    "typecheck": "tsc --noEmit",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

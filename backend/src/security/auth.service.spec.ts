@@ -199,6 +199,25 @@ describe('AuthService', () => {
     expect(store.credential?.lockedUntil).toBeInstanceOf(Date);
     expect(store.events).toHaveLength(5);
   });
+  it('does not re-extend the lockout window on attempts made while locked', async () => {
+    for (let i = 0; i < 5; i++)
+      await expect(service.login('acme', 'operator', 'wrong password')).rejects.toThrow(
+        'Invalid credentials',
+      );
+    const lockedUntil = store.credential!.lockedUntil;
+    const countAtLock = store.credential!.failedLoginCount;
+    const eventsAtLock = store.events.length;
+    // A further attempt while locked — even with the CORRECT password — must be
+    // rejected without touching the counter or extending the window, otherwise a
+    // legitimate user could never recover from a lockout.
+    await expect(
+      service.login('acme', 'operator', 'correct horse battery staple'),
+    ).rejects.toThrow('Invalid credentials');
+    expect(store.credential!.lockedUntil).toBe(lockedUntil);
+    expect(store.credential!.failedLoginCount).toBe(countAtLock);
+    expect(store.events).toHaveLength(eventsAtLock + 1);
+    expect(store.events.at(-1)?.reason).toBe('account_locked');
+  });
 
   describe('password reset', () => {
     it('issues a dev token for an existing user and audits the request', async () => {

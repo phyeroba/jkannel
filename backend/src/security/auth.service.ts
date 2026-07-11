@@ -39,12 +39,31 @@ export class AuthService {
   ) {
     const user = await this.repository.findCredential(tenant, username);
     const now = new Date();
+    // Account currently locked: reject WITHOUT re-incrementing the failed counter
+    // or extending the window. Folding this into the credential-failure branch
+    // (as it was) meant every attempt during the lockout — including one with the
+    // correct password — re-extended the 15-minute window, so a locked-out user
+    // could never get back in. The response stays a generic "Invalid credentials"
+    // so lockout state is not disclosed.
+    if (user && user.lockedUntil && user.lockedUntil > now) {
+      await this.audit.append({
+        tenantId: user.tenantId,
+        action: 'login.failed',
+        outcome: 'failure',
+        actorId: user.id,
+        username,
+        reason: 'account_locked',
+        occurredAt: now,
+        ...context,
+      });
+      await this.recordLogin(user, username, 'failure', false, context);
+      throw new UnauthorizedException('Invalid credentials');
+    }
     if (
       !user ||
       user.status === 'disabled' ||
       user.status === 'archived' ||
       user.status === 'deleted' ||
-      (user.lockedUntil && user.lockedUntil > now) ||
       !(await this.passwords.verify(password, user.passwordHash))
     ) {
       if (user) {

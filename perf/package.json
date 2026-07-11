@@ -1,0 +1,24 @@
+{
+  "name": "jkannel-perf",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-contained load, throughput and soak harness for the JKANNEL SMS-gateway operations platform. Zero runtime dependencies (Node built-ins only).",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "jkannel-perf": "run.js"
+  },
+  "scripts": {
+    "read-grid": "node run.js read-grid",
+    "auth": "node run.js auth",
+    "reporting": "node run.js reporting",
+    "write-send": "node run.js write-send",
+    "soak": "node run.js soak",
+    "all": "node run.js all",
+    "check": "node -e \"const{execFileSync}=require('node:child_process'),{readdirSync}=require('node:fs');const fs=['run.js',...['lib','config','scenarios'].flatMap(d=>readdirSync(d).filter(f=>f.endsWith('.js')).map(f=>d+'/'+f))];fs.forEach(f=>execFileSync(process.execPath,['--check',f],{stdio:'inherit'}));console.log('all '+fs.length+' scripts OK')\""
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

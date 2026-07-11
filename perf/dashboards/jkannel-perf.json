@@ -1,0 +1,171 @@
+{
+  "uid": "jkannel-perf",
+  "title": "JKANNEL Performance & Load",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["jkannel", "performance", "load", "soak"],
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROM",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "JKANNEL Prometheus", "value": "jkannel-prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Backend (Prometheus /metrics)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HTTP request rate by status class",
+      "description": "jkannel_http_requests_total, differentiated to req/s. Watch 4xx/5xx during load.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(jkannel_http_requests_total[1m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP latency p50 / p95 / p99 (ms)",
+      "description": "Histogram quantiles from jkannel_http_request_duration_ms_bucket. p95 is the SLO gate.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(jkannel_http_request_duration_ms_bucket[1m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(jkannel_http_request_duration_ms_bucket[1m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(jkannel_http_request_duration_ms_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Backend memory (RSS / heap) — leak watch",
+      "description": "jkannel_backend_memory_bytes. A steadily climbing RSS during a soak indicates a leak.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "jkannel_backend_memory_bytes",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Backend up",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "targets": [{ "expr": "max(jkannel_backend_up)", "refId": "A" }],
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Error ratio (5m)",
+      "description": "Share of 4xx+5xx responses. SLO gate: < 1%.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(jkannel_http_requests_total{status=~\"4xx|5xx\"}[5m])) / clamp_min(sum(rate(jkannel_http_requests_total[5m])), 1)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Backend uptime (s)",
+      "description": "Resets to 0 on restart — a drop during a soak means the process crashed/OOM'd.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "expr": "jkannel_backend_uptime_seconds", "refId": "A" }],
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 13 }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "k6 load generator (optional — requires k6 Prometheus remote-write)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "k6 request rate & VUs",
+      "description": "Populated only when running k6 with --out experimental-prometheus-rw (see perf/README.md). Empty otherwise.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "targets": [
+        { "expr": "sum(rate(k6_http_reqs_total[1m]))", "legendFormat": "http_reqs/s", "refId": "A" },
+        { "expr": "max(k6_vus)", "legendFormat": "VUs", "refId": "B" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "k6 request duration p95 (ms)",
+      "description": "k6-side latency (client perspective, includes network). Populated via k6 remote-write only.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(k6_http_req_duration_seconds_bucket[1m])) by (le)) * 1000",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 }
+    }
+  ]
+}
