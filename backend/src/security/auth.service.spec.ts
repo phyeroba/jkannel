@@ -210,9 +210,9 @@ describe('AuthService', () => {
     // A further attempt while locked — even with the CORRECT password — must be
     // rejected without touching the counter or extending the window, otherwise a
     // legitimate user could never recover from a lockout.
-    await expect(
-      service.login('acme', 'operator', 'correct horse battery staple'),
-    ).rejects.toThrow('Invalid credentials');
+    await expect(service.login('acme', 'operator', 'correct horse battery staple')).rejects.toThrow(
+      'Invalid credentials',
+    );
     expect(store.credential!.lockedUntil).toBe(lockedUntil);
     expect(store.credential!.failedLoginCount).toBe(countAtLock);
     expect(store.events).toHaveLength(eventsAtLock + 1);

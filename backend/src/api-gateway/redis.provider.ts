@@ -1,4 +1,5 @@
 import Redis from 'ioredis';
+import { createRedisClient } from '../platform/redis-options';
 
 /**
  * Minimal surface the {@link GatewayRateLimiter} needs from a Redis client.
@@ -20,9 +21,10 @@ export const GATEWAY_REDIS = 'GATEWAY_REDIS';
  * itself throws (e.g. a malformed URL).
  */
 export function createGatewayRedis(): Redis | null {
-  const url = process.env.REDIS_URL ?? 'redis://redis:6379';
   try {
-    const client = new Redis(url, {
+    // Sentinel-aware when REDIS_SENTINELS is set (HA overlay), else single-host
+    // REDIS_URL — see createRedisClient.
+    const client = createRedisClient({
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,

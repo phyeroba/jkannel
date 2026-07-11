@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
+import { createRedisClient } from '../platform/redis-options';
 import { DatabaseService } from '../database/database.service';
 
 /**
@@ -102,12 +103,12 @@ export class PlatformMetricsService implements OnModuleDestroy {
 
   private redisClient(): Redis | null {
     if (this.redis !== undefined) return this.redis;
-    const url = process.env.REDIS_URL ?? 'redis://redis:6379';
     try {
       // Lazy, non-fatal: never queue offline commands or retry forever, so a
       // missing/unreachable Redis surfaces as jkannel_redis_up 0 rather than a
-      // hung scrape or an unhandled connection error.
-      this.redis = new Redis(url, {
+      // hung scrape or an unhandled connection error. Sentinel-aware via
+      // createRedisClient when REDIS_SENTINELS is set (HA overlay).
+      this.redis = createRedisClient({
         lazyConnect: true,
         enableOfflineQueue: false,
         maxRetriesPerRequest: 1,

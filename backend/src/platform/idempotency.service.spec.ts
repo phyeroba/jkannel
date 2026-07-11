@@ -53,4 +53,85 @@ describe('IdempotencyService', () => {
       ConflictException,
     );
   });
+
+  it('rejects a genuinely in-flight processing record as concurrent', async () => {
+    const database = {
+      tenantTransaction: jest.fn((_tenant, work) =>
+        work({
+          query: jest.fn().mockResolvedValue({
+            rows: [
+              {
+                id: 'abc',
+                request_hash: 'hash',
+                status: 'processing',
+                updated_at: new Date().toISOString(), // fresh -> still in flight
+              },
+            ],
+          }),
+        }),
+      ),
+    };
+    const service = new IdempotencyService(database as any);
+    await expect(service.begin(actor, 'retry-key', 'POST', '/jobs', 'hash')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('reclaims a stale processing record so a retry can proceed', async () => {
+    const query = jest
+      .fn()
+      // SELECT ... FOR UPDATE -> a processing record last touched long ago
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'abc',
+            request_hash: 'hash',
+            status: 'processing',
+            updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          },
+        ],
+      })
+      // UPDATE ... RETURNING -> the reclaimed, fresh processing record
+      .mockResolvedValueOnce({
+        rows: [{ id: 'abc', request_hash: 'hash', status: 'processing' }],
+      });
+    const database = { tenantTransaction: jest.fn((_t, work) => work({ query })) };
+    const service = new IdempotencyService(database as any);
+    const record = await service.begin(actor, 'retry-key', 'POST', '/jobs', 'hash');
+    expect(record.replayed).toBeFalsy();
+    expect(record.status).toBe('processing');
+    // Second call is the reclaiming UPDATE.
+    expect(query.mock.calls[1][0]).toMatch(
+      /UPDATE api_idempotency_records SET status='processing'/,
+    );
+  });
+
+  it('reclaims a failed record immediately regardless of age', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'abc',
+            request_hash: 'hash',
+            status: 'failed',
+            updated_at: new Date().toISOString(), // recent, but failed -> reclaimable
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'abc', request_hash: 'hash', status: 'processing' }] });
+    const database = { tenantTransaction: jest.fn((_t, work) => work({ query })) };
+    const service = new IdempotencyService(database as any);
+    await expect(service.begin(actor, 'retry-key', 'POST', '/jobs', 'hash')).resolves.toMatchObject(
+      { status: 'processing' },
+    );
+  });
+
+  it('fail() marks a processing record failed', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [] });
+    const database = { tenantTransaction: jest.fn((_t, work) => work({ query })) };
+    const service = new IdempotencyService(database as any);
+    await service.fail(actor, 'abc');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("SET status='failed'"), ['abc']);
+  });
 });

@@ -5,7 +5,7 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common';
-import { from, mergeMap, Observable, of } from 'rxjs';
+import { catchError, from, mergeMap, Observable, of, throwError } from 'rxjs';
 import { AuthenticatedRequest } from '../security/auth.guard';
 import { ContextRequest } from './request-context.middleware';
 import { IdempotencyService } from './idempotency.service';
@@ -39,19 +39,29 @@ export class IdempotencyInterceptor implements NestInterceptor {
     ).pipe(
       mergeMap((record) => {
         if (record.replayed) return of(record.response_body);
-        return next
-          .handle()
-          .pipe(
-            mergeMap((data) =>
-              from(
-                this.idempotency.complete(
-                  { tenantId: request.principal!.tenantId, userId: request.principal!.userId },
-                  record.id,
-                  data,
-                ),
-              ).pipe(mergeMap(() => of(data))),
-            ),
-          );
+        return next.handle().pipe(
+          // Handler error: release the key (mark failed) so a retry isn't blocked
+          // until the stale window elapses, then propagate the original error.
+          // Placed before the completion step so a rare completion failure leaves
+          // the record 'processing' (reclaimed later) rather than masking success.
+          catchError((err) =>
+            from(
+              this.idempotency.fail(
+                { tenantId: request.principal!.tenantId, userId: request.principal!.userId },
+                record.id,
+              ),
+            ).pipe(mergeMap(() => throwError(() => err))),
+          ),
+          mergeMap((data) =>
+            from(
+              this.idempotency.complete(
+                { tenantId: request.principal!.tenantId, userId: request.principal!.userId },
+                record.id,
+                data,
+              ),
+            ).pipe(mergeMap(() => of(data))),
+          ),
+        );
       }),
     );
   }
