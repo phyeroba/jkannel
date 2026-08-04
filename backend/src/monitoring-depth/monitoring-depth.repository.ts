@@ -5,6 +5,8 @@ import { DatabaseService } from '../database/database.service';
 export interface Actor {
   tenantId: string;
   userId: string;
+  /** Display name for audit/comment attribution; absent on machine actors. */
+  username?: string;
 }
 
 export interface EscalationStep {

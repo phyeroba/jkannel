@@ -50,9 +50,22 @@ export interface EngineAdapterCore {
 export interface SmscControlResult {
   operation: 'enable' | 'disable' | 'reconnect';
   engineId: string;
+  /** The engine accepted the command(s). NOT a claim that the bind changed. */
   accepted: boolean;
   detail: string;
   observedAt: string;
+  /**
+   * Bind states actually observed around a `reconnect` cycle. Present only when
+   * the adapter cycles the bind (stop then start) rather than issuing a single
+   * command, and `cycleVerified` is false whenever the drop could not be seen —
+   * an unverified cycle must never be reported as a verified one.
+   */
+  states?: {
+    before: string | null;
+    afterStop: string | null;
+    afterStart: string | null;
+    cycleVerified: boolean;
+  };
 }
 export interface SmscControlProvider {
   controlSmsc(

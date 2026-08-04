@@ -7,6 +7,7 @@ import {
   RouteResolutionService,
   SendRouteDecision,
 } from '../routing-depth/route-resolution.service';
+import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { SendEntitlementsService } from './send-entitlements.service';
 
@@ -99,7 +100,10 @@ interface DecisionRecord {
  * in order, the steps `ROUTING_ENGINE_SPEC_04` asks for:
  *
  *   1. validate the destination (shared E.164 normaliser)
- *   2. identify the customer (explicit, or from the API key)
+ *   2. identify the customer (explicit, or from the API key) and enforce its
+ *      per-minute send rate (`customers.rate_limit_per_min`) — a control the
+ *      per-API-key limiter cannot provide, because one customer may hold many
+ *      keys and each would stay inside its own budget
  *   3. blacklist / whitelist / DND
  *   4. select the route — deployed routes only, against live bind health, with
  *      failover — unless the caller pinned a bind
@@ -133,6 +137,7 @@ export class MessageSendService {
     private readonly routing: RouteResolutionService,
     private readonly entitlements: SendEntitlementsService,
     private readonly blocklist: MessageBlocklistService,
+    private readonly rateLimits: CustomerRateLimitService,
   ) {}
 
   private nextRotation(tenantId: string): number {
@@ -248,6 +253,11 @@ export class MessageSendService {
 
     try {
       return await this.database.tenantTransaction(actor.tenantId, async (client) => {
+        // 2b. Per-customer rate limit (customers.rate_limit_per_min), first
+        // because it is the cheapest refusal and the one whose whole purpose is
+        // to shed work before any is done. Fails OPEN when Redis is down.
+        await this.rateLimits.consumeInClient(client, actor.tenantId, request.customerId ?? null);
+
         // 3. Blocklist, BEFORE any route is chosen.
         await this.blocklist.assertAllowedInClient(client, destination, request.customerId ?? null);
 

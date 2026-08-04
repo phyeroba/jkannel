@@ -17,7 +17,11 @@ import {
   CorrelationController,
   EscalationController,
   MaintenanceController,
+  NotificationReadinessController,
 } from './monitoring-depth.controller';
+import { AlertLifecycleController } from './alert-lifecycle.controller';
+import { AlertLifecycleRepository } from './alert-lifecycle.repository';
+import { NotificationReadinessService } from './notification-readiness.service';
 
 /**
  * Monitoring-depth feature module: platform/DB/Redis metrics, SMS/SMSC engine
@@ -41,10 +45,18 @@ import {
  */
 @Module({
   imports: [AuthModule, EngineModule],
-  controllers: [EscalationController, MaintenanceController, CorrelationController],
+  controllers: [
+    EscalationController,
+    MaintenanceController,
+    CorrelationController,
+    NotificationReadinessController,
+    AlertLifecycleController,
+  ],
   providers: [
     DatabaseService,
     MonitoringDepthRepository,
+    AlertLifecycleRepository,
+    NotificationReadinessService,
     PlatformMetricsService,
     MaintenanceWindowService,
     AlertEscalationService,
@@ -57,6 +69,8 @@ import {
     AlertRuleEvaluatorScheduler,
   ],
   exports: [
+    AlertLifecycleRepository,
+    NotificationReadinessService,
     PlatformMetricsService,
     EngineMetricsService,
     MaintenanceWindowService,

@@ -16,6 +16,13 @@ export interface DueStep {
 interface OpenAlertRow {
   id: string;
   opened_at: string | Date;
+  /**
+   * When the alert's current notification cycle began: max(opened_at,
+   * escalated_at, reopened_at). Migration 037; absent on older rows.
+   */
+  cycle_started_at?: string | Date | null;
+  /** Which notification cycle the alert is in (migration 037). */
+  escalation_cycle?: number | null;
   details: { smsc?: string | null } | null;
   rule_id: string | null;
 }
@@ -119,6 +126,15 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
       );
       if (!lock.rows[0]?.locked) return 0;
 
+      // A lifecycle suppression that has run its course returns the alert to
+      // 'open' here, at the one place that would otherwise skip it forever.
+      await client.query(
+        `UPDATE alert_instances
+            SET status='open', suppressed_until=NULL
+          WHERE status='suppressed' AND suppressed_until IS NOT NULL AND suppressed_until <= $1`,
+        [now],
+      );
+
       const policies = (
         await client.query<{ id: string; steps: EscalationStep[] }>(
           'SELECT id, steps FROM escalation_policies WHERE enabled = true',
@@ -126,9 +142,15 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
       ).rows;
       if (!policies.length) return 0;
 
+      // Only 'open' alerts escalate: a lifecycle-suppressed one stays visible
+      // everywhere else but is deliberately not paged while its window runs.
       const alerts = (
         await client.query<OpenAlertRow>(
-          "SELECT id, opened_at, details, rule_id FROM alert_instances WHERE status = 'open' ORDER BY opened_at ASC LIMIT 500",
+          `SELECT id, opened_at, details, rule_id,
+                  COALESCE(escalation_cycle, 0) AS escalation_cycle,
+                  GREATEST(opened_at, COALESCE(escalated_at, opened_at),
+                           COALESCE(reopened_at, opened_at)) AS cycle_started_at
+             FROM alert_instances WHERE status = 'open' ORDER BY opened_at ASC LIMIT 500`,
         )
       ).rows;
       if (!alerts.length) return 0;
@@ -150,10 +172,24 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
             { smsc: alert.details?.smsc ?? undefined },
             windows,
           );
-          const last = await this.lastStepIndex(client, tenantId, alert.id, policy.id);
-          const due = this.nextDueStep(steps, new Date(alert.opened_at), now, last);
+          // When a dedup re-observation sharpened the alert (warning ->
+          // critical) or an operator reopened it, the cycle counter moves and
+          // the chain runs again from that moment: whoever was told about the
+          // milder condition is told again about the worse one.
+          const cycle = Number(alert.escalation_cycle ?? 0);
+          const baseline = new Date(alert.cycle_started_at ?? alert.opened_at);
+          const last = await this.lastStepIndex(client, tenantId, alert.id, policy.id, cycle);
+          const due = this.nextDueStep(steps, baseline, now, last);
           if (!due) continue;
-          await this.recordEscalation(client, tenantId, alert.id, policy.id, due, suppressed);
+          await this.recordEscalation(
+            client,
+            tenantId,
+            alert.id,
+            policy.id,
+            due,
+            suppressed,
+            cycle,
+          );
           recorded += 1;
         }
       }
@@ -228,16 +264,22 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
     return { channel: candidates[0], resolution: 'type-default' };
   }
 
+  /**
+   * Highest step already recorded for the alert's *current* cycle. Scoping by
+   * cycle is what lets a sharpened or reopened alert page the chain again
+   * instead of being permanently exhausted by the earlier, milder run.
+   */
   private async lastStepIndex(
     client: PoolClient,
     tenantId: string,
     alertId: string,
     policyId: string,
+    cycle: number,
   ): Promise<number | null> {
     const row = (
       await client.query<{ max: number | null }>(
-        'SELECT max(step_index) AS max FROM alert_escalations WHERE tenant_id=$1 AND alert_id=$2 AND policy_id=$3',
-        [tenantId, alertId, policyId],
+        'SELECT max(step_index) AS max FROM alert_escalations WHERE tenant_id=$1 AND alert_id=$2 AND policy_id=$3 AND COALESCE(cycle,0)=$4',
+        [tenantId, alertId, policyId, cycle],
       )
     ).rows[0];
     return row?.max ?? null;
@@ -255,6 +297,7 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
     policyId: string,
     due: DueStep,
     suppressed: boolean,
+    cycle = 0,
   ): Promise<void> {
     let status: 'escalated' | 'notified' | 'failed' | 'suppressed' = suppressed
       ? 'suppressed'
@@ -293,13 +336,39 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
             channel,
           )
           .catch((error) => ({
+            channelId: channel.id,
+            channelType: channel.type,
             status: 'failed' as const,
             response: { error: String((error as Error).message) },
           }));
         detail.delivery = attempt;
         status = attempt.status === 'succeeded' ? 'notified' : 'failed';
+        // Mirror the attempt into notification_deliveries so it shows up on
+        // GET /alerts/:id/notifications next to operator-triggered sends —
+        // an automatic page that only lived in a jsonb column was invisible.
+        await client
+          .query(
+            `INSERT INTO notification_deliveries
+               (tenant_id,alert_id,channel_id,channel_type,status,target,response,attempted_by,delivered_at)
+             VALUES($1,$2,$3,$4,$5,$6,$7,'alert-escalation',CASE WHEN $5='succeeded' THEN now() ELSE NULL END)`,
+            [
+              tenantId,
+              alertId,
+              channel.id,
+              channel.type,
+              attempt.status,
+              (attempt as { target?: string }).target ?? due.step.target ?? null,
+              JSON.stringify(attempt.response ?? {}),
+            ],
+          )
+          .catch(() => undefined);
       } else {
+        // No channel of this type exists. Record it loudly: this is exactly the
+        // "an alert fired and nobody was told" case that used to be silent.
+        status = 'failed';
+        detail.undeliverable = true;
         detail.delivery = {
+          status: 'undeliverable',
           reason: due.step.target
             ? `no enabled ${due.step.channelType} channel for target '${due.step.target}'`
             : `no enabled ${due.step.channelType} channel`,
@@ -308,10 +377,51 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
     }
 
     await client.query(
-      `INSERT INTO alert_escalations(tenant_id,alert_id,policy_id,step_index,status,detail)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (tenant_id,alert_id,policy_id,step_index) DO NOTHING`,
-      [tenantId, alertId, policyId, due.stepIndex, status, JSON.stringify(detail)],
+      `INSERT INTO alert_escalations(tenant_id,alert_id,policy_id,step_index,status,detail,cycle)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (tenant_id,alert_id,policy_id,step_index,cycle) DO NOTHING`,
+      [tenantId, alertId, policyId, due.stepIndex, status, JSON.stringify(detail), cycle],
+    );
+
+    await this.markAlertNotificationState(client, alertId, status, detail);
+  }
+
+  /**
+   * Surfaces the outcome on the alert itself. `notified` is sticky: once
+   * somebody has been reached, a later step that cannot deliver does not
+   * downgrade the alert to 'undeliverable'. Nothing here ever writes 'notified'
+   * for a delivery that did not succeed.
+   */
+  private async markAlertNotificationState(
+    client: PoolClient,
+    alertId: string,
+    status: 'escalated' | 'notified' | 'failed' | 'suppressed',
+    detail: Record<string, unknown>,
+  ): Promise<void> {
+    const state =
+      status === 'notified'
+        ? 'notified'
+        : status === 'suppressed'
+          ? 'suppressed'
+          : status === 'failed'
+            ? 'undeliverable'
+            : null;
+    if (!state) return;
+    await client.query(
+      `UPDATE alert_instances
+          SET notification_state=$2, notification_detail=$3
+        WHERE id=$1 AND (notification_state <> 'notified' OR $2='notified')`,
+      [
+        alertId,
+        state,
+        JSON.stringify({
+          at: new Date().toISOString(),
+          escalationStatus: status,
+          channelType: detail.channelType ?? null,
+          target: detail.target ?? null,
+          delivery: detail.delivery ?? null,
+        }),
+      ],
     );
   }
 }

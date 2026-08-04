@@ -28,6 +28,14 @@ export interface AuthRepository {
   revokeSession(sessionId: string, revokedAt: Date): Promise<void>;
   /** Revoke every session sharing a refresh-token family (rotation replay defence). */
   revokeSessionFamily(familyId: string, revokedAt: Date): Promise<void>;
+  /**
+   * Keep the `keep` most recently active live sessions for a user and revoke the
+   * rest, returning how many were revoked. Drives the
+   * `security.max_concurrent_sessions` knob. Optional: an in-memory test double
+   * that models a single session has nothing to cap, and the caller skips the
+   * call when the implementation is absent or the cap is 0 (unlimited).
+   */
+  enforceConcurrentSessionLimit?(userId: string, keep: number, revokedAt: Date): Promise<number>;
 
   // Password reset (unauthenticated; run through the pre-tenant auth role).
   findResetTarget(tenantSlug: string, username: string): Promise<PasswordResetTarget | undefined>;

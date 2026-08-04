@@ -31,6 +31,7 @@ import { RoutingDepthModule } from './routing-depth/routing-depth.module';
 import { ApiGatewayModule } from './api-gateway/api-gateway.module';
 import { DataModelModule } from './data-model/data-model.module';
 import { QueueConsoleModule } from './queue-console/queue-console.module';
+import { LoggingModule } from './platform/logging.module';
 
 @Module({
   imports: [
@@ -61,6 +62,8 @@ import { QueueConsoleModule } from './queue-console/queue-console.module';
     ApiGatewayModule,
     DataModelModule,
     QueueConsoleModule,
+    // /observability/logs: searches the ring buffer JsonLogger fills.
+    LoggingModule,
   ],
   controllers: [HealthController, MetricsController, OpenApiController],
   providers: [

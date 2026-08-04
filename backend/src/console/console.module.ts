@@ -19,6 +19,7 @@ import { ConfigurationDiffService } from '../configuration/configuration-diff.se
 import { ConfigurationModelBuilder } from '../configuration/configuration-model.builder';
 import { SecretResolver } from '../configuration/secret-resolver.service';
 import { SmscConnectivityService } from '../smsc/smsc-connectivity.service';
+import { SmppBindProber } from '../smsc/smpp-bind-prober';
 import { SmscService } from '../smsc/smsc.service';
 import { RoutingService } from '../routing/routing.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
@@ -55,6 +56,9 @@ import { NotificationsController, VolumeReportsController } from './notification
     // renders the tenant's real SMSCs instead of a caller-supplied model.
     SecretResolver,
     ConfigurationModelBuilder,
+    // Performs the actual SMPP handshake behind "Test connection"; without it
+    // the check degrades (honestly) to TCP reachability only.
+    SmppBindProber,
     SmscConnectivityService,
     SmscService,
     RoutingService,

@@ -18,6 +18,10 @@ import {
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { PasswordHasher } from '../security/password-hasher';
+import {
+  DEFAULT_SECURITY_POLICY,
+  SecurityPolicyService,
+} from '../security/security-policy.service';
 import { ConsoleRepository, Actor, GridPage } from './console.repository';
 import { ExportColumn, ExportService } from '../platform/export.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
@@ -35,6 +39,11 @@ import { SmscService, SmscType } from '../smsc/smsc.service';
 import { RoutingService } from '../routing/routing.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
 import { MessageSendService } from '../messaging-depth/message-send.service';
+import {
+  MessageFilters,
+  describeMessageFilters,
+  parseMessageFilters,
+} from '../messaging-depth/message-filters';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -60,6 +69,45 @@ const optionalPrefix = (value: unknown) => {
   if (!/^\+?[0-9]{1,20}$/.test(prefix))
     throw new BadRequestException('destinationPrefix must be an E.164-like prefix');
   return prefix;
+};
+const optionalText = (value: unknown, name: string, max: number) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const x = text(value, name);
+  if (x.length > max) throw new BadRequestException(`${name} must be at most ${max} characters`);
+  return x;
+};
+/**
+ * Role names are shown in the console, embedded in JWT `roles` claims and used
+ * as the idempotency key of the migration-036 seed, so they are constrained to
+ * printable single-line text rather than left free-form.
+ */
+const roleName = (value: unknown) => {
+  const name = text(value, 'name');
+  if (name.length > 64) throw new BadRequestException('name must be at most 64 characters');
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(name))
+    throw new BadRequestException(
+      'name must start alphanumerically and use only letters, numbers, spaces, dots, underscores and hyphens',
+    );
+  return name;
+};
+/**
+ * Shape-check a permission code list. Whether each code EXISTS is decided by the
+ * repository against the catalogue, in the same transaction as the write, so
+ * there is no window in which a deleted permission could be granted.
+ */
+const permissionCodes = (value: unknown, required: boolean): string[] => {
+  if (value === undefined || value === null) {
+    if (required) throw new BadRequestException('permissions must be an array of permission codes');
+    return [];
+  }
+  if (!Array.isArray(value))
+    throw new BadRequestException('permissions must be an array of permission codes');
+  return value.map((entry) => {
+    const code = text(entry, 'permission code');
+    if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(code))
+      throw new BadRequestException(`Invalid permission code: ${code}`);
+    return code;
+  });
 };
 const boundedInt = (value: unknown, name: string, min: number, max: number, fallback: number) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -256,44 +304,43 @@ export class SmscController {
     const smsc: any = await this.repository.getSmsc(actor(r), smscId);
     try {
       if (operation === 'test') {
-        if (smsc.type === 'fake') {
-          const result = {
-            reachable: true,
-            latencyMs: 0,
-            detail: 'Fake SMSC requires no network connection',
-          };
-          return this.repository.completeSmscOperation(
-            actor(r),
-            record.id,
-            smscId,
-            operation,
-            true,
-            result.detail,
-            result.latencyMs,
-          );
-        }
-        const result = await this.connectivity!.test(smsc.host, smsc.port);
-        return this.repository.completeSmscOperation(
+        // A REAL SMPP bind where this container can resolve the credentials;
+        // otherwise a TCP check that says, in its own detail text, that it is
+        // only a TCP check and why. `verified` carries the level so no caller
+        // has to infer it from prose.
+        const result = await this.connectivity!.verify(smsc);
+        const completed = await this.repository.completeSmscOperation(
           actor(r),
           record.id,
           smscId,
           operation,
-          result.reachable,
+          result.passed,
           result.detail,
           result.latencyMs,
+          result.verified,
         );
+        return { ...completed, verification: result };
       }
       const result = await this.engines!.smscControl(
         process.env.ENGINE_IMPLEMENTATION ?? 'kamex',
       ).controlSmsc(operation as 'enable' | 'disable' | 'reconnect', smsc.engine_id);
-      return this.repository.completeSmscOperation(
+      const completed = await this.repository.completeSmscOperation(
         actor(r),
         record.id,
         smscId,
         operation,
         true,
         result.detail,
+        undefined,
+        // A reconnect records whether the bind cycle was actually observed, so
+        // an unverifiable cycle is never indistinguishable from a verified one.
+        operation === 'reconnect'
+          ? result.states?.cycleVerified
+            ? 'bind_cycled'
+            : 'command_accepted'
+          : undefined,
       );
+      return result.states ? { ...completed, states: result.states } : completed;
     } catch (error) {
       await this.repository.completeSmscOperation(
         actor(r),
@@ -643,12 +690,81 @@ export class UsersController {
     private readonly repository: ConsoleRepository,
     private readonly exporter?: ExportService,
     private readonly passwords?: PasswordHasher,
+    // Resolves the tenant's configured password policy. Optional so unit tests
+    // can construct the controller with a repository alone; absent, the strict
+    // built-in defaults apply.
+    private readonly policies?: SecurityPolicyService,
   ) {}
+  /**
+   * Validate an operator-set password against the tenant's configured policy
+   * (`security.password_min_length` + the four complexity knobs) instead of the
+   * hardcoded "12 characters" this path used to apply.
+   */
+  private async assertPasswordMeetsPolicy(password: string, r: Request): Promise<void> {
+    if (this.policies) {
+      await this.policies.assertPasswordMeetsPolicy(password, r.principal!.tenantId);
+      return;
+    }
+    SecurityPolicyService.assertPasswordAllowed(password, { ...DEFAULT_SECURITY_POLICY });
+  }
   @Get() @RequirePermissions('users.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listUsers(actor(r), q);
   }
+  // --- Roles and permissions -------------------------------------------------
+  // Reads need users.view, mutations users.manage. Declared ahead of the
+  // `:id` user routes so Nest matches `/users/roles*` and `/users/permissions`
+  // before them. Every mutation is audited by the repository inside the same
+  // transaction as the write, and additionally by the global
+  // AuditTrailInterceptor.
   @Get('roles') @RequirePermissions('users.view') roles(@Req() r: Request) {
     return this.repository.listRoles(actor(r));
+  }
+  /** The permission catalogue a role may draw from: [{code, description, category}]. */
+  @Get('permissions') @RequirePermissions('users.view') permissions(@Req() r: Request) {
+    return this.repository.listPermissions(actor(r));
+  }
+  @Post('roles') @RequirePermissions('users.manage') createRole(@Req() r: Request, @Body() b: any) {
+    return this.repository.createRole(actor(r), {
+      name: roleName(b.name),
+      description: optionalText(b.description, 'description', 500),
+      permissions: permissionCodes(b.permissions, true),
+    });
+  }
+  @Get('roles/:id') @RequirePermissions('users.view') role(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.getRole(actor(r), uuid(id, 'id'));
+  }
+  /** `permissions`, when present, REPLACES the role's whole grant set. */
+  @Patch('roles/:id') @RequirePermissions('users.manage') updateRole(
+    @Req() r: Request,
+    @Param('id') id: string,
+    @Body() b: any,
+  ) {
+    const value: {
+      name?: string;
+      description?: string;
+      permissions?: string[];
+      reason?: string;
+    } = { reason: optionalText(b.reason, 'reason', 500) };
+    if (b.name !== undefined) value.name = roleName(b.name);
+    if (b.description !== undefined)
+      value.description = optionalText(b.description, 'description', 500) ?? '';
+    if (b.permissions !== undefined) value.permissions = permissionCodes(b.permissions, false);
+    if (
+      value.name === undefined &&
+      value.description === undefined &&
+      value.permissions === undefined
+    )
+      throw new BadRequestException('Provide at least one of name, description or permissions');
+    return this.repository.updateRole(actor(r), uuid(id, 'id'), value);
+  }
+  @Delete('roles/:id') @RequirePermissions('users.manage') deleteRole(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.deleteRole(actor(r), uuid(id, 'id'));
   }
   @Get('export.csv') @RequirePermissions('users.view') exportCsv(
     @Req() r: Request,
@@ -696,8 +812,7 @@ export class UsersController {
     if (!/^[a-zA-Z0-9._-]{2,64}$/.test(username))
       throw new BadRequestException('username must be 2–64 chars (letters, numbers, . _ -)');
     const password = text(b.password, 'password');
-    if (password.length < 12)
-      throw new BadRequestException('password must be at least 12 characters');
+    await this.assertPasswordMeetsPolicy(password, r);
     const passwordHash = await this.passwords!.hash(password);
     return this.repository.createUser(actor(r), {
       username,
@@ -723,8 +838,7 @@ export class UsersController {
     if (Array.isArray(b.roleIds)) value.roleIds = b.roleIds.map((x: unknown) => uuid(x, 'roleId'));
     if (b.password !== undefined) {
       const password = text(b.password, 'password');
-      if (password.length < 12)
-        throw new BadRequestException('password must be at least 12 characters');
+      await this.assertPasswordMeetsPolicy(password, r);
       value.passwordHash = await this.passwords!.hash(password);
     }
     return this.repository.updateUser(actor(r), uuid(id, 'id'), value);
@@ -1060,10 +1174,23 @@ export class ReadModelsController {
   private async tenantSmscScope(r: Request): Promise<string[]> {
     return this.repository!.listTenantSmscEngineIds(actor(r));
   }
+  /**
+   * The filter set for the grid and for BOTH exports, from one parser
+   * (`parseMessageFilters`). Validation runs before the SQLBox probe so an
+   * invalid range is a 400 whether or not the engine store is reachable.
+   */
+  private messageFilters(q: any, limits: { defaultLimit: number; maxLimit: number }) {
+    return parseMessageFilters(q, limits);
+  }
+  private exportLimits() {
+    const maxLimit = Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000);
+    return { defaultLimit: Math.min(500, maxLimit), maxLimit };
+  }
   @Get('messages') @RequirePermissions('messages.view') async messages(
     @Req() r: Request,
     @Query() q: any = {},
   ) {
+    const filters = this.messageFilters(q, { defaultLimit: 100, maxLimit: 500 });
     const probe = await this.sqlbox.probe();
     if (!probe.available)
       return {
@@ -1072,44 +1199,43 @@ export class ReadModelsController {
         source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
       };
     const page = await this.sqlbox.list({
-      limit: boundedInt(q.limit, 'limit', 1, 500, 100),
-      cursor: q.cursor ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0) : undefined,
-      query: q.query,
-      status: q.status,
-      smscId: q.smscId,
-      direction: q.direction,
+      ...filters,
       allowedSmscIds: await this.tenantSmscScope(r),
     });
-    return { ...page, source: { status: 'available', type: 'kamex-sqlbox' } };
+    return {
+      ...page,
+      // Echoed so the console (and an export raised from it) can prove the two
+      // were asked the same question.
+      filters: { ...filters, description: describeMessageFilters(filters) ?? null },
+      source: { status: 'available', type: 'kamex-sqlbox' },
+    };
   }
   @Get('messages/export.csv') @RequirePermissions('messages.export') async exportMessages(
     @Req() r: Request,
     @Query() q: any,
     @Res() response: any,
   ) {
+    // Identical parse to the grid: the export cannot honour a narrower set.
+    const filters = this.messageFilters(q, this.exportLimits());
     const probe = await this.sqlbox.probe();
     if (!probe.available) {
       response.setHeader('content-type', 'text/csv; charset=utf-8');
-      response.send('id,timestamp,direction,status,sender,receiver,smscId,externalRef,text\r\n');
+      // Say so rather than let an empty file read as "no matching messages".
+      response.setHeader('x-jkannel-export-row-count', '0');
+      response.setHeader('x-jkannel-source-status', 'unavailable');
+      response.send(KamexSqlboxRepository.exportHeaderRow());
       return;
     }
     const exported = await this.sqlbox.exportCsv({
-      limit: boundedInt(
-        q.limit,
-        'limit',
-        1,
-        Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000),
-        500,
-      ),
-      cursor: q.cursor ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0) : undefined,
-      query: q.query,
-      smscId: q.smscId,
-      direction: q.direction,
+      ...filters,
       allowedSmscIds: await this.tenantSmscScope(r),
     });
     response.setHeader('content-type', 'text/csv; charset=utf-8');
     response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
     response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+    response.setHeader('x-jkannel-source-status', 'available');
+    const description = describeMessageFilters(filters);
+    if (description) response.setHeader('x-jkannel-export-filters', description);
     if (exported.nextCursor)
       response.setHeader('x-jkannel-next-cursor', String(exported.nextCursor));
     response.send(exported.content);
@@ -1257,10 +1383,8 @@ export class ReadModelsController {
         source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
       };
     const page = await this.sqlbox.list({
-      limit: boundedInt(q.limit, 'limit', 1, 500, 100),
-      cursor: q.cursor ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0) : undefined,
-      query: q.query,
-      smscId: q.smscId,
+      ...this.messageFilters(q, { defaultLimit: 100, maxLimit: 500 }),
+      // This report is, by definition, the delivery-receipt rows.
       direction: 'DLR',
       allowedSmscIds: await this.tenantSmscScope(r),
     });
@@ -1278,19 +1402,14 @@ export class ReadModelsController {
     const probe = await this.sqlbox.probe();
     if (!probe.available) {
       response.setHeader('content-type', 'text/csv; charset=utf-8');
-      response.send('id,timestamp,direction,status,sender,receiver,smscId,externalRef,text\r\n');
+      response.setHeader('x-jkannel-export-row-count', '0');
+      response.setHeader('x-jkannel-source-status', 'unavailable');
+      response.send(KamexSqlboxRepository.exportHeaderRow());
       return;
     }
     const exported = await this.sqlbox.exportCsv({
-      limit: boundedInt(
-        q.limit,
-        'limit',
-        1,
-        Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000),
-        500,
-      ),
-      query: q.query,
-      smscId: q.smscId,
+      ...this.messageFilters(q, this.exportLimits()),
+      // This report is, by definition, the delivery-receipt rows.
       direction: 'DLR',
       allowedSmscIds: await this.tenantSmscScope(r),
     });
@@ -1382,46 +1501,36 @@ export class ReadModelsController {
     @Query() q: any,
     @Res() response?: any,
   ) {
+    // Same parser as the grid and the CSV export — see parseMessageFilters.
+    const filters: MessageFilters = this.messageFilters(q, this.exportLimits());
     const probe = await this.sqlbox.probe();
-    const limit = boundedInt(
-      q.limit,
-      'limit',
-      1,
-      Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000),
-      500,
-    );
     const page = probe.available
-      ? await this.sqlbox.list({
-          limit,
-          cursor: q.cursor
-            ? boundedInt(q.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0)
-            : undefined,
-          query: q.query,
-          status: q.status,
-          smscId: q.smscId,
-          direction: q.direction,
-          allowedSmscIds: await this.tenantSmscScope(r),
-        })
+      ? await this.sqlbox.list({ ...filters, allowedSmscIds: await this.tenantSmscScope(r) })
       : { items: [] as Array<Record<string, unknown>>, nextCursor: null };
     await sendExport(
       this.exporter!,
       response,
       'pdf',
-      { items: page.items, total: page.items.length, limit, offset: 0 },
+      { items: page.items, total: page.items.length, limit: filters.limit ?? 500, offset: 0 },
       [
         { key: 'id', header: 'ID' },
         { key: 'timestamp', header: 'Timestamp', weight: 2 },
         { key: 'direction', header: 'Dir' },
-        { key: 'status', header: 'Status' },
+        { key: 'deliveryStatus', header: 'Delivery' },
         { key: 'sender', header: 'Sender', weight: 2 },
         { key: 'receiver', header: 'Receiver', weight: 2 },
         { key: 'smscId', header: 'SMSC' },
+        { key: 'segments', header: 'Parts' },
+        { key: 'coding', header: 'DCS' },
         { key: 'externalRef', header: 'External ref', weight: 2 },
         { key: 'text', header: 'Text', weight: 3 },
       ],
       'Messages',
       r.principal!.username ?? r.principal!.userId,
-      describeFilters(q),
+      // The applied filter set, not the raw query string: what the reader needs
+      // is which rows this page is a subset of.
+      describeMessageFilters(filters) ??
+        (probe.available ? undefined : 'SQLBox unavailable — no rows could be read'),
     );
   }
 }

@@ -1,4 +1,10 @@
-import { AlertCorrelationService } from './alert-correlation.service';
+import {
+  ALERT_DEDUP_ESCALATION_SQL,
+  AlertCorrelationService,
+  isSeverityEscalation,
+  readAlertUpsert,
+  severityRank,
+} from './alert-correlation.service';
 
 const service = new AlertCorrelationService();
 
@@ -40,5 +46,54 @@ describe('AlertCorrelationService.dedupeIfOpen', () => {
     const client: any = { query: jest.fn(async () => ({ rows: [] })) };
     const result = await service.dedupeIfOpen(client, '1', 'rule:-:smsc:carrier-b:kind:x');
     expect(result).toEqual({ deduped: false });
+  });
+});
+
+describe('alert dedup escalation (item 4)', () => {
+  it('ranks severities so a worse observation is recognisable', () => {
+    expect(severityRank('critical')).toBeGreaterThan(severityRank('warning'));
+    expect(severityRank('warning')).toBeGreaterThan(severityRank('info'));
+    expect(severityRank(undefined)).toBe(0);
+    // The bind case the gap report calls out: connecting -> disconnected.
+    expect(isSeverityEscalation('warning', 'critical')).toBe(true);
+    expect(isSeverityEscalation('critical', 'warning')).toBe(false);
+    expect(isSeverityEscalation('warning', 'warning')).toBe(false);
+  });
+
+  it('re-sharpens summary and severity only when the condition got worse', () => {
+    // The upsert updates severity/summary...
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('severity = EXCLUDED.severity');
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('summary = EXCLUDED.summary');
+    // ...records that it escalated, and keeps the old wording in details...
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('previous_severity = alert_instances.severity');
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('escalated_at = now()');
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('escalatedFrom');
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain('dedup_count = alert_instances.dedup_count + 1');
+    // ...but only when the new severity outranks the stored one, so a flapping
+    // condition cannot rewrite the incident on every poll.
+    expect(ALERT_DEDUP_ESCALATION_SQL).toMatch(/WHERE \(CASE EXCLUDED\.severity/);
+  });
+
+  it('opens a new notification cycle so the sharpened alert pages again', () => {
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain(
+      'escalation_cycle = alert_instances.escalation_cycle + 1',
+    );
+    // A lifecycle-suppressed alert keeps its silence; anything else re-pages.
+    expect(ALERT_DEDUP_ESCALATION_SQL).toContain("WHEN alert_instances.status = 'suppressed'");
+  });
+
+  it('distinguishes a new incident from a sharpened one', () => {
+    expect(readAlertUpsert({ rows: [{ inserted: true, id: 'a1' }] })).toEqual({
+      opened: true,
+      escalated: false,
+      alertId: 'a1',
+    });
+    expect(readAlertUpsert({ rows: [{ inserted: false, id: 'a1' }] })).toEqual({
+      opened: false,
+      escalated: true,
+      alertId: 'a1',
+    });
+    // No row at all: the duplicate was correctly ignored.
+    expect(readAlertUpsert({ rows: [] })).toEqual({ opened: false, escalated: false });
   });
 });

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
+import { ALERT_DEDUP_ESCALATION_SQL } from '../monitoring-depth/alert-correlation.service';
 
 export interface AnomalyFinding {
   smscEngineId: string;
@@ -154,12 +155,12 @@ export class AnomalyDetectionService {
   ): Promise<void> {
     const dedupKey = `anomaly:${finding.kind}:${finding.smscEngineId}`;
     // The partial unique index (migration 014) makes this idempotent while an
-    // instance for the same anomaly is still open/acknowledged.
+    // instance for the same anomaly is still open/acknowledged; a worsening
+    // finding re-sharpens the open alert instead of leaving stale wording.
     await client.query(
       `INSERT INTO alert_instances (tenant_id, rule_id, status, severity, source, dedup_key, summary, details)
        VALUES ($1, NULL, 'open', $2, 'anomaly', $3, $4, $5)
-       ON CONFLICT (tenant_id, dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL
-       DO NOTHING`,
+       ${ALERT_DEDUP_ESCALATION_SQL}`,
       [
         tenantId,
         finding.severity,

@@ -49,7 +49,10 @@ function makeScheduler(options: {
       if (sql.includes('FROM alert_rules')) return { rows: options.rules ?? [] };
       if (sql.includes('FROM maintenance_windows')) return { rows: options.windows ?? [] };
       if (sql.includes('FROM metric_samples')) return { rows: options.samples ?? [] };
-      if (sql.includes('INSERT INTO alert_instances')) return { rows: [], rowCount: 1 };
+      // See ALERT_DEDUP_ESCALATION_SQL: the insert returns whether the row was
+      // newly inserted (true) or an existing open alert was sharpened (false).
+      if (sql.includes('INSERT INTO alert_instances'))
+        return { rows: [{ inserted: true, id: 'a1' }], rowCount: 1 };
       if (sql.startsWith('UPDATE alert_instances')) return { rows: [], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     }),

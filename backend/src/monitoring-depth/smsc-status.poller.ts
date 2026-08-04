@@ -11,6 +11,7 @@ import {
   toBindState,
   toSmscHealthState,
 } from './engine-bind-state';
+import { ALERT_DEDUP_ESCALATION_SQL, readAlertUpsert } from './alert-correlation.service';
 
 // Namespace for the per-tenant transaction-level advisory lock (arbitrary).
 const POLLER_LOCK_NAMESPACE = 0x1e3f;
@@ -61,6 +62,8 @@ export interface TenantPollResult {
   binds: number;
   transitions: number;
   alertsOpened: number;
+  /** Open alerts re-sharpened because the condition got worse (see item 4). */
+  alertsEscalated: number;
   alertsResolved: number;
   /** True when the advisory lock was held elsewhere and the cycle was skipped. */
   skipped: boolean;
@@ -221,6 +224,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
             binds: 0,
             transitions: 0,
             alertsOpened: 0,
+            alertsEscalated: 0,
             alertsResolved: 0,
             skipped: true,
           } satisfies TenantPollResult;
@@ -244,6 +248,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
       binds: 0,
       transitions: 0,
       alertsOpened: 0,
+      alertsEscalated: 0,
       alertsResolved: 0,
       skipped: true,
     };
@@ -293,6 +298,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
         binds: binds.length,
         transitions: 0,
         alertsOpened: 0,
+        alertsEscalated: 0,
         alertsResolved: 0,
         skipped: false,
       };
@@ -301,12 +307,14 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
         // We did not observe the binds at all. Marking them dead would be a
         // guess; raise one honest engine-level alert instead.
         await this.sample(client, tenantId, ENGINE_METRIC_NAMES.engineUp, 0, {}, now);
-        result.alertsOpened += await this.openAlert(client, tenantId, {
+        const unreachable = await this.openAlert(client, tenantId, {
           dedupKey: ENGINE_UNREACHABLE_DEDUP,
           severity: 'critical',
           summary: `SMS engine unreachable: ${snapshot.source.detail}`,
           details: { kind: 'engine_unreachable', detail: snapshot.source.detail },
         });
+        result.alertsOpened += unreachable.opened ? 1 : 0;
+        result.alertsEscalated += unreachable.escalated ? 1 : 0;
         await this.pruneIfDue(client, now);
         return result;
       }
@@ -319,6 +327,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
         const outcome = await this.reconcileBind(client, tenantId, definition, bind, now);
         result.transitions += outcome.transitions;
         result.alertsOpened += outcome.alertsOpened;
+        result.alertsEscalated += outcome.alertsEscalated;
         result.alertsResolved += outcome.alertsResolved;
       }
 
@@ -334,11 +343,17 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
     definition: SmscDefinitionRow,
     bind: EngineBindSnapshot,
     now: Date,
-  ): Promise<{ transitions: number; alertsOpened: number; alertsResolved: number }> {
+  ): Promise<{
+    transitions: number;
+    alertsOpened: number;
+    alertsEscalated: number;
+    alertsResolved: number;
+  }> {
     const state = toBindState(bind.status);
     const label = definition.name || bind.name || bind.engineId;
     let transitions = 0;
     let alertsOpened = 0;
+    let alertsEscalated = 0;
     let alertsResolved = 0;
 
     await client.query(
@@ -454,7 +469,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
     if (isHealthy(state)) {
       alertsResolved += await this.resolveAlert(client, bindDedup, now);
     } else if (consecutive >= this.confirmationsFor(state)) {
-      alertsOpened += await this.openAlert(client, tenantId, {
+      const bindAlert = await this.openAlert(client, tenantId, {
         dedupKey: bindDedup,
         severity: severityFor(state),
         summary: `SMSC bind ${label} is ${state} (engine reports '${bind.status}')`,
@@ -469,6 +484,10 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
           failed: bind.failed,
         },
       });
+      alertsOpened += bindAlert.opened ? 1 : 0;
+      // connecting -> disconnected is the canonical case: the same dedup key,
+      // a worse severity, so the open alert is re-worded instead of left stale.
+      alertsEscalated += bindAlert.escalated ? 1 : 0;
     }
 
     // A bind can stay nominally "bound" while the carrier rejects everything;
@@ -498,7 +517,7 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
         newValue: { failed: bind.failed },
         reason: `Bind ${label} failure counter rose by ${jump}`,
       });
-      alertsOpened += await this.openAlert(client, tenantId, {
+      const failureAlert = await this.openAlert(client, tenantId, {
         dedupKey: `engine:bind-failures:${bind.engineId}`,
         severity: 'warning',
         summary: `SMSC bind ${label} failure counter rose by ${jump} (now ${bind.failed})`,
@@ -510,9 +529,11 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
           to: bind.failed,
         },
       });
+      alertsOpened += failureAlert.opened ? 1 : 0;
+      alertsEscalated += failureAlert.escalated ? 1 : 0;
     }
 
-    return { transitions, alertsOpened, alertsResolved };
+    return { transitions, alertsOpened, alertsEscalated, alertsResolved };
   }
 
   private async recordBindSamples(
@@ -609,25 +630,27 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
       summary: string;
       details: Record<string, unknown>;
     },
-  ): Promise<number> {
+  ): Promise<{ opened: boolean; escalated: boolean }> {
     // The partial unique index from migration 014 makes this idempotent while
     // an instance for the same condition is still open/acknowledged, so a bind
-    // that stays down cannot generate an alert per poll.
+    // that stays down cannot generate an alert per poll. When the *same*
+    // condition degrades further the open alert is re-sharpened rather than
+    // left with its first wording — see ALERT_DEDUP_ESCALATION_SQL.
     const result = await client.query(
       `INSERT INTO alert_instances (tenant_id, rule_id, status, severity, source, dedup_key, summary, details)
        VALUES ($1, NULL, 'open', $2, 'engine', $3, $4, $5)
-       ON CONFLICT (tenant_id, dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL
-       DO NOTHING`,
+       ${ALERT_DEDUP_ESCALATION_SQL}`,
       [tenantId, alert.severity, alert.dedupKey, alert.summary, JSON.stringify(alert.details)],
     );
-    return result.rowCount ?? 0;
+    return readAlertUpsert(result);
   }
 
   /** Resolves any open alert for the dedup key. Returns how many were closed. */
   private async resolveAlert(client: PoolClient, dedupKey: string, now: Date): Promise<number> {
+    // 'closed' is an operator's terminal decision; auto-resolution leaves it be.
     const result = await client.query(
       `UPDATE alert_instances SET status = 'resolved', resolved_at = $2
-        WHERE dedup_key = $1 AND status <> 'resolved'`,
+        WHERE dedup_key = $1 AND status NOT IN ('resolved', 'closed')`,
       [dedupKey, now],
     );
     return result.rowCount ?? 0;

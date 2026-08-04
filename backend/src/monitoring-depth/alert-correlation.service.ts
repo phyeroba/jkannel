@@ -15,6 +15,83 @@ export interface DedupDecision {
 
 const DEFAULT_WINDOW_MINUTES = 60;
 
+/** Ordering used everywhere a severity is compared. */
+export const SEVERITY_RANK: Readonly<Record<string, number>> = {
+  info: 1,
+  warning: 2,
+  critical: 3,
+};
+
+/** Rank of a severity string; unknown values rank lowest. */
+export function severityRank(severity?: string | null): number {
+  return SEVERITY_RANK[String(severity ?? '').toLowerCase()] ?? 0;
+}
+
+/** True when `next` describes a worse condition than `current`. */
+export function isSeverityEscalation(current?: string | null, next?: string | null): boolean {
+  return severityRank(next) > severityRank(current);
+}
+
+const SEVERITY_CASE = (column: string): string =>
+  `(CASE ${column} WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 WHEN 'info' THEN 1 ELSE 0 END)`;
+
+/**
+ * The `ON CONFLICT` tail shared by every `INSERT INTO alert_instances` path
+ * (rule evaluator, SMSC poller, anomaly detector).
+ *
+ * It used to be `DO NOTHING`, which meant a deduplicated alert kept the wording
+ * and severity of the *first* observation: a bind that went `connecting` ->
+ * `disconnected` still read "is connecting" at warning severity while the link
+ * was hard down. Now a re-observation that is genuinely worse re-sharpens the
+ * open alert — new summary, new severity, `previous_severity` and
+ * `escalated_at` recorded, `dedup_count` incremented, and the old wording kept
+ * in `details.escalatedFrom` so the history is not lost. A re-observation that
+ * is not worse still changes nothing (the `WHERE` below), so a flapping
+ * condition cannot rewrite the incident every poll.
+ *
+ * Because `escalated_at` moves, AlertEscalationService restarts the escalation
+ * chain from step 0 for the sharpened alert: the people already told about a
+ * warning are told again when it becomes critical. A lifecycle-suppressed alert
+ * keeps its suppression (the operator asked for silence) but still gets the
+ * corrected wording; a closed one is reopened, because the condition came back.
+ *
+ * `RETURNING (xmax = 0) AS inserted` distinguishes a fresh incident from a
+ * sharpened one: xmax is zero only on the row the INSERT actually inserted.
+ */
+export const ALERT_DEDUP_ESCALATION_SQL = `ON CONFLICT (tenant_id, dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL
+       DO UPDATE SET
+         severity = EXCLUDED.severity,
+         summary = EXCLUDED.summary,
+         previous_severity = alert_instances.severity,
+         escalated_at = now(),
+         escalation_cycle = alert_instances.escalation_cycle + 1,
+         dedup_count = alert_instances.dedup_count + 1,
+         details = alert_instances.details || EXCLUDED.details ||
+                   jsonb_build_object('escalatedFrom', jsonb_build_object(
+                     'severity', alert_instances.severity,
+                     'summary', alert_instances.summary,
+                     'at', now())),
+         status = CASE WHEN alert_instances.status = 'closed' THEN 'open' ELSE alert_instances.status END,
+         closed_at = CASE WHEN alert_instances.status = 'closed' THEN NULL ELSE alert_instances.closed_at END,
+         resolved_at = CASE WHEN alert_instances.status = 'closed' THEN NULL ELSE alert_instances.resolved_at END,
+         notification_state = CASE WHEN alert_instances.status = 'suppressed'
+                                   THEN alert_instances.notification_state ELSE 'pending' END
+       WHERE ${SEVERITY_CASE('EXCLUDED.severity')} > ${SEVERITY_CASE('alert_instances.severity')}
+       RETURNING (xmax = 0) AS inserted, id, severity, previous_severity`;
+
+/**
+ * Reads the outcome of an insert that used {@link ALERT_DEDUP_ESCALATION_SQL}.
+ * `opened` means a new incident; `escalated` means an existing open one was
+ * re-sharpened; neither means the duplicate was correctly ignored.
+ */
+export function readAlertUpsert(result: {
+  rows: Array<{ inserted?: boolean; id?: string; severity?: string; previous_severity?: string }>;
+}): { opened: boolean; escalated: boolean; alertId?: string } {
+  const row = result.rows[0];
+  if (!row) return { opened: false, escalated: false };
+  return { opened: row.inserted === true, escalated: row.inserted === false, alertId: row.id };
+}
+
 /**
  * Duplicate suppression and correlation grouping for alerts.
  *

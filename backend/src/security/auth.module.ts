@@ -21,6 +21,8 @@ import { LoginHistoryController } from './identity-login-history.controller';
 import { AuthThrottleService } from './auth-throttle.service';
 import { authThrottleRedisProvider } from './auth-throttle.redis';
 import { AuthThrottleGuard } from './auth-throttle.guard';
+import { SECURITY_SETTINGS_SOURCE, SecurityPolicyService } from './security-policy.service';
+import { PostgresSecuritySettingsRepository } from './security-policy.repository';
 
 @Module({
   controllers: [
@@ -51,6 +53,12 @@ import { AuthThrottleGuard } from './auth-throttle.guard';
     authThrottleRedisProvider,
     AuthThrottleService,
     AuthThrottleGuard,
+    // Makes the System Settings security knobs real: password policy, lockout,
+    // token lifetime and session idle/max/concurrency are read from the tenant's
+    // settings at runtime instead of being hardcoded literals.
+    PostgresSecuritySettingsRepository,
+    { provide: SECURITY_SETTINGS_SOURCE, useExisting: PostgresSecuritySettingsRepository },
+    SecurityPolicyService,
   ],
   exports: [
     PasswordHasher,
@@ -59,6 +67,7 @@ import { AuthThrottleGuard } from './auth-throttle.guard';
     AuthGuard,
     PermissionsGuard,
     AuthThrottleService,
+    SecurityPolicyService,
   ],
 })
 export class AuthModule {}

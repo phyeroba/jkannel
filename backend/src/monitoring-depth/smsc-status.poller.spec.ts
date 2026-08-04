@@ -31,7 +31,10 @@ function makeClient(options: {
       if (sql.includes('FROM smsc_definitions')) return { rows: options.definitions ?? [] };
       if (sql.includes('FROM smsc_bind_state'))
         return { rows: options.previousState ? [options.previousState] : [] };
-      if (sql.includes('INSERT INTO alert_instances')) return { rows: [], rowCount: 1 };
+      // The insert now RETURNS (xmax = 0) AS inserted so the caller can tell a
+      // new incident from a re-sharpened one; a fresh insert reports inserted.
+      if (sql.includes('INSERT INTO alert_instances'))
+        return { rows: [{ inserted: true, id: 'a1' }], rowCount: 1 };
       if (sql.startsWith('UPDATE alert_instances')) return { rows: [], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     }),

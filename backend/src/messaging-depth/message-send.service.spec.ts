@@ -1,6 +1,8 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException } from '@nestjs/common';
+import { GatewayRateLimiter } from '../api-gateway/gateway-rate-limiter';
 import { CustomerCreditService } from '../customers-depth/customer-credit.service';
 import { CustomerQuotaService } from '../customers-depth/customer-quota.service';
+import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { RouteResolutionService } from '../routing-depth/route-resolution.service';
 import { RoutingDepthRepository } from '../routing-depth/routing-depth.repository';
 import { MessageBlocklistService } from './message-blocklist.service';
@@ -57,6 +59,26 @@ interface StackFixture {
   quotas?: Array<{ period: string; limit_count: number; used_count: number }>;
   balance?: number;
   submit?: jest.Mock;
+  /** customers.rate_limit_per_min for the fixture customer; null = unlimited. */
+  rateLimitPerMin?: number | null;
+  /** null models an absent/unreachable Redis, which must FAIL OPEN. */
+  redis?: { eval: jest.Mock } | null;
+}
+
+/**
+ * In-memory stand-in for the Redis the rate limiter uses: the same fixed-window
+ * INCR the Lua script performs, so the limiter's own arithmetic is exercised.
+ */
+function fakeRedis() {
+  const counters = new Map<string, number>();
+  return {
+    counters,
+    eval: jest.fn(async (_script: string, _numKeys: number, key: string) => {
+      const next = (counters.get(String(key)) ?? 0) + 1;
+      counters.set(String(key), next);
+      return [next, 60];
+    }),
+  };
 }
 
 /**
@@ -130,6 +152,8 @@ function makeStack(fixture: StackFixture) {
         const found = smscs.find((s) => s.engineId === params[0]);
         return { rows: found ? [{ id: found.id }] : [] };
       }
+      if (text.includes('rate_limit_per_min FROM customers'))
+        return { rows: [{ rate_limit_per_min: fixture.rateLimitPerMin ?? null }] };
       if (text.includes('FROM customers'))
         return {
           rows:
@@ -229,6 +253,7 @@ function makeStack(fixture: StackFixture) {
       jest.fn(async () => ({ sqlId: '900', status: 'queued', source: 'kamex-sqlbox' })),
   };
 
+  const redis = fixture.redis === undefined ? fakeRedis() : fixture.redis;
   const service = new MessageSendService(
     database,
     sqlbox,
@@ -238,8 +263,9 @@ function makeStack(fixture: StackFixture) {
       new CustomerCreditService({} as never),
     ),
     new MessageBlocklistService(database),
+    new CustomerRateLimitService(new GatewayRateLimiter(redis)),
   );
-  return { service, sqlbox, state, sql };
+  return { service, sqlbox, state, sql, redis };
 }
 
 const message = { sender: 'JKANNEL', receiver: '+256700000000', text: 'hello' };
@@ -572,5 +598,89 @@ describe('MessageSendService — recipient blocklist (evaluated before routing)'
     await expect(
       service.send(actor, { ...message, receiver: '00256700000000', channel: 'console' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('MessageSendService — per-customer rate limit (customers.rate_limit_per_min)', () => {
+  const routes = [routeRow({ id: 'r-ug', name: 'Uganda', target_smsc_id: 'smsc-a' })];
+  const send = (service: MessageSendService) =>
+    service.send(actor, { ...message, customerId: 'cust-1', channel: 'api' });
+
+  it('allows sends under the cap', async () => {
+    const { service, sqlbox } = makeStack({ routes, rateLimitPerMin: 3 });
+    await send(service);
+    await send(service);
+    await send(service);
+    expect(sqlbox.submit).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses the send with a 429 once the cap is exceeded', async () => {
+    const { service, sqlbox } = makeStack({ routes, rateLimitPerMin: 2 });
+    await send(service);
+    await send(service);
+
+    await expect(send(service)).rejects.toBeInstanceOf(HttpException);
+    try {
+      await send(service);
+    } catch (error) {
+      expect((error as HttpException).getStatus()).toBe(429);
+    }
+    // The refusal is a refusal: nothing was spooled beyond the two allowed.
+    expect(sqlbox.submit).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses BEFORE the blocklist, the router or any entitlement is consulted', async () => {
+    const { service, sql, state } = makeStack({
+      routes,
+      rateLimitPerMin: 1,
+      quotas: [{ period: 'daily', limit_count: 100, used_count: 0 }],
+    });
+    await send(service);
+    sql.log.length = 0;
+
+    await expect(send(service)).rejects.toBeInstanceOf(HttpException);
+    expect(sql.log.some((s) => s.includes('FROM messaging_blocklist'))).toBe(false);
+    expect(sql.log.some((s) => s.includes('FROM routing_rules'))).toBe(false);
+    // No quota was burned by a send that never happened.
+    expect(state.quotas[0].used_count).toBe('1');
+  });
+
+  it('still records the refusal so an operator can see it', async () => {
+    const { service, state } = makeStack({ routes, rateLimitPerMin: 1 });
+    await send(service);
+    await expect(send(service)).rejects.toBeInstanceOf(HttpException);
+
+    const rejected = state.decisions.filter((d) => d.outcome === 'rejected');
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toContain('Customer rate limit exceeded');
+  });
+
+  it('does not limit a send with no customer attributed', async () => {
+    const { service, sqlbox, redis } = makeStack({ routes, rateLimitPerMin: 1 });
+    for (let attempt = 0; attempt < 4; attempt += 1)
+      await service.send(actor, { ...message, channel: 'console' });
+    expect(sqlbox.submit).toHaveBeenCalledTimes(4);
+    expect(redis!.eval).not.toHaveBeenCalled();
+  });
+
+  it('does not limit a customer with no ceiling configured', async () => {
+    const { service, sqlbox, redis } = makeStack({ routes, rateLimitPerMin: null });
+    for (let attempt = 0; attempt < 4; attempt += 1) await send(service);
+    expect(sqlbox.submit).toHaveBeenCalledTimes(4);
+    expect(redis!.eval).not.toHaveBeenCalled();
+  });
+
+  it('FAILS OPEN when Redis is unavailable, rather than refusing live traffic', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { service, sqlbox } = makeStack({ routes, rateLimitPerMin: 1, redis: null });
+      for (let attempt = 0; attempt < 5; attempt += 1) await send(service);
+      expect(sqlbox.submit).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+        'customer rate limit failing open',
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

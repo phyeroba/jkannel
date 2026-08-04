@@ -220,7 +220,7 @@ describe('AuthService', () => {
       id: 'u1',
       tenantId: '1',
       username: 'operator',
-      passwordHash: await hasher.hash('correct horse battery staple'),
+      passwordHash: await hasher.hash('Correct horse battery staple 1'),
       status: 'active',
       failedLoginCount: 0,
       roles: ['operator'],
@@ -229,7 +229,7 @@ describe('AuthService', () => {
     service = new AuthService(store, store, hasher, new TokenService());
   });
   it('logs in, rotates refresh token, and revokes session', async () => {
-    const first = await service.login('acme', 'operator', 'correct horse battery staple');
+    const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
     expect(first.accessToken).toBeTruthy();
     const next = await service.refresh(first.refreshToken);
     expect(next.refreshToken).not.toBe(first.refreshToken);
@@ -260,9 +260,9 @@ describe('AuthService', () => {
     // A further attempt while locked — even with the CORRECT password — must be
     // rejected without touching the counter or extending the window, otherwise a
     // legitimate user could never recover from a lockout.
-    await expect(service.login('acme', 'operator', 'correct horse battery staple')).rejects.toThrow(
-      'Invalid credentials',
-    );
+    await expect(
+      service.login('acme', 'operator', 'Correct horse battery staple 1'),
+    ).rejects.toThrow('Invalid credentials');
     expect(store.credential!.lockedUntil).toBe(lockedUntil);
     expect(store.credential!.failedLoginCount).toBe(countAtLock);
     expect(store.events).toHaveLength(eventsAtLock + 1);
@@ -280,7 +280,7 @@ describe('AuthService', () => {
     // The correct password must now work. Previously the stale 'locked' status
     // failed the "account is not active" check forever, so five bad guesses from
     // an unauthenticated attacker disabled any account permanently.
-    const session = await service.login('acme', 'operator', 'correct horse battery staple');
+    const session = await service.login('acme', 'operator', 'Correct horse battery staple 1');
     expect(session.accessToken).toBeTruthy();
     // A successful login clears the lock entirely.
     expect(store.credential!.status).toBe('active');
@@ -289,9 +289,9 @@ describe('AuthService', () => {
   });
   it('still rejects a genuinely inactive account', async () => {
     store.credential!.status = 'pending';
-    await expect(service.login('acme', 'operator', 'correct horse battery staple')).rejects.toThrow(
-      'Account is not active',
-    );
+    await expect(
+      service.login('acme', 'operator', 'Correct horse battery staple 1'),
+    ).rejects.toThrow('Account is not active');
   });
 
   describe('password reset', () => {
@@ -324,13 +324,13 @@ describe('AuthService', () => {
         lastSeenAt: new Date(),
       };
       const { devToken } = await service.requestPasswordReset('acme', 'operator');
-      const result = await service.confirmPasswordReset(devToken!, 'brand new password 1');
+      const result = await service.confirmPasswordReset(devToken!, 'Brand new password 1');
       expect(result).toEqual({ reset: true });
       expect(store.session.revokedAt).toBeInstanceOf(Date);
       expect(store.resetTokens[0].usedAt).toBeInstanceOf(Date);
       expect(store.events.at(-1)?.action).toBe('password.reset.completed');
       await expect(
-        service.confirmPasswordReset(devToken!, 'another good password'),
+        service.confirmPasswordReset(devToken!, 'Another good password 2'),
       ).rejects.toThrow(BadRequestException);
     });
     it('rejects a short new password', async () => {
@@ -340,7 +340,7 @@ describe('AuthService', () => {
       );
     });
     it('rejects an unknown token', async () => {
-      await expect(service.confirmPasswordReset('nope', 'brand new password 1')).rejects.toThrow(
+      await expect(service.confirmPasswordReset('nope', 'Brand new password 1')).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -356,7 +356,7 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() - 1000),
       });
       await expect(
-        service.confirmPasswordReset('expired-token', 'brand new password 1'),
+        service.confirmPasswordReset('expired-token', 'Brand new password 1'),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -368,7 +368,7 @@ describe('AuthService', () => {
       store.invitations.set(hash('invite-1'), { id: 'inv-1', tenantId: '1', roleId: 'role-1' });
     });
     it('creates an active user, assigns the role, and audits acceptance', async () => {
-      const result = await service.acceptInvitation('invite-1', 'newoperator', 'valid password 12');
+      const result = await service.acceptInvitation('invite-1', 'newoperator', 'Valid password 12');
       expect(result).toEqual({ accepted: true });
       expect(store.createdUsers).toEqual([
         { username: 'newoperator', tenantId: '1', roleId: 'role-1' },
@@ -377,7 +377,7 @@ describe('AuthService', () => {
     });
     it('rejects an invalid or expired invitation', async () => {
       await expect(
-        service.acceptInvitation('missing', 'newoperator', 'valid password 12'),
+        service.acceptInvitation('missing', 'newoperator', 'Valid password 12'),
       ).rejects.toThrow(BadRequestException);
     });
     it('rejects a short password before touching the store', async () => {
@@ -389,7 +389,7 @@ describe('AuthService', () => {
     it('surfaces a duplicate username as a conflict', async () => {
       store.takenUsernames.add('newoperator');
       await expect(
-        service.acceptInvitation('invite-1', 'newoperator', 'valid password 12'),
+        service.acceptInvitation('invite-1', 'newoperator', 'Valid password 12'),
       ).rejects.toThrow(ConflictException);
     });
   });
@@ -405,7 +405,7 @@ describe('AuthService', () => {
     });
     it('rejects login without a code and reports mfaRequired', async () => {
       const error = await service
-        .login('acme', 'operator', 'correct horse battery staple')
+        .login('acme', 'operator', 'Correct horse battery staple 1')
         .catch((caught) => caught);
       expect(error).toBeInstanceOf(UnauthorizedException);
       expect(error.getResponse()).toMatchObject({ mfaRequired: true });
@@ -416,7 +416,7 @@ describe('AuthService', () => {
       const result = await service.login(
         'acme',
         'operator',
-        'correct horse battery staple',
+        'Correct horse battery staple 1',
         {},
         { totp: token },
       );
@@ -434,7 +434,7 @@ describe('AuthService', () => {
       const result = await service.login(
         'acme',
         'operator',
-        'correct horse battery staple',
+        'Correct horse battery staple 1',
         {},
         { recoveryCode: code },
       );
@@ -443,7 +443,7 @@ describe('AuthService', () => {
     });
     it('rejects an incorrect TOTP code', async () => {
       await expect(
-        service.login('acme', 'operator', 'correct horse battery staple', {}, { totp: '000000' }),
+        service.login('acme', 'operator', 'Correct horse battery staple 1', {}, { totp: '000000' }),
       ).rejects.toThrow(UnauthorizedException);
     });
     // G12/3 — the MFA-failure branch used to skip recordFailedLogin entirely, so
@@ -451,7 +451,13 @@ describe('AuthService', () => {
     it('counts a wrong TOTP code towards lockout', async () => {
       for (let i = 0; i < 5; i++)
         await expect(
-          service.login('acme', 'operator', 'correct horse battery staple', {}, { totp: '000000' }),
+          service.login(
+            'acme',
+            'operator',
+            'Correct horse battery staple 1',
+            {},
+            { totp: '000000' },
+          ),
         ).rejects.toThrow(UnauthorizedException);
       expect(store.credential!.failedLoginCount).toBe(5);
       expect(store.credential!.lockedUntil).toBeInstanceOf(Date);
@@ -461,7 +467,7 @@ describe('AuthService', () => {
         service.login(
           'acme',
           'operator',
-          'correct horse battery staple',
+          'Correct horse battery staple 1',
           {},
           { totp: generateTotp(secret) },
         ),
@@ -472,7 +478,7 @@ describe('AuthService', () => {
         service.login(
           'acme',
           'operator',
-          'correct horse battery staple',
+          'Correct horse battery staple 1',
           {},
           { recoveryCode: 'aaaaa-bbbbb' },
         ),
@@ -481,7 +487,7 @@ describe('AuthService', () => {
     });
     it('does not penalise the first leg of a normal MFA login (no code supplied)', async () => {
       await expect(
-        service.login('acme', 'operator', 'correct horse battery staple'),
+        service.login('acme', 'operator', 'Correct horse battery staple 1'),
       ).rejects.toThrow(UnauthorizedException);
       expect(store.credential!.failedLoginCount).toBe(0);
       expect(store.events.at(-1)?.reason).toBe('mfa_required');
@@ -507,7 +513,7 @@ describe('AuthService', () => {
       );
     });
     it('records nothing for a successful login', async () => {
-      await service.login('acme', 'operator', 'correct horse battery staple', {
+      await service.login('acme', 'operator', 'Correct horse battery staple 1', {
         ipAddress: '203.0.113.7',
       });
       expect(redis.counters.size).toBe(0);
@@ -549,7 +555,7 @@ describe('AuthService', () => {
 
   describe('refresh token reuse', () => {
     it('revokes the family when a rotated refresh token is replayed', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       const next = await service.refresh(first.refreshToken);
       await expect(service.refresh(first.refreshToken)).rejects.toThrow(
         'Refresh token reuse detected',
@@ -575,7 +581,7 @@ describe('AuthService', () => {
       };
 
     it('rejects a refresh once the account has been disabled and kills the family', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       store.credential!.status = 'disabled';
       await expect(service.refresh(first.refreshToken)).rejects.toThrow(
         'Account is no longer active',
@@ -593,7 +599,7 @@ describe('AuthService', () => {
     it.each(['archived', 'deleted', 'pending', 'expired'] as const)(
       'rejects a refresh for a %s account',
       async (status) => {
-        const first = await service.login('acme', 'operator', 'correct horse battery staple');
+        const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
         store.credential!.status = status;
         await expect(service.refresh(first.refreshToken)).rejects.toThrow(
           'Account is no longer active',
@@ -602,7 +608,7 @@ describe('AuthService', () => {
     );
 
     it('rejects a refresh when the user row has vanished', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       store.credential = undefined;
       await expect(service.refresh(first.refreshToken)).rejects.toThrow(
         'Account is no longer active',
@@ -614,7 +620,7 @@ describe('AuthService', () => {
       // Lockout is attacker-triggerable from an unauthenticated endpoint, so
       // treating it as "no longer a user" would let anyone terminate a victim's
       // sessions with five bad guesses.
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       store.credential!.status = 'locked';
       await expect(service.refresh(first.refreshToken)).resolves.toMatchObject({
         tokenType: 'Bearer',
@@ -622,7 +628,7 @@ describe('AuthService', () => {
     });
 
     it('picks up a revoked permission instead of replaying stale claims', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       expect(claimsOf(first.accessToken).permissions).toEqual(['dashboard.view']);
       // An administrator strips the permission and removes the role.
       store.credential!.permissions = [];
@@ -636,7 +642,7 @@ describe('AuthService', () => {
     });
 
     it('picks up a newly granted permission and a renamed username', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       store.credential!.permissions = ['dashboard.view', 'smsc.manage'];
       store.credential!.roles = ['operator', 'admin'];
       store.credential!.username = 'operator2';
@@ -647,7 +653,7 @@ describe('AuthService', () => {
     });
 
     it('rejects a refresh whose session belongs to another tenant', async () => {
-      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      const first = await service.login('acme', 'operator', 'Correct horse battery staple 1');
       store.credential!.tenantId = '999';
       await expect(service.refresh(first.refreshToken)).rejects.toThrow(
         'Account is no longer active',
@@ -665,12 +671,12 @@ describe('AuthService', () => {
     it('rejects reuse of the current password', async () => {
       const { devToken } = await service.requestPasswordReset('acme', 'operator');
       await expect(
-        service.confirmPasswordReset(devToken!, 'correct horse battery staple'),
+        service.confirmPasswordReset(devToken!, 'Correct horse battery staple 1'),
       ).rejects.toThrow('New password must differ');
     });
     it('archives the outgoing hash and accepts a fresh password', async () => {
       const { devToken } = await service.requestPasswordReset('acme', 'operator');
-      const result = await service.confirmPasswordReset(devToken!, 'a brand new password');
+      const result = await service.confirmPasswordReset(devToken!, 'A brand new password 2');
       expect(result).toEqual({ reset: true });
       expect(identity.passwordHistory).toHaveLength(1);
     });

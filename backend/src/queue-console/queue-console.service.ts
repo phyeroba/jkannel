@@ -34,6 +34,9 @@ export interface HistoryQuery {
   query?: string;
   /** Delivery status or group, e.g. `failed`, `pending`, `resendable`, `in-flight`. */
   status?: string;
+  /** Inclusive epoch-second bounds on the engine `time` column (from `from`/`to`). */
+  fromEpoch?: number;
+  toEpoch?: number;
 }
 export interface ResendRequest {
   /** Explicit ids (sql_id or foreign_id). Mutually exclusive with `filter`. */
@@ -244,6 +247,10 @@ export class QueueConsoleService {
     const scope = {
       smscId: query.smscId,
       query: query.query,
+      // The counts must describe the same window as the page, or the "12 need
+      // resending" badge would be counting rows the grid is not showing.
+      fromEpoch: query.fromEpoch,
+      toEpoch: query.toEpoch,
       allowedSmscIds: allowed,
       excludeDlr: true,
     };

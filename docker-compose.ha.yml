@@ -22,7 +22,35 @@
 # do NOT touch the running postgres-data / redis-data volumes. They are a
 # self-contained, runnable replication/failover demonstration; to actually cut
 # the app over to them you repoint DATABASE_URL/REDIS_URL (see the README).
+#
+# RESOURCE LIMITS. Every service here carries the same deploy-agnostic caps as
+# the core file (`mem_limit` / `mem_reservation` / `cpus` / `pids_limit` /
+# `ulimits`), because the HA overlay roughly DOUBLES the resident footprint —
+# a second Postgres, a second Redis, three sentinels and a second API node, all
+# on the same ~10 GB co-hosted machine. Anchors cannot cross compose files, so
+# they are redeclared here.
+#
+#   postgres-primary  1024m   postgres-standby  1024m
+#   redis-primary      384m   redis-replica      384m
+#   redis-sentinel-1/2/3  96m each               288m
+#   backend-replica   1024m   reverse-proxy-ha   128m
+#                                       total = 4256m
+#
+# Deliberately tighter than the core stack's equivalents: these are a
+# replication/failover DEMONSTRATION on one host, not the production data path,
+# so they should never be able to squeeze the live single-node services. If you
+# promote this overlay to the real data path, raise postgres-primary to at least
+# the core `postgres` limit (1536m) first.
 # ===========================================================================
+
+x-ha-ulimits-high: &ha-ulimits-high
+  nofile:
+    soft: 65536
+    hard: 65536
+x-ha-ulimits-standard: &ha-ulimits-standard
+  nofile:
+    soft: 16384
+    hard: 16384
 
 services:
   # -------------------------------------------------------------------------
@@ -52,8 +80,25 @@ services:
       - wal_log_hints=on        # required for pg_rewind after a failover
       - -c
       - listen_addresses=*
+      # --- WAL archiving / PITR (opt-in) ---------------------------------
+      # OFF by default, so this overlay behaves exactly as before unless an
+      # operator turns it on. With archiving on, every filled WAL segment is
+      # copied to the postgres-wal-archive volume, which — combined with a
+      # pg_basebackup — is what makes point-in-time recovery possible at all.
+      # The application cannot do PITR for you; this is the server-side half.
+      # Runbook (base backup, retention, restore to a timestamp, and how to
+      # avoid the classic "archive_command fails and WAL fills the disk"
+      # outage): infrastructure/postgres/README.md.
+      - -c
+      - archive_mode=${POSTGRES_ARCHIVE_MODE:-off}
+      - -c
+      - archive_command=${POSTGRES_ARCHIVE_COMMAND:-/bin/true}
+      # Bounds RPO on a quiet database by forcing a segment switch. 0 = off.
+      - -c
+      - archive_timeout=${POSTGRES_ARCHIVE_TIMEOUT:-0}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
+      - postgres-wal-archive:/var/lib/postgresql/wal-archive
       - ./infrastructure/ha/postgres/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
     networks:
       - datanet
@@ -64,6 +109,11 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 1024m
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ha-ulimits-high
     restart: unless-stopped
 
   postgres-standby:
@@ -99,6 +149,13 @@ services:
       start_period: 60s
     security_opt:
       - no-new-privileges:true
+    # pg_basebackup on first boot is I/O-bound, not memory-bound; steady-state
+    # WAL replay needs less than the primary.
+    mem_limit: 1024m
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ha-ulimits-high
     restart: unless-stopped
 
   # -------------------------------------------------------------------------
@@ -119,6 +176,11 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 384m
+    mem_reservation: 96m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ha-ulimits-standard
     restart: unless-stopped
 
   redis-replica:
@@ -139,6 +201,11 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 384m
+    mem_reservation: 96m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ha-ulimits-standard
     restart: unless-stopped
 
   redis-sentinel-1: &redis-sentinel
@@ -166,6 +233,13 @@ services:
       - /data:size=4m,mode=0755
     security_opt:
       - no-new-privileges:true
+    # A sentinel holds no dataset — it monitors and votes. 96m is already
+    # generous; the anchor applies these to all three.
+    mem_limit: 96m
+    mem_reservation: 32m
+    cpus: 0.25
+    pids_limit: 128
+    ulimits: *ha-ulimits-standard
     restart: unless-stopped
 
   redis-sentinel-2:
@@ -248,6 +322,11 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 1024m
+    mem_reservation: 256m
+    cpus: 1.5
+    pids_limit: 512
+    ulimits: *ha-ulimits-high
     restart: unless-stopped
 
   reverse-proxy-ha:
@@ -282,10 +361,20 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ha-ulimits-standard
     restart: unless-stopped
 
 volumes:
   postgres-primary-data:
   postgres-standby-data:
+  # WAL segment archive for point-in-time recovery. Empty unless
+  # POSTGRES_ARCHIVE_MODE=on. See infrastructure/postgres/README.md — the
+  # archive must be replicated OFF this host (or written straight to object
+  # storage by archive_command) or it dies with the primary it protects.
+  postgres-wal-archive:
   redis-ha-primary-data:
   redis-ha-replica-data:

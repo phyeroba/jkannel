@@ -20,6 +20,72 @@ networks:
   obsnet:
     driver: bridge
 
+# ---------------------------------------------------------------------------
+# Resource governance
+# ---------------------------------------------------------------------------
+# This stack is designed to be CO-HOSTED: it shares its host with unrelated
+# workloads. Before this block, no service had any limit at all, so one runaway
+# container (a pg_dump of a large database, an SMPP flood, a leaking Node heap)
+# could take the whole host — including the co-tenant — down with it.
+#
+# WHICH KEYS. These are the deploy-AGNOSTIC keys (`mem_limit`, `mem_reservation`,
+# `cpus`, `pids_limit`, `ulimits`), which `docker compose up` applies directly to
+# the container. The swarm-style `deploy.resources.*` block is IGNORED by
+# `docker compose up` unless you also pass --compatibility, so it is deliberately
+# not used here. Verify with `docker compose --env-file .env.example config`:
+# the keys survive into the rendered model.
+#
+# THE BUDGET (host: ~10 GB RAM, shared with another stack).
+#
+#   Default profile (what `docker compose up -d` starts):
+#     postgres 1536m + backend 1024m + frontend 768m + redis 512m
+#     + reverse-proxy 128m + kamex-validator 128m           = 4096m ceiling
+#     reservations (the soft floor the scheduler keeps free) =  1088m
+#
+#   Optional profiles, each additive:
+#     engine-kamex   bearerbox 512m + smsbox 256m + sqlbox 256m  = 1024m
+#     workers        scheduler 512m + backup-service 1024m       = 1536m
+#     monitoring     prometheus 768m + grafana 512m              = 1280m
+#     observability  loki 512m + promtail 256m                   =  768m
+#     watchdog       64m
+#     tls            reverse-proxy-tls 128m
+#
+# So the default stack cannot exceed ~4 GB, leaving ~6 GB for the co-tenant and
+# the host. Enabling engine-kamex + workers takes it to ~6.7 GB, which is the
+# realistic production shape; adding monitoring AND observability on top would
+# reach ~8.7 GB and is NOT advisable on this host — run those elsewhere or trim
+# their limits. Limits are ceilings, not allocations: idle containers use far
+# less. They are set generously on purpose — a limit that OOM-kills the backend
+# mid-backup is worse than no limit at all.
+#
+# WHY THESE NUMBERS.
+#   postgres 1536m — shared_buffers plus per-connection work_mem; the single
+#     largest legitimate consumer, and the one whose OOM is most damaging.
+#   backend / backup-service 1024m — BackupDrService reads the whole pg_dump
+#     into a Buffer and encrypts it, so peak RSS is ~2x the dump size plus the
+#     Node baseline. This is the headroom for that, not for steady state.
+#   frontend 768m — a Vite dev server with esbuild/rollup in watch mode.
+#   redis 512m — no maxmemory is configured, so this cap is the real backstop.
+#   nginx 128m — worker processes plus a 10m TLS session cache.
+#
+# pids_limit caps fork-bomb blast radius (postgres forks a backend per
+# connection; the Kamex boxes are thread-based). ulimits.nofile is raised
+# because Docker's 1024 default is too low for a socket-heavy gateway, but is
+# bounded rather than unlimited.
+# ---------------------------------------------------------------------------
+x-ulimits-high: &ulimits-high
+  nofile:
+    soft: 65536
+    hard: 65536
+x-ulimits-standard: &ulimits-standard
+  nofile:
+    soft: 16384
+    hard: 16384
+x-ulimits-minimal: &ulimits-minimal
+  nofile:
+    soft: 4096
+    hard: 4096
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -43,6 +109,11 @@ services:
     # risks breaking the live database. See infrastructure/README.md.
     security_opt:
       - no-new-privileges:true
+    mem_limit: 1536m
+    mem_reservation: 512m
+    cpus: 1.5
+    pids_limit: 512
+    ulimits: *ulimits-high
     restart: unless-stopped
 
   redis:
@@ -61,6 +132,11 @@ services:
     # entrypoint chowns /data and drops privileges via gosu on start.
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   backend:
@@ -131,6 +207,11 @@ services:
     # encrypted backup artifacts into /var/lib/jkannel (a bind mount).
     security_opt:
       - no-new-privileges:true
+    mem_limit: 1024m
+    mem_reservation: 256m
+    cpus: 1.5
+    pids_limit: 512
+    ulimits: *ulimits-high
     restart: unless-stopped
 
   frontend:
@@ -164,20 +245,32 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 768m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   # --- Reverse proxy: single HTTP entrypoint in front of frontend + backend ---
-  # nginx-unprivileged runs entirely as the non-root uid 101, listens on 8080
-  # (and optionally 8443 for TLS — see infrastructure/nginx/conf.d/tls.conf.example).
+  # nginx-unprivileged runs entirely as the non-root uid 101 and listens on 8080
+  # inside the container.
+  #
+  # THIS SERVICE IS HTTP-ONLY BY DESIGN. It is the "TLS terminated upstream"
+  # topology: a system nginx (or any other edge) in front of it holds the
+  # certificate and proxies cleartext to ${PROXY_HTTP_PORT}. To have JKANNEL
+  # terminate TLS itself instead, use the profile-gated `reverse-proxy-tls`
+  # service below and leave this one exactly as it is. Both topologies are
+  # documented in infrastructure/nginx/README.md.
   reverse-proxy:
     image: nginxinc/nginx-unprivileged:1.27-alpine
     volumes:
       - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
     ports:
+      # HTTP only. Do NOT add an HTTPS mapping here — a live deployment relies
+      # on this exact port list (see the note above `reverse-proxy-tls`).
       - "${PROXY_HTTP_PORT:-8080}:8080"
-      # Uncomment after enabling TLS (see conf.d/tls.conf.example):
-      # - "${PROXY_HTTPS_PORT:-8443}:8443"
     networks:
       - edge
     depends_on:
@@ -201,6 +294,75 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
+    restart: unless-stopped
+
+  # --- Reverse proxy, TLS-terminating variant (profile: tls) -----------------
+  # The "TLS terminated by JKANNEL" topology: this container holds the
+  # certificate, serves HTTPS on 8443, and 301-redirects plain HTTP to it.
+  #
+  # It is a SEPARATE, PROFILE-GATED service rather than extra ports on
+  # `reverse-proxy` on purpose:
+  #   * `reverse-proxy` is running in production right now behind an upstream
+  #     TLS terminator. Changing its `ports:` could republish a port publicly or
+  #     collide with a co-hosted stack, so its port list is left untouched.
+  #   * Nothing here starts unless you explicitly opt in with `--profile tls`,
+  #     so today's deployment is bit-for-bit unaffected.
+  #
+  #   docker compose --profile tls up -d reverse-proxy-tls
+  #
+  # PORTS. Defaults bind to 127.0.0.1 so that merely enabling the profile can
+  # never expose a new public listener by accident. To actually serve the
+  # internet, set PROXY_TLS_BIND_ADDRESS=0.0.0.0 (and expect to run the HTTP
+  # redirect on 80 and HTTPS on 443). Certificates: see
+  # infrastructure/nginx/README.md.
+  reverse-proxy-tls:
+    profiles: ["tls"]
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    volumes:
+      # A DIFFERENT config directory from `reverse-proxy` — the two never share
+      # a server block, so neither can affect the other.
+      - ./infrastructure/nginx/tls:/etc/nginx/conf.d:ro
+      # Certificate directory. Override TLS_CERT_DIR to mount real material from
+      # outside the repo, e.g. /etc/letsencrypt/live/jkannel.example.com.
+      - ${TLS_CERT_DIR:-./infrastructure/nginx/certs}:/etc/nginx/certs:ro
+      # ACME http-01 webroot, for certbot/lego/acme.sh in --webroot mode.
+      - ./infrastructure/nginx/acme:/etc/nginx/acme:ro
+    ports:
+      - "${PROXY_TLS_BIND_ADDRESS:-127.0.0.1}:${PROXY_TLS_HTTP_PORT:-8081}:8080"
+      - "${PROXY_TLS_BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTPS_PORT:-8443}:8443"
+    networks:
+      - edge
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      # Plain HTTP on purpose: /healthz is exempt from the HTTPS redirect, so
+      # this works with a self-signed certificate the healthcheck cannot verify.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,mode=0755
+      - /var/run:size=1m,mode=0755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   kamex-bearerbox:
@@ -242,6 +404,11 @@ services:
     # those are intentionally left off (documented in infrastructure/README.md).
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ulimits-high
     restart: unless-stopped
 
   kamex-validator:
@@ -267,6 +434,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
+    pids_limit: 128
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   kamex-smsbox:
@@ -295,6 +467,11 @@ services:
       retries: 12
     security_opt:
       - no-new-privileges:true
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   kamex-sqlbox:
@@ -324,6 +501,11 @@ services:
       retries: 12
     security_opt:
       - no-new-privileges:true
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   # --- Optional split-out workers (profile: workers) ------------------------
@@ -360,6 +542,11 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ulimits-high
     restart: unless-stopped
 
   backup-service:
@@ -388,6 +575,14 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    # The most memory-hungry service in the stack for its size: it shells out to
+    # pg_dump AND buffers the whole dump in the Node heap to encrypt it, so peak
+    # RSS is roughly twice the logical dump size. Sized for that peak.
+    mem_limit: 1024m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 512
+    ulimits: *ulimits-high
     restart: unless-stopped
 
   # --- Watchdog: restarts containers stuck in an unhealthy state ------------
@@ -414,6 +609,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
+    pids_limit: 128
+    ulimits: *ulimits-minimal
     restart: unless-stopped
 
   prometheus:
@@ -437,6 +637,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # 15d of TSDB retention: the head block plus query working set.
+    mem_limit: 768m
+    mem_reservation: 128m
+    cpus: 1.0
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   grafana:
@@ -458,6 +664,11 @@ services:
       - prometheus
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.75
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   # --- Centralized logging (profile: observability) ------------------------
@@ -486,6 +697,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.75
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
   promtail:
@@ -510,6 +726,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 256
+    ulimits: *ulimits-standard
     restart: unless-stopped
 
 volumes:

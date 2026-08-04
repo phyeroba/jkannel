@@ -315,6 +315,96 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
       source: { status: 'ok', detail: 'Parsed from Kamex bearerbox /status.json' },
     };
   }
+  /** Issues one bearerbox admin command and returns its body. Throws on refusal. */
+  private async adminCommand(
+    command: 'start-smsc' | 'stop-smsc',
+    engineId: string,
+    operation: string,
+  ): Promise<string> {
+    const base = process.env.KAMEX_BASE_URL;
+    const password = process.env.KAMEX_ADMIN_PASSWORD;
+    if (!base || !password) throw new Error('Kamex administrative endpoint is not configured');
+    const url = new URL(`/${command}`, base);
+    url.searchParams.set('password', password);
+    url.searchParams.set('smsc', engineId);
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const detail = await response.text();
+    if (!response.ok || /could not|not given|denied/i.test(detail))
+      throw new Error(
+        `Kamex SMSC ${operation} failed: ${detail.trim() || `HTTP ${response.status}`}`,
+      );
+    return detail;
+  }
+
+  /**
+   * Current bind status for one engine id.
+   *
+   * `observable: false` means bearerbox's /status.json could not be read at all,
+   * which is NOT the same as a bind that is down — a bind absent from an
+   * otherwise readable status listing is observably not running.
+   */
+  private async observeBind(
+    engineId: string,
+  ): Promise<{ observable: boolean; status: string | null }> {
+    const snapshot = await this.queueSnapshot();
+    if (snapshot.source.status === 'unavailable') return { observable: false, status: null };
+    return {
+      observable: true,
+      status: snapshot.binds.find((bind) => bind.engineId === engineId)?.status ?? null,
+    };
+  }
+
+  /** Bounded-wait budgets for a reconnect cycle, tunable per deployment. */
+  private static timing() {
+    const read = (name: string, fallback: number) => {
+      const parsed = Number(process.env[name]);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+    };
+    return {
+      stopMs: read('KAMEX_RECONNECT_STOP_TIMEOUT_MS', 5000),
+      startMs: read('KAMEX_RECONNECT_START_TIMEOUT_MS', 10000),
+      pollMs: read('KAMEX_RECONNECT_POLL_MS', 250),
+    };
+  }
+
+  /**
+   * Waits, within a bounded budget, for a bind to reach (or leave) the online
+   * state. Gives up immediately when the engine's status cannot be read: polling
+   * an unreachable endpoint for ten seconds would only make an already-honest
+   * "unverified" answer slower.
+   */
+  private async awaitBindState(
+    engineId: string,
+    want: 'online' | 'offline',
+    deadlineMs: number,
+    pollMs: number,
+  ): Promise<{ observable: boolean; status: string | null }> {
+    const until = Date.now() + deadlineMs;
+    let observed = await this.observeBind(engineId);
+    for (;;) {
+      if (!observed.observable) return observed;
+      const satisfied =
+        want === 'online' ? observed.status === 'online' : observed.status !== 'online';
+      if (satisfied || Date.now() >= until) return observed;
+      await new Promise((resolve) => {
+        setTimeout(resolve, pollMs);
+      });
+      observed = await this.observeBind(engineId);
+    }
+  }
+
+  /**
+   * Enable / disable / reconnect a single bind through bearerbox's admin HTTP
+   * interface.
+   *
+   * RECONNECT ACTUALLY CYCLES THE BIND. It previously issued `start-smsc` — the
+   * identical call as `enable` — so "reconnecting" an already-bound SMSC did
+   * nothing whatsoever and recorded a success. It now stops the bind, waits for
+   * bearerbox to report it is no longer online, then starts it again and waits
+   * for it to come back, and it reports the states it actually observed. When
+   * `/status.json` is not available the cycle still runs, but the result says
+   * the transition could not be verified instead of claiming it happened.
+   */
   async controlSmsc(
     operation: 'enable' | 'disable' | 'reconnect',
     engineId: string,
@@ -326,17 +416,53 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
       !manifest.capabilities.some((item) => item.id === capability && item.support === 'supported')
     )
       throw new UnsupportedCapabilityError(capability, this.identity.instanceId);
-    const base = process.env.KAMEX_BASE_URL;
-    const password = process.env.KAMEX_ADMIN_PASSWORD;
-    if (!base || !password) throw new Error('Kamex administrative endpoint is not configured');
-    const command = operation === 'disable' ? 'stop-smsc' : 'start-smsc';
-    const url = new URL(`/${command}`, base);
-    url.searchParams.set('password', password);
-    url.searchParams.set('smsc', engineId);
-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    const detail = await response.text();
-    if (!response.ok || /could not|not given|denied/i.test(detail))
-      throw new Error(`Kamex SMSC ${operation} failed`);
-    return { operation, engineId, accepted: true, detail, observedAt: new Date().toISOString() };
+
+    if (operation !== 'reconnect') {
+      const detail = await this.adminCommand(
+        operation === 'disable' ? 'stop-smsc' : 'start-smsc',
+        engineId,
+        operation,
+      );
+      return { operation, engineId, accepted: true, detail, observedAt: new Date().toISOString() };
+    }
+
+    const timing = KamexAdapter.timing();
+    const before = await this.observeBind(engineId);
+    const stopped = await this.adminCommand('stop-smsc', engineId, 'reconnect (stop)');
+    const afterStop = await this.awaitBindState(engineId, 'offline', timing.stopMs, timing.pollMs);
+    const started = await this.adminCommand('start-smsc', engineId, 'reconnect (start)');
+    const afterStart = await this.awaitBindState(engineId, 'online', timing.startMs, timing.pollMs);
+
+    const observable = before.observable && afterStop.observable && afterStart.observable;
+    // The drop is the part that distinguishes a reconnect from an enable, so it
+    // is the part that has to be seen for the cycle to count as verified.
+    const cycled = afterStop.observable && afterStop.status !== 'online';
+    const state = (value: { observable: boolean; status: string | null }) =>
+      !value.observable ? 'unobservable' : (value.status ?? 'absent');
+    const detail = !observable
+      ? `Reconnect issued stop-smsc then start-smsc for ${engineId}. ` +
+        'bearerbox /status.json is unavailable, so the bind cycle could NOT be verified. ' +
+        `stop: ${stopped.trim()}; start: ${started.trim()}`
+      : `Reconnect cycled ${engineId}: ${state(before)} -> ${state(afterStop)} -> ${state(afterStart)}. ` +
+        (cycled
+          ? 'The bind was observed to drop and be re-established.'
+          : 'WARNING: the bind was never observed off-line, so the drop could not be confirmed.') +
+        ` stop: ${stopped.trim()}; start: ${started.trim()}`;
+
+    return {
+      operation,
+      engineId,
+      // Accepted means the engine took both commands. Whether the cycle was
+      // observed is in `detail` and in the states below — never implied.
+      accepted: true,
+      detail,
+      observedAt: new Date().toISOString(),
+      states: {
+        before: before.status,
+        afterStop: afterStop.status,
+        afterStart: afterStart.status,
+        cycleVerified: observable && cycled,
+      },
+    };
   }
 }

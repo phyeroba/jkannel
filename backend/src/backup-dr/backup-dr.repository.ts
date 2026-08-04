@@ -3,6 +3,7 @@ import { PoolClient, QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { GridDefinition } from '../platform/list-query';
 import { GridResult, GridRunnerOptions, runGrid } from '../platform/grid-runner';
+import { EtagConflictError } from '../platform/etag';
 
 export interface Actor {
   tenantId: string;
@@ -64,6 +65,8 @@ export interface BackupScheduleRow {
   next_run_at: string | null;
   created_by: string;
   created_at: string;
+  /** Optimistic-concurrency counter (migration 039). Drives ETag / If-Match. */
+  version: number;
 }
 
 /** Grid whitelists for the backup-dr resources. */
@@ -105,7 +108,29 @@ const BACKUP_COLUMNS =
   'offsite_location,offsite_synced_at,warning';
 
 const SCHEDULE_COLUMNS =
-  'id,tenant_id,name,cron,interval_minutes,kind,retention_class,enabled,last_run_at,next_run_at,created_by,created_at';
+  'id,tenant_id,name,cron,interval_minutes,kind,retention_class,enabled,last_run_at,next_run_at,created_by,created_at,version';
+
+/** Fields a caller may change on a schedule. Everything else is derived. */
+export interface BackupSchedulePatch {
+  name?: string;
+  cron?: string | null;
+  intervalMinutes?: number | null;
+  kind?: BackupKind;
+  retentionClass?: RetentionClass;
+  enabled?: boolean;
+  nextRunAt?: Date | null;
+}
+
+/** Column each patch field writes to, in a fixed order for stable SQL. */
+const SCHEDULE_PATCH_COLUMNS: ReadonlyArray<[keyof BackupSchedulePatch, string]> = [
+  ['name', 'name'],
+  ['cron', 'cron'],
+  ['intervalMinutes', 'interval_minutes'],
+  ['kind', 'kind'],
+  ['retentionClass', 'retention_class'],
+  ['enabled', 'enabled'],
+  ['nextRunAt', 'next_run_at'],
+];
 
 /**
  * Persistence for the backup / disaster-recovery module. All tenant data is
@@ -507,6 +532,75 @@ export class BackupDrRepository {
     });
   }
 
+  getSchedule(actor: Actor, id: string): Promise<BackupScheduleRow | undefined> {
+    return this.inTenant(actor, async (client) => {
+      return (
+        await client.query<BackupScheduleRow>(
+          `SELECT ${SCHEDULE_COLUMNS} FROM backup_schedules WHERE id=$1`,
+          [id],
+        )
+      ).rows[0];
+    });
+  }
+
+  /**
+   * Applies a partial update under an optional version precondition.
+   *
+   * `expectedVersion` is the version the caller proved it had read (from
+   * `If-Match`). The UPDATE asserts it in the WHERE clause, so the check and
+   * the write are the same statement — a concurrent update landing between the
+   * controller's read and this write cannot slip through. `version` always
+   * advances, which is what makes the next caller's ETag stale.
+   *
+   * Returns undefined when no such schedule exists; throws
+   * {@link EtagConflictError} when the row exists but has moved on.
+   */
+  updateSchedule(
+    actor: Actor,
+    id: string,
+    patch: BackupSchedulePatch,
+    expectedVersion?: number,
+  ): Promise<BackupScheduleRow | undefined> {
+    return this.inTenant(actor, async (client) => {
+      const assignments: string[] = [];
+      const params: unknown[] = [id];
+      for (const [field, column] of SCHEDULE_PATCH_COLUMNS) {
+        if (patch[field] === undefined) continue;
+        params.push(patch[field]);
+        assignments.push(`${column}=$${params.length}`);
+      }
+      // Always bump the version, even for a no-op body: the caller asked to
+      // mutate the resource, and an unchanged version would let a stale ETag
+      // keep working.
+      assignments.push('version=version+1');
+      params.push(expectedVersion ?? null);
+      const versionParam = `$${params.length}`;
+
+      const row = (
+        await client.query<BackupScheduleRow>(
+          `UPDATE backup_schedules SET ${assignments.join(',')}
+            WHERE id=$1 AND (${versionParam}::integer IS NULL OR version=${versionParam}::integer)
+            RETURNING ${SCHEDULE_COLUMNS}`,
+          params,
+        )
+      ).rows[0];
+
+      if (!row) {
+        const exists = (
+          await client.query<{ id: string }>('SELECT id FROM backup_schedules WHERE id=$1', [id])
+        ).rows[0];
+        if (!exists) return undefined;
+        throw new EtagConflictError('Backup schedule');
+      }
+
+      await this.audit(client, actor, 'backup_schedule.updated', 'backup_schedule', id, {
+        ...patch,
+        version: row.version,
+      });
+      return row;
+    });
+  }
+
   /** Reads enabled, due schedules for one tenant (next_run_at null or elapsed). */
   dueSchedules(actor: Actor, now: Date): Promise<BackupScheduleRow[]> {
     return this.inTenant(actor, async (client) => {
@@ -521,6 +615,11 @@ export class BackupDrRepository {
     });
   }
 
+  /**
+   * Records a scheduler tick. Deliberately does NOT bump `version`: last_run_at
+   * / next_run_at are derived bookkeeping, not an operator edit, and invalidating
+   * every open editor's ETag on each cycle would make If-Match unusable.
+   */
   markScheduleRan(actor: Actor, id: string, ranAt: Date, nextRunAt: Date | null): Promise<void> {
     return this.inTenant(actor, async (client) => {
       await client.query('UPDATE backup_schedules SET last_run_at=$2,next_run_at=$3 WHERE id=$1', [

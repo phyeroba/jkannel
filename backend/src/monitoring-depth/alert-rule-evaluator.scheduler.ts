@@ -7,6 +7,7 @@ import {
   MetricSample,
 } from '../monitoring/alert-evaluator.service';
 import { MaintenanceWindow, MaintenanceWindowService } from './maintenance-window.service';
+import { ALERT_DEDUP_ESCALATION_SQL, readAlertUpsert } from './alert-correlation.service';
 
 // Namespace for the per-tenant transaction-level advisory lock (arbitrary).
 const RULE_EVALUATOR_LOCK_NAMESPACE = 0x1f4a;
@@ -45,6 +46,8 @@ export interface RuleEvaluationOutcome {
   value?: number;
   reason: string;
   opened: boolean;
+  /** An existing open alert was re-sharpened because the condition worsened. */
+  escalated: boolean;
   resolved: boolean;
   suppressed: boolean;
 }
@@ -244,6 +247,7 @@ export class AlertRuleEvaluatorScheduler implements OnModuleInit, OnModuleDestro
           state: 'inactive',
           reason: `no samples for metric '${rule.metric}' in the last ${durationSeconds}s`,
           opened: false,
+          escalated: false,
           resolved: false,
           suppressed: false,
         },
@@ -271,11 +275,19 @@ export class AlertRuleEvaluatorScheduler implements OnModuleInit, OnModuleDestro
         this.maintenance.isSuppressed(now, { smsc: group.labels.smsc ?? undefined }, windows);
 
       let opened = false;
+      let escalated = false;
       let resolved = false;
       if (fires && !suppressed) {
-        opened =
-          (await this.openAlert(client, tenantId, rule, group.labels, dedupKey, evaluation.value)) >
-          0;
+        const upsert = await this.openAlert(
+          client,
+          tenantId,
+          rule,
+          group.labels,
+          dedupKey,
+          evaluation.value,
+        );
+        opened = upsert.opened;
+        escalated = upsert.escalated;
       } else if (!fires && evaluation.state === 'inactive') {
         resolved = (await this.resolveAlert(client, dedupKey, now)) > 0;
       }
@@ -288,6 +300,7 @@ export class AlertRuleEvaluatorScheduler implements OnModuleInit, OnModuleDestro
         value: evaluation.value,
         reason: evaluation.reason,
         opened,
+        escalated,
         resolved,
         suppressed,
       });
@@ -302,14 +315,13 @@ export class AlertRuleEvaluatorScheduler implements OnModuleInit, OnModuleDestro
     labels: Record<string, string>,
     dedupKey: string,
     value: number | undefined,
-  ): Promise<number> {
+  ): Promise<{ opened: boolean; escalated: boolean }> {
     const scope = labels.smsc ? ` on ${labels.smsc}` : '';
     const summary = `${rule.name}: ${rule.metric}${scope} ${rule.operator} ${rule.threshold} (observed ${value ?? 'n/a'})`;
     const result = await client.query(
       `INSERT INTO alert_instances (tenant_id, rule_id, status, severity, source, dedup_key, summary, details)
        VALUES ($1, $2, 'open', $3, 'rule', $4, $5, $6)
-       ON CONFLICT (tenant_id, dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL
-       DO NOTHING`,
+       ${ALERT_DEDUP_ESCALATION_SQL}`,
       [
         tenantId,
         rule.id,
@@ -330,13 +342,14 @@ export class AlertRuleEvaluatorScheduler implements OnModuleInit, OnModuleDestro
         }),
       ],
     );
-    return result.rowCount ?? 0;
+    return readAlertUpsert(result);
   }
 
   private async resolveAlert(client: PoolClient, dedupKey: string, now: Date): Promise<number> {
+    // 'closed' is an operator's terminal decision; auto-resolution leaves it be.
     const result = await client.query(
       `UPDATE alert_instances SET status = 'resolved', resolved_at = $2
-        WHERE dedup_key = $1 AND status <> 'resolved'`,
+        WHERE dedup_key = $1 AND status NOT IN ('resolved', 'closed')`,
       [dedupKey, now],
     );
     return result.rowCount ?? 0;

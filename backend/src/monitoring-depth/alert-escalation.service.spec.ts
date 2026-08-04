@@ -258,3 +258,146 @@ describe('AlertEscalationService.runForTenant', () => {
     expect(inserts[0][4]).toBe('notified');
   });
 });
+
+describe('AlertEscalationService delivery visibility', () => {
+  /** Builds a client whose escalation run has one due step and no channels. */
+  function clientFor(overrides: (sql: string, params: any[]) => any = () => undefined) {
+    const recorded: Array<{ sql: string; params: any[] }> = [];
+    const openedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    const client: any = {
+      recorded,
+      query: jest.fn(async (sql: string, params: any[] = []) => {
+        recorded.push({ sql, params });
+        const override = overrides(sql, params);
+        if (override) return override;
+        if (sql.includes('pg_try_advisory_xact_lock')) return { rows: [{ locked: true }] };
+        if (sql.includes('FROM escalation_policies'))
+          return { rows: [{ id: 'p1', steps: [steps[0]] }] };
+        if (sql.startsWith('SELECT id, opened_at'))
+          return {
+            rows: [
+              {
+                id: 'a1',
+                opened_at: openedAt,
+                cycle_started_at: openedAt,
+                escalation_cycle: 0,
+                details: {},
+                rule_id: null,
+              },
+            ],
+          };
+        if (sql.includes('FROM maintenance_windows')) return { rows: [] };
+        if (sql.includes('max(step_index)')) return { rows: [{ max: null }] };
+        if (sql.startsWith('SELECT summary,status,severity'))
+          return { rows: [{ summary: 'Bind down', status: 'open', severity: 'critical' }] };
+        return { rows: [] };
+      }),
+    };
+    return client;
+  }
+
+  const find = (client: any, needle: string) =>
+    (client.recorded as Array<{ sql: string; params: any[] }>).filter((entry) =>
+      entry.sql.includes(needle),
+    );
+
+  it('records an undeliverable step as failed and marks the alert, never silently skipping', async () => {
+    const client = clientFor((sql) =>
+      sql.includes('FROM notification_channels') ? { rows: [] } : undefined,
+    );
+    const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
+    const service = new AlertEscalationService(database, new MaintenanceWindowService(), {
+      deliver: jest.fn(),
+    } as any);
+    await service.runForTenant('1', new Date());
+
+    const escalation = find(client, 'INSERT INTO alert_escalations')[0];
+    expect(escalation.params[4]).toBe('failed');
+    const detail = JSON.parse(escalation.params[5]);
+    expect(detail.undeliverable).toBe(true);
+    expect(detail.delivery.reason).toContain('no enabled email channel');
+
+    // ...and the alert itself says nobody was reached.
+    const marked = find(client, 'SET notification_state')[0];
+    expect(marked.params[1]).toBe('undeliverable');
+  });
+
+  it('mirrors a successful automatic delivery into notification_deliveries', async () => {
+    const client = clientFor((sql) =>
+      sql.includes('FROM notification_channels')
+        ? {
+            rows: [
+              {
+                id: 'c1',
+                name: 'Ops email',
+                type: 'email',
+                enabled: true,
+                severities: [],
+                config: { to: 'l1@example.com' },
+              },
+            ],
+          }
+        : undefined,
+    );
+    const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
+    const notifications: any = {
+      deliver: jest.fn(async () => ({
+        channelId: 'c1',
+        channelType: 'email',
+        status: 'succeeded',
+        target: 'l1@example.com',
+        response: { messageId: 'm1' },
+      })),
+    };
+    const service = new AlertEscalationService(
+      database,
+      new MaintenanceWindowService(),
+      notifications,
+    );
+    await service.runForTenant('1', new Date());
+
+    const delivery = find(client, 'INSERT INTO notification_deliveries')[0];
+    expect(delivery.params[4]).toBe('succeeded');
+    expect(delivery.params[5]).toBe('l1@example.com');
+    expect(find(client, 'SET notification_state')[0].params[1]).toBe('notified');
+  });
+
+  it('returns a lapsed lifecycle suppression to open before escalating', async () => {
+    const client = clientFor();
+    const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
+    const service = new AlertEscalationService(database, new MaintenanceWindowService());
+    await service.runForTenant('1', new Date());
+    const unsuppress = find(client, "status='suppressed' AND suppressed_until")[0];
+    expect(unsuppress).toBeDefined();
+    // Suppressed alerts are not selected for escalation while their window runs.
+    expect(find(client, 'SELECT id, opened_at')[0].sql).toContain("status = 'open'");
+  });
+
+  it('records the step against the alert current notification cycle', async () => {
+    const openedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    const client = clientFor((sql) =>
+      sql.startsWith('SELECT id, opened_at')
+        ? {
+            rows: [
+              {
+                id: 'a1',
+                opened_at: openedAt,
+                // The alert was sharpened: cycle 1, baseline = the escalation.
+                cycle_started_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+                escalation_cycle: 1,
+                details: {},
+                rule_id: null,
+              },
+            ],
+          }
+        : undefined,
+    );
+    const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
+    const service = new AlertEscalationService(database, new MaintenanceWindowService());
+    await service.runForTenant('1', new Date());
+    // Step lookup is scoped to cycle 1, so the chain runs again for the worse
+    // condition instead of being exhausted by cycle 0.
+    expect(find(client, 'max(step_index)')[0].params[3]).toBe(1);
+    expect(find(client, 'INSERT INTO alert_escalations')[0].params[6]).toBe(1);
+  });
+});

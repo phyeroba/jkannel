@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'pg';
+import { describeSegments } from './message-segments';
 
 export interface SqlboxSubmission {
   sender: string;
@@ -24,6 +25,14 @@ export interface SqlboxListOptions {
   deliveryStatus?: string | string[];
   smscId?: string;
   direction?: 'MO' | 'MT' | 'DLR';
+  /**
+   * Inclusive lower bound on the engine's epoch-second `time` column. Served by
+   * the jkannel_sqlbox_sent_sms_time_idx / _smsc_time_idx indexes created by
+   * {@link KamexSqlboxRepository.ensureIndexes}.
+   */
+  fromEpoch?: number;
+  /** Inclusive upper bound on `time`. */
+  toEpoch?: number;
   /** Excludes DLR receipt rows, leaving only real messages. */
   excludeDlr?: boolean;
   /**
@@ -123,8 +132,37 @@ export function resolveDeliveryStatuses(value: unknown): DeliveryStatus[] | unde
   return resolved.size ? [...resolved] : undefined;
 }
 
-const MESSAGE_COLUMNS =
-  'm.sql_id,m.momt,m.sender,m.receiver,m.msgdata,m.time,m.smsc_id,m.service,m.account,m.dlr_mask,m.dlr_url,m.boxc_id,m.foreign_id';
+/**
+ * Encoding / segmentation / scheduling / billing columns the engine has always
+ * written and the console never selected: without them a multi-part message
+ * could not be shown as multi-part, an 8-bit or UCS-2 body was indistinguishable
+ * from plain text, and `binfo` (the carrier's billing identifier) was invisible.
+ * Listed once so the sent_sms and send_sms projections cannot drift apart.
+ */
+const DETAIL_COLUMN_NAMES = [
+  'coding',
+  'charset',
+  'udhdata',
+  'validity',
+  'deferred',
+  'mclass',
+  'pid',
+  'binfo',
+  'meta_data',
+] as const;
+
+const detailColumns = (prefix = '') =>
+  DETAIL_COLUMN_NAMES.map((column) => `${prefix}${column}`).join(',');
+
+const BASE_COLUMN_NAMES =
+  'sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id';
+
+/** send_sms (spool) projection — same field set as the sent_sms one. */
+const SPOOL_COLUMNS = `${BASE_COLUMN_NAMES},${detailColumns()}`;
+
+const MESSAGE_COLUMNS = `${BASE_COLUMN_NAMES.split(',')
+  .map((column) => `m.${column}`)
+  .join(',')},${detailColumns('m.')}`;
 
 /**
  * Latest delivery report for the MT row `m`, correlated on foreign_id (the same
@@ -212,10 +250,24 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       ? (row.delivery_status as DeliveryStatus)
       : 'unknown';
   }
+  /** Nullable numeric engine column -> number | null (never NaN, never 0-for-null). */
+  private static number(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
   private normalize(row: any, source: 'sent_sms' | 'send_sms') {
     const epoch = Number(row.time);
     const dlrEvent =
       row.dlr_event === undefined || row.dlr_event === null ? null : Number(row.dlr_event);
+    const coding = KamexSqlboxRepository.number(row.coding);
+    const udhData = row.udhdata ?? null;
+    const segments = describeSegments({
+      text: row.msgdata,
+      coding,
+      charset: row.charset,
+      udhData,
+    });
     return {
       id: String(row.sql_id),
       source,
@@ -239,6 +291,33 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       /** Kannel DLR event value behind deliveryStatus, when one was correlated. */
       dlrEvent: Number.isFinite(dlrEvent as number) ? dlrEvent : null,
       dlrAt: row.dlr_time ? new Date(Number(row.dlr_time) * 1000).toISOString() : null,
+      // Encoding / segmentation / scheduling / billing (see DETAIL_COLUMN_NAMES).
+      /** Kannel DCS coding: 0 = GSM-7, 1 = 8-bit, 2 = UCS-2. */
+      coding,
+      charset: row.charset ?? null,
+      /** Raw User Data Header, present on concatenated and port-addressed parts. */
+      udhData,
+      /** Relative validity period in minutes, as submitted. */
+      validity: KamexSqlboxRepository.number(row.validity),
+      /** Deferred delivery offset in minutes. */
+      deferred: KamexSqlboxRepository.number(row.deferred),
+      /** Message class (0 = flash ... 3 = SIM). */
+      mclass: KamexSqlboxRepository.number(row.mclass),
+      /** Protocol identifier. */
+      pid: KamexSqlboxRepository.number(row.pid),
+      /** Carrier billing identifier, when the SMSC supplied one. */
+      binfo: row.binfo ?? null,
+      metaData: row.meta_data ?? null,
+      /** Derived part count — see describeSegments for the GSM 03.38 rules. */
+      segments: segments.segments,
+      /** How that count was reached, so the console never has to guess. */
+      segmentation: {
+        alphabet: segments.alphabet,
+        length: segments.length,
+        singleCapacity: segments.singleCapacity,
+        multipartCapacity: segments.multipartCapacity,
+        declaredByUdh: segments.declaredByUdh,
+      },
       raw: row,
     };
   }
@@ -263,6 +342,18 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     if (options.direction) {
       params.push(options.direction);
       clauses.push(`${prefix}momt = $${params.length}`);
+    }
+    // Inclusive on both ends: an operator asking for 09:00-10:00 expects a
+    // message stamped exactly 10:00:00 to be in the answer. `time` is epoch
+    // seconds and is indexed (time DESC, sql_id DESC), so the range is a scan
+    // of the index rather than of the table.
+    if (options.fromEpoch !== undefined) {
+      params.push(options.fromEpoch);
+      clauses.push(`${prefix}time >= $${params.length}`);
+    }
+    if (options.toEpoch !== undefined) {
+      params.push(options.toEpoch);
+      clauses.push(`${prefix}time <= $${params.length}`);
     }
     if (options.excludeDlr) clauses.push(`${prefix}momt IS DISTINCT FROM 'DLR'`);
     if (options.status) {
@@ -342,7 +433,7 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       [id],
     );
     const queued = await pool.query(
-      `SELECT sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id FROM send_sms WHERE sql_id::text=$1 OR foreign_id=$1 ORDER BY time,sql_id`,
+      `SELECT ${SPOOL_COLUMNS} FROM send_sms WHERE sql_id::text=$1 OR foreign_id=$1 ORDER BY time,sql_id`,
       [id],
     );
     let events = [
@@ -375,20 +466,49 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       },
     };
   }
+  /**
+   * The CSV export column set. Exported so a caller that has to emit a
+   * header-only body (SQLBox unavailable) cannot hand back a header that
+   * disagrees with the one a real export would produce.
+   */
+  static readonly EXPORT_COLUMNS = [
+    'id',
+    'timestamp',
+    'direction',
+    'status',
+    'deliveryStatus',
+    'sender',
+    'receiver',
+    'smscId',
+    'externalRef',
+    'segments',
+    'coding',
+    'charset',
+    'udhData',
+    'validity',
+    'deferred',
+    'mclass',
+    'pid',
+    'binfo',
+    'metaData',
+    'text',
+  ] as const;
+
+  /** The export header row, terminated exactly as the export body is. */
+  static exportHeaderRow(): string {
+    return `${KamexSqlboxRepository.EXPORT_COLUMNS.join(',')}\r\n`;
+  }
+
+  /**
+   * CSV of the SAME rows the grid would show for the SAME options. It delegates
+   * to {@link list}, so there is no second filter implementation that could
+   * silently honour fewer filters than the grid does — which is exactly the
+   * defect this shape prevents.
+   */
   async exportCsv(options: SqlboxListOptions = {}) {
     const max = Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000);
     const page = await this.list({ ...options, limit: Math.min(options.limit ?? max, max) });
-    const header = [
-      'id',
-      'timestamp',
-      'direction',
-      'status',
-      'sender',
-      'receiver',
-      'smscId',
-      'externalRef',
-      'text',
-    ];
+    const header = KamexSqlboxRepository.EXPORT_COLUMNS;
     const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
     return {
       filename: `jkannel-sqlbox-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -438,9 +558,13 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     return { ...status, deletedRows: result.rowCount ?? 0, applied: true };
   }
   async ensureIndexes() {
+    // Serves the from/to date-range filter (`time >= x AND time <= y`) and the
+    // sql_id ordering the grid pages on, in one index.
     await this.required().query(
       'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_time_idx ON sent_sms(time DESC, sql_id DESC)',
     );
+    // Serves a date range narrowed to the tenant's binds, which is what every
+    // console read actually issues (allowedSmscIds is never optional there).
     await this.required().query(
       'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_smsc_time_idx ON sent_sms(smsc_id, time DESC)',
     );
@@ -479,6 +603,14 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       params.push(options.smscId);
       clauses.push(`smsc_id = $${params.length}`);
     }
+    if (options.fromEpoch !== undefined) {
+      params.push(options.fromEpoch);
+      clauses.push(`time >= $${params.length}`);
+    }
+    if (options.toEpoch !== undefined) {
+      params.push(options.toEpoch);
+      clauses.push(`time <= $${params.length}`);
+    }
     if (options.query) {
       params.push(`%${options.query}%`);
       clauses.push(
@@ -488,7 +620,7 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     params.push(size + 1);
     const result = await this.required().query(
-      `SELECT sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id FROM send_sms ${where} ORDER BY sql_id DESC LIMIT $${params.length}`,
+      `SELECT ${SPOOL_COLUMNS} FROM send_sms ${where} ORDER BY sql_id DESC LIMIT $${params.length}`,
       params,
     );
     const rows = result.rows.slice(0, size).map((row) => this.normalize(row, 'send_sms'));

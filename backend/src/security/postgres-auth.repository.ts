@@ -136,6 +136,29 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
       [familyId, revokedAt],
     );
   }
+  /**
+   * Enforce `security.max_concurrent_sessions`: order the user's live sessions
+   * newest-active first, skip the `keep` the policy allows, and revoke whatever
+   * is left. Runs as a single statement so two concurrent logins cannot both
+   * decide they are inside the cap.
+   */
+  async enforceConcurrentSessionLimit(
+    userId: string,
+    keep: number,
+    revokedAt: Date,
+  ): Promise<number> {
+    const result = await this.database.authQuery(
+      `UPDATE auth_sessions SET revoked_at=$3
+        WHERE id IN (
+          SELECT id FROM auth_sessions
+           WHERE user_id=$1 AND revoked_at IS NULL AND expires_at > $3
+           ORDER BY last_seen_at DESC, created_at DESC
+          OFFSET $2
+        )`,
+      [userId, keep, revokedAt],
+    );
+    return result.rowCount ?? 0;
+  }
   async findResetTarget(
     tenantSlug: string,
     username: string,

@@ -58,11 +58,15 @@ async function main() {
       'system.manage',
     ];
     for (const code of codes) {
+      // DO NOTHING, not DO UPDATE: migration 036 seeds this catalogue with real
+      // human descriptions and categories, and this script may run after it.
+      // Overwriting them with "JKANNEL permission: x" would undo that.
+      await client.query(
+        `INSERT INTO permissions(code,description) VALUES($1,$2) ON CONFLICT(code) DO NOTHING`,
+        [code, `JKANNEL permission: ${code}`],
+      );
       const permission = (
-        await client.query<{ id: string }>(
-          `INSERT INTO permissions(code,description) VALUES($1,$2) ON CONFLICT(code) DO UPDATE SET description=EXCLUDED.description RETURNING id`,
-          [code, `JKANNEL permission: ${code}`],
-        )
+        await client.query<{ id: string }>('SELECT id FROM permissions WHERE code=$1', [code])
       ).rows[0];
       await client.query(
         'INSERT INTO role_permissions(tenant_id,role_id,permission_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',

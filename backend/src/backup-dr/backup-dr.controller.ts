@@ -3,7 +3,9 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -13,7 +15,8 @@ import {
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { ExportService } from '../platform/export.service';
-import { Actor, BackupDrRepository } from './backup-dr.repository';
+import { assertIfMatch, setEtagHeader } from '../platform/etag';
+import { Actor, BackupDrRepository, BackupSchedulePatch } from './backup-dr.repository';
 import { BackupDrService } from './backup-dr.service';
 
 type Request = AuthenticatedRequest;
@@ -32,6 +35,30 @@ const uuid = (value: unknown, name: string) => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v))
     throw new BadRequestException(`${name} must be a UUID`);
   return v;
+};
+
+/**
+ * 'incremental' is no longer a backup kind: pg_dump has no incremental mode and
+ * WAL archiving is not configured, so it always produced a full dump under a
+ * false label (migration 035). A requested 'incremental' is coerced to 'full'.
+ */
+const scheduleKind = (value: unknown): 'full' | 'schema' => {
+  const kind = value === 'incremental' ? 'full' : value;
+  if (kind !== 'full' && kind !== 'schema')
+    throw new BadRequestException(
+      "kind must be full or schema ('incremental' is not supported: it requires WAL " +
+        'archiving, which this deployment does not configure)',
+    );
+  return kind;
+};
+
+const RETENTION_CLASSES = ['hourly', 'daily', 'weekly', 'monthly', 'yearly', 'manual'] as const;
+type ScheduleRetentionClass = (typeof RETENTION_CLASSES)[number];
+
+const scheduleRetentionClass = (value: unknown): ScheduleRetentionClass => {
+  if (!RETENTION_CLASSES.includes(value as ScheduleRetentionClass))
+    throw new BadRequestException('retentionClass is not a recognised class');
+  return value as ScheduleRetentionClass;
 };
 
 /**
@@ -130,18 +157,8 @@ export class BackupDrController {
       throw new BadRequestException('intervalMinutes must be a positive integer');
     if (!cron && intervalMinutes === null)
       throw new BadRequestException('Provide either cron or intervalMinutes');
-    // 'incremental' is no longer a backup kind: pg_dump has no incremental mode
-    // and WAL archiving is not configured, so it always produced a full dump
-    // under a false label (migration 035). Recorded as 'full' instead.
-    const kind = b?.kind === 'incremental' ? 'full' : (b?.kind ?? 'full');
-    if (!['full', 'schema'].includes(kind))
-      throw new BadRequestException(
-        "kind must be full or schema ('incremental' is not supported: it requires WAL " +
-          'archiving, which this deployment does not configure)',
-      );
-    const retentionClass = b?.retentionClass ?? 'daily';
-    if (!['hourly', 'daily', 'weekly', 'monthly', 'yearly', 'manual'].includes(retentionClass))
-      throw new BadRequestException('retentionClass is not a recognised class');
+    const kind = scheduleKind(b?.kind ?? 'full');
+    const retentionClass = scheduleRetentionClass(b?.retentionClass ?? 'daily');
     const nextRunAt =
       intervalMinutes !== null ? new Date(Date.now() + intervalMinutes * 60_000) : null;
     return this.repository.createSchedule(actor(r), {
@@ -153,5 +170,79 @@ export class BackupDrController {
       enabled: b?.enabled !== false,
       nextRunAt,
     });
+  }
+
+  /**
+   * Reads one schedule and publishes its version as a strong `ETag`. This is
+   * the read half of the optimistic-concurrency contract in `platform/etag.ts`
+   * — a client that wants to edit safely reads here, keeps the ETag, and sends
+   * it back as `If-Match` on the PATCH below.
+   */
+  @Get('schedules/:id') @RequirePermissions('system.view') async getSchedule(
+    @Req() r: Request,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res?: any,
+  ) {
+    const row = await this.repository.getSchedule(actor(r), uuid(id, 'id'));
+    if (!row) throw new NotFoundException('Backup schedule not found');
+    setEtagHeader(res, row);
+    return row;
+  }
+
+  /**
+   * Updates a schedule, honouring `If-Match`.
+   *
+   * Without a precondition this behaves like any other PATCH (last write wins),
+   * so existing clients are unaffected. With `If-Match: "<version>"` a stale
+   * caller gets 412 instead of silently overwriting the edit it never saw —
+   * which for a backup schedule is how a retention window quietly reverts and a
+   * restore point stops existing.
+   */
+  @Patch('schedules/:id') @RequirePermissions('system.manage') async updateSchedule(
+    @Req() r: Request,
+    @Param('id') id: string,
+    @Body() b: any = {},
+    @Res({ passthrough: true }) res?: any,
+  ) {
+    const scheduleId = uuid(id, 'id');
+    const current = await this.repository.getSchedule(actor(r), scheduleId);
+    if (!current) throw new NotFoundException('Backup schedule not found');
+
+    // 412 before any validation work: a stale caller's body describes a
+    // resource state that no longer exists, so validating it is meaningless.
+    const expectedVersion = assertIfMatch(r.headers['if-match'], current, 'Backup schedule');
+
+    const patch: BackupSchedulePatch = {};
+    if (b?.name !== undefined) patch.name = text(b.name, 'name');
+    if (b?.cron !== undefined)
+      patch.cron = typeof b.cron === 'string' && b.cron.trim() ? b.cron.trim() : null;
+    if (b?.intervalMinutes !== undefined) {
+      if (b.intervalMinutes === null) patch.intervalMinutes = null;
+      else {
+        const minutes = Number(b.intervalMinutes);
+        if (!Number.isInteger(minutes) || minutes <= 0)
+          throw new BadRequestException('intervalMinutes must be a positive integer');
+        patch.intervalMinutes = minutes;
+        // The next fire time is derived from the interval, so changing one
+        // without the other would leave the schedule on its old cadence.
+        patch.nextRunAt = new Date(Date.now() + minutes * 60_000);
+      }
+    }
+    if (b?.kind !== undefined) patch.kind = scheduleKind(b.kind);
+    if (b?.retentionClass !== undefined)
+      patch.retentionClass = scheduleRetentionClass(b.retentionClass);
+    if (b?.enabled !== undefined) patch.enabled = b.enabled !== false;
+
+    // A schedule with neither a cron nor an interval would never fire again.
+    const cronAfter = patch.cron !== undefined ? patch.cron : current.cron;
+    const intervalAfter =
+      patch.intervalMinutes !== undefined ? patch.intervalMinutes : current.interval_minutes;
+    if (!cronAfter && (intervalAfter === null || intervalAfter === undefined))
+      throw new BadRequestException('A schedule must keep either cron or intervalMinutes');
+
+    const row = await this.repository.updateSchedule(actor(r), scheduleId, patch, expectedVersion);
+    if (!row) throw new NotFoundException('Backup schedule not found');
+    setEtagHeader(res, row);
+    return row;
   }
 }

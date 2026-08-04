@@ -16,6 +16,11 @@ import { accessTokenKey, refreshTokenKey } from './signing-keys';
 import { TokenService } from './token.service';
 import { UserCredential } from './auth.types';
 import { AuthThrottleService, ThrottleBucket } from './auth-throttle.service';
+import {
+  DEFAULT_SECURITY_POLICY,
+  SecurityPolicy,
+  SecurityPolicyService,
+} from './security-policy.service';
 
 export interface MfaChallenge {
   totp?: string;
@@ -40,12 +45,25 @@ export class AuthService {
     // Absent throttle == no penalties recorded; the AuthThrottleGuard is what
     // rejects, and it independently fails open. See auth-throttle.service.ts.
     @Optional() private readonly throttle?: AuthThrottleService,
+    // Resolves the tenant's System Settings security knobs (password policy,
+    // lockout, token lifetime, session idle/max/concurrency). Optional for the
+    // same reason as the throttle: an isolated unit test constructs the service
+    // without a database. When absent every path uses DEFAULT_SECURITY_POLICY,
+    // which is the behaviour JKANNEL hardcoded before the knobs were wired, so
+    // the fallback can never be laxer than the status quo.
+    @Optional() private readonly policies?: SecurityPolicyService,
   ) {}
 
   /** Record a throttle penalty; never allowed to affect the caller's outcome. */
   private async penalize(buckets: ThrottleBucket[]): Promise<void> {
     if (!this.throttle) return;
     await this.throttle.penalize(buckets);
+  }
+
+  /** The effective security policy for a tenant, or the strict defaults. */
+  private async policyFor(tenantId?: string): Promise<SecurityPolicy> {
+    if (!this.policies) return { ...DEFAULT_SECURITY_POLICY };
+    return this.policies.resolve(tenantId);
   }
 
   async login(
@@ -57,6 +75,15 @@ export class AuthService {
   ) {
     const user = await this.repository.findCredential(tenant, username);
     const now = new Date();
+    // Lockout threshold, lockout window, access-token lifetime and the
+    // concurrent-session cap all come from System Settings now. The tenant is
+    // only knowable once the user is resolved; an unknown username is never
+    // locked out anyway, so the defaults are the right thing for that case.
+    const policy = await this.policyFor(user?.tenantId);
+    const lockUntil = (count: number) =>
+      count >= policy.lockoutThreshold
+        ? new Date(now.getTime() + policy.lockoutMinutes * 60_000)
+        : undefined;
     // Penalty buckets are read (not consumed) by AuthThrottleGuard before this
     // method runs; here we only record failures. Successful logins cost nothing,
     // so honest traffic — including the perf harness — is never throttled.
@@ -92,11 +119,7 @@ export class AuthService {
     ) {
       if (user) {
         const count = user.failedLoginCount + 1;
-        await this.repository.recordFailedLogin(
-          user.id,
-          count,
-          count >= 5 ? new Date(now.getTime() + 15 * 60_000) : undefined,
-        );
+        await this.repository.recordFailedLogin(user.id, count, lockUntil(count));
       }
       await this.audit.append({
         tenantId: user?.tenantId,
@@ -139,11 +162,7 @@ export class AuthService {
           const attempted = Boolean(mfa.totp || mfa.recoveryCode);
           if (attempted) {
             const count = user.failedLoginCount + 1;
-            await this.repository.recordFailedLogin(
-              user.id,
-              count,
-              count >= 5 ? new Date(now.getTime() + 15 * 60_000) : undefined,
-            );
+            await this.repository.recordFailedLogin(user.id, count, lockUntil(count));
             await this.penalize([
               ...loginBuckets,
               ...(this.throttle?.mfaBuckets(user.tenantId, user.id, context.ipAddress) ?? []),
@@ -178,8 +197,24 @@ export class AuthService {
       roles: user.roles,
       permissions: user.permissions,
     };
-    const accessToken = this.tokens.issue('access', principal, accessTokenKey(), 900);
-    const refreshToken = this.tokens.issue('refresh', principal, refreshTokenKey(), 604800);
+    // A session may never outlive the configured absolute session lifetime, so
+    // the refresh token and the session row are both cut to it.
+    const refreshTtlSeconds =
+      policy.sessionMaxLifetimeHours > 0
+        ? Math.min(604800, policy.sessionMaxLifetimeHours * 3600)
+        : 604800;
+    const accessToken = this.tokens.issue(
+      'access',
+      principal,
+      accessTokenKey(),
+      policy.accessTokenTtlSeconds,
+    );
+    const refreshToken = this.tokens.issue(
+      'refresh',
+      principal,
+      refreshTokenKey(),
+      refreshTtlSeconds,
+    );
     await this.repository.recordSuccessfulLogin(user.id);
     await this.repository.saveSession({
       id: sid,
@@ -187,11 +222,31 @@ export class AuthService {
       userId: user.id,
       refreshTokenHash: this.digest(refreshToken),
       createdAt: now,
-      expiresAt: new Date(now.getTime() + 604800000),
+      expiresAt: new Date(now.getTime() + refreshTtlSeconds * 1000),
       lastSeenAt: now,
       familyId,
       ...context,
     });
+    // Concurrent-session cap: keep the N most recently active sessions and
+    // revoke the rest. Off (0) by default, so this is inert until an operator
+    // sets security.max_concurrent_sessions.
+    if (policy.maxConcurrentSessions > 0 && this.repository.enforceConcurrentSessionLimit) {
+      const revoked = await this.repository.enforceConcurrentSessionLimit(
+        user.id,
+        policy.maxConcurrentSessions,
+        now,
+      );
+      if (revoked > 0)
+        await this.audit.append({
+          tenantId: user.tenantId,
+          action: 'session.limit.enforced',
+          outcome: 'success',
+          actorId: user.id,
+          sessionId: sid,
+          reason: `revoked_${revoked}_over_limit_${policy.maxConcurrentSessions}`,
+          occurredAt: now,
+        });
+    }
     await this.audit.append({
       tenantId: user.tenantId,
       action: 'login.succeeded',
@@ -202,7 +257,12 @@ export class AuthService {
       ...context,
     });
     await this.recordLogin(user, username, 'success', mfaUsed, context);
-    return { accessToken, refreshToken, expiresIn: 900, tokenType: 'Bearer' };
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: policy.accessTokenTtlSeconds,
+      tokenType: 'Bearer',
+    };
   }
 
   private async verifyMfaChallenge(
@@ -294,6 +354,36 @@ export class AuthService {
       await this.penalize(tokenBuckets);
       throw new UnauthorizedException('Refresh token reuse detected');
     }
+    // Session lifetime policy. `last_seen_at` is stamped on every rotation, so
+    // idle time is "time since the last refresh"; with a 15-minute access token
+    // an in-use console rotates well inside any sane idle window, and a tab left
+    // open overnight does not. Both checks fail closed: the session and, for the
+    // idle case, nothing else — the family is left alone because an expiry is
+    // not evidence of theft. Setting either knob to 0 disables that check.
+    const policy = await this.policyFor(session.tenantId);
+    const idleMs = policy.sessionIdleTimeoutMinutes * 60_000;
+    const maxMs = policy.sessionMaxLifetimeHours * 3_600_000;
+    const expiredReason =
+      idleMs > 0 && now.getTime() - new Date(session.lastSeenAt).getTime() > idleMs
+        ? 'session_idle_timeout'
+        : maxMs > 0 && now.getTime() - new Date(session.createdAt).getTime() > maxMs
+          ? 'session_max_lifetime'
+          : undefined;
+    if (expiredReason) {
+      session.revokedAt = now;
+      await this.repository.saveSession(session);
+      await this.audit.append({
+        tenantId: session.tenantId,
+        action: 'token.refresh.rejected',
+        outcome: 'failure',
+        actorId: session.userId,
+        sessionId: session.id,
+        reason: expiredReason,
+        occurredAt: now,
+      });
+      await this.penalize(tokenBuckets);
+      throw new UnauthorizedException('Session expired');
+    }
     // Re-resolve the user. Anything other than a live, still-usable account
     // kills the session and the whole token family so the refresh token cannot
     // be used again. 'locked' is accepted alongside 'active' for exactly the
@@ -327,8 +417,23 @@ export class AuthService {
       roles: user.roles,
       permissions: user.permissions,
     };
-    const accessToken = this.tokens.issue('access', principal, accessTokenKey(), 900);
-    const nextRefresh = this.tokens.issue('refresh', principal, refreshTokenKey(), 604800);
+    const accessToken = this.tokens.issue(
+      'access',
+      principal,
+      accessTokenKey(),
+      policy.accessTokenTtlSeconds,
+    );
+    // The rotated refresh token may not outlive the session row it belongs to.
+    const remainingSeconds = Math.max(
+      1,
+      Math.floor((new Date(session.expiresAt).getTime() - now.getTime()) / 1000),
+    );
+    const nextRefresh = this.tokens.issue(
+      'refresh',
+      principal,
+      refreshTokenKey(),
+      Math.min(604800, remainingSeconds),
+    );
     session.refreshTokenHash = this.digest(nextRefresh);
     session.lastSeenAt = new Date();
     await this.repository.saveSession(session);
@@ -340,7 +445,12 @@ export class AuthService {
       sessionId: claims.sid,
       occurredAt: new Date(),
     });
-    return { accessToken, refreshToken: nextRefresh, expiresIn: 900, tokenType: 'Bearer' };
+    return {
+      accessToken,
+      refreshToken: nextRefresh,
+      expiresIn: policy.accessTokenTtlSeconds,
+      tokenType: 'Bearer',
+    };
   }
   async logout(refreshToken: string) {
     const claims = this.tokens.verify(refreshToken, 'refresh', refreshTokenKey());
@@ -402,8 +512,7 @@ export class AuthService {
     newPassword: string,
     context: AuthContext = {},
   ): Promise<{ reset: true }> {
-    if (typeof newPassword !== 'string' || newPassword.length < 12)
-      throw new BadRequestException('newPassword must contain at least 12 characters');
+    if (typeof newPassword !== 'string') throw new BadRequestException('newPassword is required');
     if (typeof token !== 'string' || !token)
       throw new BadRequestException('Invalid or expired token');
     const record = await this.repository.findPasswordResetToken(this.digest(token));
@@ -413,7 +522,16 @@ export class AuthService {
       await this.penalize(this.throttle?.tokenBuckets('reset', context.ipAddress) ?? []);
       throw new BadRequestException('Invalid or expired token');
     }
-    await this.enforcePasswordHistory(record.tenantId, record.userId, newPassword);
+    // Complexity/length is checked against the OWNING tenant's policy, which is
+    // only knowable once the token resolves — hence after the lookup, not before.
+    const policy = await this.policyFor(record.tenantId);
+    SecurityPolicyService.assertPasswordAllowed(newPassword, policy);
+    await this.enforcePasswordHistory(
+      record.tenantId,
+      record.userId,
+      newPassword,
+      policy.passwordHistoryDepth,
+    );
     const passwordHash = await this.passwords.hash(newPassword);
     await this.repository.applyNewPassword(record.userId, passwordHash);
     await this.repository.markPasswordResetTokenUsed(record.id, now);
@@ -436,8 +554,7 @@ export class AuthService {
   ): Promise<{ accepted: true }> {
     if (typeof username !== 'string' || !username.trim())
       throw new BadRequestException('username is required');
-    if (typeof password !== 'string' || password.length < 12)
-      throw new BadRequestException('password must contain at least 12 characters');
+    if (typeof password !== 'string') throw new BadRequestException('password is required');
     if (typeof token !== 'string' || !token)
       throw new BadRequestException('Invalid or expired invitation');
     const invitation = await this.repository.findPendingInvitation(this.digest(token));
@@ -446,6 +563,13 @@ export class AuthService {
       await this.penalize(this.throttle?.tokenBuckets('invitation', context.ipAddress) ?? []);
       throw new BadRequestException('Invalid or expired invitation');
     }
+    // As in confirmPasswordReset: the invitation names the tenant whose password
+    // policy applies, so validation happens after the lookup and before anything
+    // is written.
+    SecurityPolicyService.assertPasswordAllowed(
+      password,
+      await this.policyFor(invitation.tenantId),
+    );
     const passwordHash = await this.passwords.hash(password);
     const now = new Date();
     let created: { userId: string };
@@ -476,17 +600,20 @@ export class AuthService {
 
   /**
    * Reject a new password that matches the current password or any of the last
-   * five stored hashes, and archive the outgoing hash into password_history.
-   * No-op when no identity store is wired (e.g. isolated unit tests).
+   * `depth` stored hashes, and archive the outgoing hash into password_history.
+   * `depth` comes from `security.password_history_depth` (previously the literal
+   * 5). No-op when no identity store is wired (e.g. isolated unit tests).
    */
   private async enforcePasswordHistory(
     tenantId: string,
     userId: string,
     newPassword: string,
+    depth: number = DEFAULT_SECURITY_POLICY.passwordHistoryDepth,
   ): Promise<void> {
     if (!this.identity) return;
     const current = await this.identity.currentPasswordHash(tenantId, userId);
-    const history = await this.identity.recentPasswordHashes(tenantId, userId, 5);
+    const history =
+      depth > 0 ? await this.identity.recentPasswordHashes(tenantId, userId, depth) : [];
     const priors = [current, ...history].filter((hash): hash is string => Boolean(hash));
     for (const prior of priors) {
       if (await this.passwords.verify(newPassword, prior))

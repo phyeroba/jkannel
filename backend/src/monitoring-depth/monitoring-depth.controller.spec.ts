@@ -3,6 +3,7 @@ import {
   CorrelationController,
   EscalationController,
   MaintenanceController,
+  NotificationReadinessController,
 } from './monitoring-depth.controller';
 
 const request: any = { principal: { tenantId: '1', userId: 'u1' } };
@@ -78,5 +79,32 @@ describe('CorrelationController', () => {
     const controller = new CorrelationController(repo);
     controller.list(request);
     expect(repo.correlationSummary).toHaveBeenCalledWith({ tenantId: '1', userId: 'u1' });
+  });
+});
+
+describe('NotificationReadinessController', () => {
+  it('reports whether the tenant can be told about an alert at all', async () => {
+    const readiness: any = {
+      readinessForTenant: jest.fn(async () => ({ tenantId: '1', warning: null })),
+      ensureTenantDefaults: jest.fn(async () => ({ channel: true, policy: false })),
+    };
+    const controller = new NotificationReadinessController(readiness);
+    await controller.get(request);
+    expect(readiness.readinessForTenant).toHaveBeenCalledWith('1');
+  });
+
+  it('repairs the default channel/policy and returns the resulting readiness', async () => {
+    const readiness: any = {
+      readinessForTenant: jest.fn(async () => ({ tenantId: '1', warning: null })),
+      ensureTenantDefaults: jest.fn(async () => ({ channel: true, policy: false })),
+    };
+    const controller = new NotificationReadinessController(readiness);
+    const result = await controller.repair(request);
+    expect(readiness.ensureTenantDefaults).toHaveBeenCalledWith('1');
+    expect(result).toEqual({
+      channel: true,
+      policy: false,
+      readiness: { tenantId: '1', warning: null },
+    });
   });
 });

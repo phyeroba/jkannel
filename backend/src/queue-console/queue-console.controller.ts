@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { isKnownStatusToken } from '../engine/kamex-sqlbox.repository';
+import { parseInstant } from '../messaging-depth/message-filters';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { Actor, BindOperation, HistoryQuery, QueueConsoleService } from './queue-console.service';
@@ -94,6 +95,14 @@ function parseStatus(value: unknown): string | undefined {
 }
 
 function parseHistoryQuery(source: any = {}): HistoryQuery {
+  // Same ISO 8601 parser and the same inverted-range refusal as GET /messages,
+  // so the two message logs cannot disagree about what a date range means.
+  const fromEpoch = parseInstant(source.from, 'from');
+  const toEpoch = parseInstant(source.to, 'to');
+  if (fromEpoch !== undefined && toEpoch !== undefined && fromEpoch > toEpoch)
+    throw new BadRequestException(
+      `from must not be after to (from="${String(source.from).trim()}", to="${String(source.to).trim()}")`,
+    );
   return {
     limit: boundedInt(source.limit, 'limit', 1, MAX_BATCH, 100),
     cursor: source.cursor
@@ -102,6 +111,8 @@ function parseHistoryQuery(source: any = {}): HistoryQuery {
     smscId: optionalText(source.smscId, 'smscId'),
     query: optionalText(source.query, 'query'),
     status: parseStatus(source.status),
+    fromEpoch,
+    toEpoch,
   };
 }
 

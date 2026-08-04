@@ -130,3 +130,32 @@ describe('QueueConsoleController', () => {
     expect(() => controller.control(request, 'local-fake', {})).toThrow(BadRequestException);
   });
 });
+
+describe('QueueConsoleController — history date range', () => {
+  function historyController() {
+    const queue: any = { history: jest.fn(async () => ({ items: [], counts: {} })) };
+    return { controller: new QueueConsoleController(queue), queue };
+  }
+  const req: any = { principal: { tenantId: '1', userId: 'u1' } };
+
+  it('passes an ISO range through as inclusive epoch bounds', async () => {
+    const { controller, queue } = historyController();
+    await controller.history(req, { from: '2026-08-04T09:00:00Z', to: '2026-08-04T10:00:00Z' });
+    expect(queue.history).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        fromEpoch: Math.floor(Date.parse('2026-08-04T09:00:00Z') / 1000),
+        toEpoch: Math.floor(Date.parse('2026-08-04T10:00:00Z') / 1000),
+      }),
+    );
+  });
+
+  it('refuses an inverted or unparseable range the same way GET /messages does', () => {
+    const { controller, queue } = historyController();
+    expect(() =>
+      controller.history(req, { from: '2026-08-04T10:00:00Z', to: '2026-08-04T09:00:00Z' }),
+    ).toThrow(/from must not be after to/);
+    expect(() => controller.history(req, { from: 'yesterday' })).toThrow(/ISO 8601/);
+    expect(queue.history).not.toHaveBeenCalled();
+  });
+});

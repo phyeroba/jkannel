@@ -28,7 +28,12 @@ reachable from the public entrypoint.
 - `/healthz` → nginx liveness
 
 The original direct ports (frontend `5173`, backend `3000`) remain published,
-so the proxy is additive. TLS is opt-in — see `nginx/README.md`.
+so the proxy is additive.
+
+`reverse-proxy` is **HTTP-only by design**: it is the "TLS terminated upstream"
+topology. For JKANNEL to terminate TLS itself, enable the `tls` profile, which
+starts the separate `reverse-proxy-tls` service (HTTPS on 8443 + an HTTP→HTTPS
+redirect). Both topologies are documented in `nginx/README.md`.
 
 ## Profiles
 
@@ -40,6 +45,8 @@ so the proxy is additive. TLS is opt-in — see `nginx/README.md`.
 | `observability` | loki, promtail               | `docker compose --profile observability up -d` |
 | `watchdog`      | watchdog                     | `docker compose --profile watchdog up -d` |
 | `workers`       | scheduler, backup-service    | `docker compose --profile workers up -d` |
+| `tls`           | reverse-proxy-tls            | `docker compose --profile tls up -d` |
+| `ha`            | HA overlay (separate file)   | `docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up -d` |
 
 Profiles compose, e.g.
 `docker compose --profile engine-kamex --profile monitoring --profile observability up -d`.
@@ -69,6 +76,7 @@ the default.
 | Service         | no-new-privileges | cap_drop ALL | read_only + tmpfs | non-root | Notes |
 | --------------- | :---------------: | :----------: | :---------------: | :------: | ----- |
 | reverse-proxy   | ✅ | ✅ | ✅ | ✅ (uid 101) | Fully hardened. |
+| reverse-proxy-tls | ✅ | ✅ | ✅ | ✅ (uid 101) | Same, plus a read-only cert mount. |
 | kamex-validator | ✅ | ✅ | ✅ | image default | Pre-existing full hardening. |
 | loki            | ✅ | ✅ | ✅ | ✅ (uid 10001) | Data on volume. |
 | promtail        | ✅ | ✅ | ✅ | root* | *root needed to read the Docker socket; as owner it needs no cap. |
@@ -87,15 +95,93 @@ the default.
 (dropped caps + read-only rootfs) is applied to the new stateless services and
 anything already proven; for the running stateful/engine services it is
 intentionally left off and documented rather than risk breaking the live stack.
-Enforced CPU/memory limits are deliberately not set on the already-running
-services to avoid OOM-killing a healthy stack; they remain a documented tuning
-step (spec §17).
+
+## Resource limits
+
+**Every** service in both compose files now carries a memory limit + reservation,
+a CPU limit, a `pids_limit` and a `nofile` ulimit. This matters because the
+stack is designed to be **co-hosted**: without limits, one runaway container
+(a pg_dump of a large database, an SMPP flood, a leaking Node heap) can take the
+whole host down, including the unrelated stack sharing it.
+
+### Which compose keys, and why
+
+The deploy-agnostic keys — `mem_limit`, `mem_reservation`, `cpus`, `pids_limit`,
+`ulimits` — are used, **not** the swarm-style `deploy.resources.*` block, which
+`docker compose up` ignores unless you also pass `--compatibility`. Verified
+against the installed Compose (v5.1.4) with
+`docker compose --env-file .env.example config`: every one of those keys appears
+in the rendered model for every service (memory is normalised to bytes).
+
+### The table (host: ~10 GB RAM, shared with a co-tenant)
+
+| Service | Profile | `mem_limit` | `mem_reservation` | `cpus` | `pids_limit` | `nofile` |
+| ------- | ------- | ----------: | ----------------: | -----: | -----------: | -------: |
+| postgres          | —              | 1536m | 512m | 1.5  | 512 | 65536 |
+| backend           | —              | 1024m | 256m | 1.5  | 512 | 65536 |
+| frontend          | —              |  768m | 128m | 1.0  | 512 | 16384 |
+| redis             | —              |  512m | 128m | 0.5  | 256 | 16384 |
+| reverse-proxy     | —              |  128m |  32m | 0.5  | 256 | 16384 |
+| kamex-validator   | —              |  128m |  32m | 0.5  | 128 | 16384 |
+| **default total** |                | **4096m** | **1088m** | | | |
+| kamex-bearerbox   | engine-kamex   |  512m | 128m | 1.0  | 512 | 65536 |
+| kamex-smsbox      | engine-kamex   |  256m |  64m | 0.5  | 256 | 16384 |
+| kamex-sqlbox      | engine-kamex   |  256m |  64m | 0.5  | 256 | 16384 |
+| scheduler         | workers        |  512m | 128m | 1.0  | 512 | 65536 |
+| backup-service    | workers        | 1024m | 128m | 1.0  | 512 | 65536 |
+| prometheus        | monitoring     |  768m | 128m | 1.0  | 256 | 16384 |
+| grafana           | monitoring     |  512m | 128m | 0.75 | 256 | 16384 |
+| loki              | observability  |  512m | 128m | 0.75 | 256 | 16384 |
+| promtail          | observability  |  256m |  64m | 0.5  | 256 | 16384 |
+| watchdog          | watchdog       |   64m |  16m | 0.25 | 128 |  4096 |
+| reverse-proxy-tls | tls            |  128m |  32m | 0.5  | 256 | 16384 |
+
+HA overlay (`docker-compose.ha.yml`, profile `ha`):
+
+| Service | `mem_limit` | `mem_reservation` | `cpus` | `pids_limit` | `nofile` |
+| ------- | ----------: | ----------------: | -----: | -----------: | -------: |
+| postgres-primary        | 1024m | 256m | 1.0  | 512 | 65536 |
+| postgres-standby        | 1024m | 256m | 1.0  | 512 | 65536 |
+| backend-replica         | 1024m | 256m | 1.5  | 512 | 65536 |
+| redis-primary           |  384m |  96m | 0.5  | 256 | 16384 |
+| redis-replica           |  384m |  96m | 0.5  | 256 | 16384 |
+| redis-sentinel-1/2/3    |   96m |  32m | 0.25 | 128 | 16384 |
+| reverse-proxy-ha        |  128m |  32m | 0.5  | 256 | 16384 |
+| **HA total**            | **4256m** | | | | |
+
+### Justification
+
+- **The default stack cannot exceed ~4 GB**, leaving ~6 GB for the co-tenant and
+  the host. `engine-kamex` + `workers` — the realistic production shape — takes
+  it to ~6.7 GB. Adding `monitoring` **and** `observability` on top would reach
+  ~8.7 GB and is not advisable on this host; run those elsewhere, or trim.
+- Limits are **ceilings, not allocations**. Idle containers use far less; the
+  reservations (1088m for the default stack) are the soft floor the scheduler
+  keeps free.
+- Numbers are deliberately **generous**. A limit that OOM-kills the backend
+  mid-backup is worse than no limit at all — the point is to bound a runaway,
+  not to squeeze steady state.
+- `postgres` 1536m is the largest because `shared_buffers` plus per-connection
+  `work_mem` is the single biggest legitimate consumer, and its OOM is the most
+  damaging.
+- `backend` / `backup-service` 1024m: `BackupDrService` reads the whole pg_dump
+  into a Buffer and encrypts it, so peak RSS is roughly twice the dump size plus
+  the Node baseline.
+- `redis` 512m is the real backstop because no `maxmemory` is configured.
+- `pids_limit` bounds fork-bomb blast radius (postgres forks a backend per
+  connection). `nofile` is raised well above Docker's 1024 default — too low for
+  a socket-heavy gateway — but is bounded rather than unlimited.
+- HA services are sized tighter than their core equivalents on purpose: the
+  overlay is a single-host replication/failover *demonstration* and must never
+  be able to squeeze the live services. Promote `postgres-primary` to 1536m
+  first if you make it the real data path.
 
 ## Validation
 
 Non-destructive syntax/merge check (safe to run against a live stack):
 
 ```
-docker compose config
-docker compose --profile engine-kamex --profile monitoring --profile observability --profile watchdog --profile workers config
+docker compose --env-file .env.example config
+docker compose --env-file .env.example --profile engine-kamex --profile monitoring --profile observability --profile watchdog --profile workers --profile tls config
+docker compose -f docker-compose.yml -f docker-compose.ha.yml --env-file .env.example --profile ha config
 ```

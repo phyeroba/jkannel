@@ -14,6 +14,7 @@ const schedule = (over: Partial<BackupScheduleRow> = {}): BackupScheduleRow => (
   next_run_at: null,
   created_by: 'op',
   created_at: new Date().toISOString(),
+  version: 0,
   ...over,
 });
 

@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PoolClient, QueryResultRow } from 'pg';
 import { randomBytes, createHash } from 'node:crypto';
 import { DatabaseService } from '../database/database.service';
@@ -428,13 +433,20 @@ export class ConsoleRepository {
     succeeded: boolean,
     detail: string,
     latencyMs?: number,
+    /**
+     * WHAT the operation actually verified (migration 038), so a stored success
+     * cannot be read as more than it was: `smpp_bind` / `tcp_socket` /
+     * `not_applicable` for a test, `bind_cycled` / `command_accepted` for a
+     * reconnect. NULL for operations that make no verification claim.
+     */
+    verification?: string,
   ) {
     return this.inTenant(actor, async (c) => {
       const status = succeeded ? 'succeeded' : 'failed';
       const deployment = (
         await c.query(
-          'UPDATE smsc_deployments SET status=$2,detail=$3,completed_at=now() WHERE id=$1 RETURNING *',
-          [deploymentId, status, detail],
+          'UPDATE smsc_deployments SET status=$2,detail=$3,verification=$4,completed_at=now() WHERE id=$1 RETURNING *',
+          [deploymentId, status, detail, verification ?? null],
         )
       ).rows[0];
       const state =
@@ -971,11 +983,213 @@ export class ConsoleRepository {
       query,
     );
   }
+  // ---------------------------------------------------------------------------
+  // Roles, permissions and role administration.
+  //
+  // Before migration 036 the whole surface here was one read-only SELECT: there
+  // was no way to create a role or change what one grants, so least privilege
+  // was unachievable and the console's Roles screen was a viewer. Everything
+  // below is tenant-scoped (all queries run inside inTenant, so RLS applies) and
+  // every mutation writes an audit_log row in the same transaction.
+  //
+  // The catalogue invariant -- a role may never be granted a permission that
+  // does not exist -- is enforced twice: resolvePermissionIds rejects unknown
+  // codes with a 400 that names them, and role_permissions.permission_id is a
+  // foreign key into permissions, so even a bug cannot invent one.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Column list for a role row in the shape the console API publishes:
+   * camelCase `userCount`/`isSystem` and a sorted `permissions` code array.
+   */
+  private static readonly ROLE_SELECT = `SELECT r.id,r.name,r.description,r.is_system AS "isSystem",
+      r.created_at AS "createdAt",r.updated_at AS "updatedAt",
+      (SELECT count(*)::int FROM user_roles ur WHERE ur.role_id=r.id) AS "userCount",
+      COALESCE((SELECT array_agg(p.code ORDER BY p.code) FROM role_permissions rp
+                  JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=r.id),'{}') AS permissions
+     FROM roles r`;
+
   listRoles(actor: Actor) {
+    return this.list(actor, `${ConsoleRepository.ROLE_SELECT} ORDER BY r.name`);
+  }
+
+  /** The full permission catalogue (global, seeded by migration 036). */
+  listPermissions(actor: Actor) {
     return this.list(
       actor,
-      "SELECT r.id,r.name,r.description,(SELECT count(*)::int FROM user_roles ur WHERE ur.role_id=r.id) AS user_count,(SELECT COALESCE(array_agg(p.code),'{}') FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=r.id) permissions FROM roles r ORDER BY r.name",
+      'SELECT code,description,category FROM permissions ORDER BY category,code',
     );
+  }
+
+  async getRole(actor: Actor, id: string) {
+    return this.inTenant(actor, (c) => this.roleById(c, id));
+  }
+
+  private async roleById(client: PoolClient, id: string) {
+    const row = (await client.query(`${ConsoleRepository.ROLE_SELECT} WHERE r.id=$1`, [id]))
+      .rows[0];
+    if (!row) throw new NotFoundException('Role not found');
+    return row;
+  }
+
+  /**
+   * Map permission codes to catalogue ids, rejecting the request with a 400 that
+   * names every code that does not exist. Duplicates in the input collapse.
+   */
+  private async resolvePermissionIds(client: PoolClient, codes: string[]): Promise<string[]> {
+    const wanted = [...new Set(codes)];
+    if (!wanted.length) return [];
+    const rows = (
+      await client.query<{ id: string; code: string }>(
+        'SELECT id,code FROM permissions WHERE code = ANY($1::text[])',
+        [wanted],
+      )
+    ).rows;
+    const known = new Map(rows.map((row) => [row.code, row.id]));
+    const unknown = wanted.filter((code) => !known.has(code));
+    if (unknown.length)
+      throw new BadRequestException(`Unknown permission code(s): ${unknown.sort().join(', ')}`);
+    return wanted.map((code) => known.get(code)!);
+  }
+
+  private async replaceRolePermissions(
+    client: PoolClient,
+    actor: Actor,
+    roleId: string,
+    permissionIds: string[],
+  ): Promise<void> {
+    await client.query('DELETE FROM role_permissions WHERE role_id=$1', [roleId]);
+    for (const permissionId of permissionIds) {
+      await client.query(
+        'INSERT INTO role_permissions(tenant_id,role_id,permission_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+        [actor.tenantId, roleId, permissionId],
+      );
+    }
+  }
+
+  /** How many users currently hold `code` through any role, in this tenant. */
+  private async holdersOf(client: PoolClient, code: string): Promise<number> {
+    const row = (
+      await client.query<{ count: string }>(
+        `SELECT count(DISTINCT ur.user_id)::int AS count
+           FROM user_roles ur
+           JOIN role_permissions rp ON rp.role_id=ur.role_id
+           JOIN permissions p ON p.id=rp.permission_id
+          WHERE p.code=$1`,
+        [code],
+      )
+    ).rows[0];
+    return Number(row?.count ?? 0);
+  }
+
+  /**
+   * Refuse a change that would leave nobody able to administer roles again.
+   * Only applies when somebody held `users.manage` beforehand, so a tenant that
+   * never had an administrator is not frozen out of building one.
+   */
+  private async assertRoleAdministrationSurvives(
+    client: PoolClient,
+    before: number,
+  ): Promise<void> {
+    if (before === 0) return;
+    if ((await this.holdersOf(client, 'users.manage')) === 0)
+      throw new ConflictException(
+        'That change would leave no user holding users.manage; role administration would become impossible',
+      );
+  }
+
+  async createRole(
+    actor: Actor,
+    value: { name: string; description?: string; permissions: string[] },
+  ) {
+    return this.inTenant(actor, async (c) => {
+      const permissionIds = await this.resolvePermissionIds(c, value.permissions);
+      let roleId: string;
+      try {
+        roleId = (
+          await c.query<{ id: string }>(
+            'INSERT INTO roles(tenant_id,name,description,is_system) VALUES($1,$2,$3,false) RETURNING id',
+            [actor.tenantId, value.name, value.description ?? null],
+          )
+        ).rows[0].id;
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505')
+          throw new ConflictException('A role with that name already exists');
+        throw error;
+      }
+      await this.replaceRolePermissions(c, actor, roleId, permissionIds);
+      const created = await this.roleById(c, roleId);
+      await this.audit(c, actor, 'role.created', 'role', roleId, null, created);
+      return created;
+    });
+  }
+
+  async updateRole(
+    actor: Actor,
+    id: string,
+    value: { name?: string; description?: string; permissions?: string[]; reason?: string },
+  ) {
+    return this.inTenant(actor, async (c) => {
+      const before = await this.roleById(c, id);
+      const administrators = await this.holdersOf(c, 'users.manage');
+      // A system role's name is part of the seeded catalogue and of migration
+      // 036's idempotency key; renaming one would make a re-run create a
+      // duplicate. Its description and permission set stay fully editable --
+      // "roles shall be configurable" (USER_MANAGEMENT spec §8).
+      if (before.isSystem && value.name !== undefined && value.name !== before.name)
+        throw new ConflictException('A system role cannot be renamed');
+      const permissionIds =
+        value.permissions === undefined
+          ? undefined
+          : await this.resolvePermissionIds(c, value.permissions);
+      if (value.name !== undefined || value.description !== undefined) {
+        try {
+          await c.query(
+            'UPDATE roles SET name=COALESCE($2,name),description=COALESCE($3,description),updated_at=now() WHERE id=$1',
+            [id, value.name ?? null, value.description ?? null],
+          );
+        } catch (error) {
+          if ((error as { code?: string }).code === '23505')
+            throw new ConflictException('A role with that name already exists');
+          throw error;
+        }
+      }
+      if (permissionIds !== undefined) {
+        await this.replaceRolePermissions(c, actor, id, permissionIds);
+        await c.query('UPDATE roles SET updated_at=now() WHERE id=$1', [id]);
+        await this.assertRoleAdministrationSurvives(c, administrators);
+        // A privilege change must not survive in an already-issued session.
+        // Mirrors updateUser: refresh re-resolves permissions, and revoking here
+        // makes the demotion immediate for everyone holding this role.
+        await c.query(
+          'UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL AND user_id IN (SELECT user_id FROM user_roles WHERE role_id=$1)',
+          [id],
+        );
+      }
+      const updated = await this.roleById(c, id);
+      await this.audit(c, actor, 'role.updated', 'role', id, before, updated, value.reason);
+      return updated;
+    });
+  }
+
+  async deleteRole(actor: Actor, id: string) {
+    return this.inTenant(actor, async (c) => {
+      const role = await this.roleById(c, id);
+      if (role.isSystem)
+        throw new ConflictException(
+          'A system role cannot be deleted; edit its permissions instead',
+        );
+      if (Number(role.userCount) > 0)
+        throw new ConflictException(
+          `Role is assigned to ${role.userCount} user(s); reassign them before deleting it`,
+        );
+      const administrators = await this.holdersOf(c, 'users.manage');
+      await c.query('DELETE FROM role_permissions WHERE role_id=$1', [id]);
+      await c.query('DELETE FROM roles WHERE id=$1', [id]);
+      await this.assertRoleAdministrationSurvives(c, administrators);
+      await this.audit(c, actor, 'role.deleted', 'role', id, role, null);
+      return { id, deleted: true };
+    });
   }
   async getUser(actor: Actor, id: string) {
     return this.inTenant(actor, async (c) => {

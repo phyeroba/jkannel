@@ -64,13 +64,17 @@ export const DEFAULT_SETTINGS: SettingDefault[] = [
     description: 'Default per-client request rate limit per minute.',
     editable: true,
   },
-  // Security
+  // Security. Every knob in this group except `security.require_mfa` is read at
+  // runtime by SecurityPolicyService and genuinely enforced -- see
+  // backend/src/security/security-policy.service.ts for the bounds each value is
+  // clamped to. Bounds are one-sided in the safe direction, so no setting here
+  // can make authentication weaker than the platform's built-in defaults.
   {
     key: 'security.access_token_ttl_seconds',
     group: 'Security',
     value: 900,
     type: 'number',
-    description: 'Access token lifetime in seconds.',
+    description: 'Access token lifetime in seconds. Enforced; clamped to 300–3600.',
     editable: true,
   },
   {
@@ -78,7 +82,49 @@ export const DEFAULT_SETTINGS: SettingDefault[] = [
     group: 'Security',
     value: 12,
     type: 'number',
-    description: 'Minimum password length for new/updated passwords.',
+    description:
+      'Minimum password length for new, reset and invited passwords. Enforced; clamped to 12–128 (the knob can only strengthen the requirement).',
+    editable: true,
+  },
+  {
+    key: 'security.password_require_uppercase',
+    group: 'Security',
+    value: true,
+    type: 'boolean',
+    description: 'Require at least one uppercase letter in a new password. Enforced.',
+    editable: true,
+  },
+  {
+    key: 'security.password_require_lowercase',
+    group: 'Security',
+    value: true,
+    type: 'boolean',
+    description: 'Require at least one lowercase letter in a new password. Enforced.',
+    editable: true,
+  },
+  {
+    key: 'security.password_require_number',
+    group: 'Security',
+    value: true,
+    type: 'boolean',
+    description: 'Require at least one digit in a new password. Enforced.',
+    editable: true,
+  },
+  {
+    key: 'security.password_require_symbol',
+    group: 'Security',
+    value: false,
+    type: 'boolean',
+    description: 'Require at least one non-alphanumeric character in a new password. Enforced.',
+    editable: true,
+  },
+  {
+    key: 'security.password_history_depth',
+    group: 'Security',
+    value: 5,
+    type: 'number',
+    description:
+      'How many previous passwords a new password is compared against. Enforced; clamped to 1–24.',
     editable: true,
   },
   {
@@ -86,7 +132,7 @@ export const DEFAULT_SETTINGS: SettingDefault[] = [
     group: 'Security',
     value: 5,
     type: 'number',
-    description: 'Failed attempts before an account is locked.',
+    description: 'Failed attempts before an account is locked. Enforced; clamped to 3–20.',
     editable: true,
   },
   {
@@ -94,7 +140,35 @@ export const DEFAULT_SETTINGS: SettingDefault[] = [
     group: 'Security',
     value: 15,
     type: 'number',
-    description: 'Lockout duration in minutes after threshold is reached.',
+    description:
+      'Lockout duration in minutes after threshold is reached. Enforced; clamped to 1–1440.',
+    editable: true,
+  },
+  {
+    key: 'security.session_idle_timeout_minutes',
+    group: 'Security',
+    value: 60,
+    type: 'number',
+    description:
+      'A session that has not refreshed for this long is revoked at its next refresh. Enforced; clamped to 5–10080. 0 disables.',
+    editable: true,
+  },
+  {
+    key: 'security.session_max_lifetime_hours',
+    group: 'Security',
+    value: 168,
+    type: 'number',
+    description:
+      'Absolute session lifetime; refresh is refused past it regardless of activity. Enforced; clamped to 1–8760. 0 disables.',
+    editable: true,
+  },
+  {
+    key: 'security.max_concurrent_sessions',
+    group: 'Security',
+    value: 0,
+    type: 'number',
+    description:
+      'Live sessions kept per user; a new login revokes the least recently active beyond this. Enforced; clamped to 1–100. 0 means unlimited.',
     editable: true,
   },
   {
@@ -102,7 +176,8 @@ export const DEFAULT_SETTINGS: SettingDefault[] = [
     group: 'Security',
     value: false,
     type: 'boolean',
-    description: 'Require multi-factor authentication (roadmap).',
+    description:
+      'ADVISORY ONLY — not enforced. Tenant-wide MFA forcing would lock out every user without an enrolled authenticator, so it is deliberately not wired; MFA is enforced per user once a TOTP device is confirmed.',
     editable: false,
   },
   // Retention (days; audit/reports are permanent)

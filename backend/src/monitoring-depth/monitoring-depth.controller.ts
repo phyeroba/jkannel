@@ -14,6 +14,7 @@ import {
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { Actor, EscalationStep, MonitoringDepthRepository } from './monitoring-depth.repository';
+import { NotificationReadinessService } from './notification-readiness.service';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -199,5 +200,27 @@ export class CorrelationController {
 
   @Get() @RequirePermissions('alerts.view') list(@Req() r: Request) {
     return this.repository.correlationSummary(actor(r));
+  }
+}
+
+/**
+ * Surfaces "can this tenant actually be told about an alert?" — the condition
+ * that used to be invisible on a fresh install. See
+ * {@link NotificationReadinessService}.
+ */
+@Controller('monitoring/notifications')
+@UseGuards(AuthGuard, PermissionsGuard)
+export class NotificationReadinessController {
+  constructor(private readonly readiness: NotificationReadinessService) {}
+
+  @Get('readiness') @RequirePermissions('alerts.view') get(@Req() r: Request) {
+    return this.readiness.readinessForTenant(actor(r).tenantId);
+  }
+
+  /** Re-seeds the default dashboard channel / escalation policy if missing. */
+  @Post('readiness/repair') @RequirePermissions('system.manage') async repair(@Req() r: Request) {
+    const tenantId = actor(r).tenantId;
+    const seeded = await this.readiness.ensureTenantDefaults(tenantId);
+    return { ...seeded, readiness: await this.readiness.readinessForTenant(tenantId) };
   }
 }

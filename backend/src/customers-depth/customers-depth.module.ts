@@ -6,6 +6,9 @@ import { CustomerQuotaService } from './customer-quota.service';
 import { CustomerCreditService } from './customer-credit.service';
 import { CustomerSenderIdsService } from './customer-sender-ids.service';
 import { CustomerRoutesService } from './customer-routes.service';
+import { CustomerRateLimitService } from './customer-rate-limit.service';
+import { GatewayRateLimiter } from '../api-gateway/gateway-rate-limiter';
+import { gatewayRedisProvider } from '../api-gateway/redis.provider';
 
 /**
  * Customer-depth feature module: quotas, prepaid credit, sender IDs, and route
@@ -29,12 +32,18 @@ import { CustomerRoutesService } from './customer-routes.service';
     CustomerCreditService,
     CustomerSenderIdsService,
     CustomerRoutesService,
+    // Per-customer send rate limiting reuses the gateway's Redis fixed-window
+    // limiter rather than growing a second implementation of the same counter.
+    gatewayRedisProvider,
+    GatewayRateLimiter,
+    CustomerRateLimitService,
   ],
   exports: [
     CustomerQuotaService,
     CustomerCreditService,
     CustomerSenderIdsService,
     CustomerRoutesService,
+    CustomerRateLimitService,
   ],
 })
 export class CustomersDepthModule {}

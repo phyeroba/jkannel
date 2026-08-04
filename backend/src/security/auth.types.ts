@@ -49,6 +49,9 @@ export interface AuditEvent {
     | 'account.locked'
     | 'token.refreshed'
     | 'token.refresh.rejected'
+    // Emitted when a login trims the user's live sessions down to
+    // security.max_concurrent_sessions.
+    | 'session.limit.enforced'
     | 'token.reuse.detected'
     | 'logout'
     | 'mfa.required'
