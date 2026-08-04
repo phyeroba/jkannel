@@ -31,6 +31,7 @@ import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
 import { RoutingDepthModule } from './routing-depth/routing-depth.module';
 import { ApiGatewayModule } from './api-gateway/api-gateway.module';
 import { DataModelModule } from './data-model/data-model.module';
+import { QueueConsoleModule } from './queue-console/queue-console.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { DataModelModule } from './data-model/data-model.module';
     RoutingDepthModule,
     ApiGatewayModule,
     DataModelModule,
+    QueueConsoleModule,
   ],
   controllers: [HealthController, MetricsController, JobsController, OpenApiController],
   providers: [

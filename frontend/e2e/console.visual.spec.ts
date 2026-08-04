@@ -42,7 +42,15 @@ test('@visual authenticated console uses grouped SVG navigation', async ({ page 
   await expect(sidebar.getByText('Messaging', { exact: true })).toBeVisible();
   await expect(sidebar.getByText('Insights', { exact: true })).toBeVisible();
   await expect(sidebar.getByText('Platform', { exact: true })).toBeVisible();
-  await expect(sidebar.locator('.nav-icon svg')).toHaveCount(19);
+  // Assert the invariant (every navigation entry renders an SVG icon) rather than
+  // a hard-coded total. The previous literal count silently rotted as navigation
+  // grew, and it also varies with the signed-in user's permissions, so a fixed
+  // number tests the fixture more than the UI.
+  const navIcons = sidebar.locator('.nav-icon svg');
+  const navLinks = sidebar.locator('.nav-group a');
+  await expect(navLinks.first()).toBeVisible();
+  expect(await navIcons.count()).toBe(await navLinks.count());
+  expect(await navIcons.count()).toBeGreaterThanOrEqual(10);
   const scrolling = await sidebar.evaluate((element) => {
     const nav = element.querySelector('nav')!;
     return { sidebar: getComputedStyle(element).overflowY, nav: getComputedStyle(nav).overflowY };

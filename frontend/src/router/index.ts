@@ -5,6 +5,7 @@ import CopilotView from '../views/CopilotView.vue';
 import SessionsView from '../views/SessionsView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
 import BulkSendView from '../views/BulkSendView.vue';
+import LiveQueueView from '../views/LiveQueueView.vue';
 import { canAccess, session } from '../stores/session';
 import { initializeSession, isAuthenticated } from '../stores/session';
 import LoginView from '../views/LoginView.vue';
@@ -160,6 +161,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Bulk Send',
       description: 'Queue a message to many recipients and track campaign delivery.',
       breadcrumb: ['Bulk Send'],
+      permission: 'messages.view',
+    },
+  },
+  {
+    path: '/live-queue',
+    name: 'live-queue',
+    component: LiveQueueView,
+    meta: {
+      title: 'Live Queue',
+      description:
+        'Watch the live queue and per-bind engine state, and move traffic to another bind without restarting the engine.',
+      breadcrumb: ['Live Queue'],
       permission: 'messages.view',
     },
   },

@@ -87,7 +87,17 @@ export class AuthService {
       if (user) await this.recordLogin(user, username, 'failure', false, context);
       throw new UnauthorizedException('Invalid credentials');
     }
-    if (user.status !== 'active') throw new UnauthorizedException('Account is not active');
+    // A 'locked' status outlives its window. recordFailedLogin sets
+    // status='locked' alongside locked_until, but only locked_until expires --
+    // nothing resets the status except recordSuccessfulLogin, which is below this
+    // line and so was unreachable. Treating a stale 'locked' as "not active" made
+    // five bad guesses disable any account PERMANENTLY: an unauthenticated denial
+    // of service. Reaching this line already guarantees no lock window is active
+    // (the branch above returns while one is), so a stale 'locked' must not bar
+    // entry; recordSuccessfulLogin then clears it back to 'active'. Every other
+    // non-active status (pending, expired, ...) is still rejected.
+    if (user.status !== 'active' && user.status !== 'locked')
+      throw new UnauthorizedException('Account is not active');
     // Multi-factor enforcement: if this user has a confirmed TOTP device the
     // login body must carry a valid `totp` code or an unused recovery code.
     let mfaUsed = false;

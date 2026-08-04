@@ -33,6 +33,13 @@ export const navigation: NavigationItem[] = [
     group: 'Messaging',
   },
   {
+    label: 'Live Queue',
+    to: '/live-queue',
+    icon: 'queue',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
     label: 'Queues',
     to: '/queues',
     icon: 'queue',

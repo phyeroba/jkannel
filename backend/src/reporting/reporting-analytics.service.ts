@@ -7,12 +7,52 @@ export interface Actor {
   tenantId: string;
 }
 
+/**
+ * Delivery outcome counts for one scope, plus the rates derived from them.
+ * Sourced from the engine repository's latest-DLR correlation — see
+ * {@link summariseOutcomes} for why the rate is not simply dlrs/messages.
+ */
+export interface DeliveryOutcomes {
+  delivered: number;
+  failed: number;
+  rejected: number;
+  buffered: number;
+  accepted: number;
+  pending: number;
+  unknown: number;
+  /** delivered + failed + rejected: messages whose fate is decided. */
+  finalised: number;
+  /** buffered + accepted: acknowledged by the SMSC but not yet resolved. */
+  inFlight: number;
+  /** delivered / finalised. null when nothing has finalised yet. */
+  successRate: number | null;
+  /** (failed + rejected) / finalised. null when nothing has finalised yet. */
+  failureRate: number | null;
+}
+
 export interface SuccessRateGroup {
   label: string;
   messages: number;
   dlrs: number;
+  /**
+   * delivered / (delivered + failed + rejected). NOTE: this used to be
+   * dlrs/messages, which counted a *failure* receipt as a success.
+   */
   successRate: number | null;
   failureRate: number | null;
+  /**
+   * The former meaning of successRate, kept under an honest name: the share of
+   * messages that produced any delivery report at all, of any outcome.
+   */
+  dlrRate: number | null;
+  // Raw counts behind the rate, so an operator can see why it is what it is and
+  // judge a rate computed over a tiny sample. null when SQLBox is unavailable.
+  delivered: number | null;
+  failed: number | null;
+  rejected: number | null;
+  pending: number | null;
+  inFlight: number | null;
+  finalised: number | null;
 }
 export interface HeatmapCell {
   dow: number;
@@ -26,6 +66,64 @@ const UNAVAILABLE = {
   message: 'KAMEX_SQLBOX_DATABASE_URL is not configured',
 };
 const AVAILABLE = { status: 'available' as const, type: 'kamex-sqlbox' };
+
+/**
+ * Honest zero-denominator division, rounded to 4dp. null (not 0, not 1) when
+ * there is nothing to divide by — the convention used throughout this service.
+ */
+const ratio = (numerator: number, denominator: number): number | null =>
+  denominator > 0 ? Math.round((numerator / denominator) * 10000) / 10000 : null;
+
+const percent = (rate: number | null): number | null =>
+  rate === null ? null : Math.round(rate * 1000) / 10;
+
+/**
+ * Turns the engine repository's per-status counts into an outcome summary.
+ *
+ * successRate is delivered / (delivered + failed + rejected): only messages
+ * whose outcome is final count. Messages still in flight (buffered/accepted) or
+ * awaiting a receipt (pending) are excluded from both sides, so a backlog
+ * neither flatters nor penalises the rate, and a carrier that rejects
+ * everything scores 0 — not the 100% that a "does a DLR exist?" test reported.
+ */
+export function summariseOutcomes(counts: {
+  delivered: number;
+  failed: number;
+  rejected: number;
+  buffered: number;
+  accepted: number;
+  pending: number;
+  unknown: number;
+}): DeliveryOutcomes {
+  const finalised = counts.delivered + counts.failed + counts.rejected;
+  return {
+    delivered: counts.delivered,
+    failed: counts.failed,
+    rejected: counts.rejected,
+    buffered: counts.buffered,
+    accepted: counts.accepted,
+    pending: counts.pending,
+    unknown: counts.unknown,
+    finalised,
+    inFlight: counts.buffered + counts.accepted,
+    successRate: ratio(counts.delivered, finalised),
+    failureRate: ratio(counts.failed + counts.rejected, finalised),
+  };
+}
+
+/**
+ * Explains the two different windows the success-rate reports combine, because
+ * they are not the same period: messages/dlrs come from the immutable snapshot
+ * for the period shown, while the delivery outcomes are derived live from raw
+ * SQLBox rows (which the snapshot table does not record) and therefore cover
+ * everything still inside the SQLBox retention window.
+ */
+const OUTCOME_NOTE =
+  'successRate is delivered / (delivered + failed + rejected), derived from each ' +
+  "message's latest delivery report (dlr_mask on the DLR row); pending and in-flight " +
+  'messages are excluded from both sides and the rate is null when nothing has ' +
+  'finalised. messages/dlrs are the snapshot counts for the period shown, while the ' +
+  'delivery outcome counts are computed live over the SQLBox retention window.';
 
 /**
  * Analytics behind the Reports screen: KPI cards, chart series and grouped
@@ -74,9 +172,31 @@ export class ReportingAnalyticsService implements OnModuleDestroy {
     );
   }
 
+  /**
+   * Delivery outcomes for the tenant's SMSCs (optionally a single one), via the
+   * engine repository's shared latest-DLR derivation. Deliberately delegates
+   * rather than re-deriving the mask mapping: two implementations of "what does
+   * dlr_mask mean" would inevitably diverge, and only the DLR row's mask is an
+   * event — an MT row's dlr_mask (usually 31) is a subscription, not a status.
+   *
+   * Returns null when SQLBox is unconfigured or the query fails, so callers
+   * report an honest null rate instead of a wrong one.
+   */
+  private async outcomesFor(
+    allowedSmscIds: string[],
+    smscId?: string,
+  ): Promise<DeliveryOutcomes | null> {
+    if (!allowedSmscIds.length) return null;
+    try {
+      return summariseOutcomes(await this.sqlbox.deliveryStatusCounts({ allowedSmscIds, smscId }));
+    } catch {
+      return null;
+    }
+  }
+
   /** KPI cards for the reports/overview header. */
   async overview(actor: Actor) {
-    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+    const snapshot = await this.database.tenantTransaction(actor.tenantId, async (client) => {
       const latestDaily = (
         await client.query<{ messages: string; dlrs: string; period_start: string }>(
           `SELECT message_count messages, dlr_count dlrs, period_start
@@ -109,34 +229,61 @@ export class ReportingAnalyticsService implements OnModuleDestroy {
       const routes = (
         await client.query<{ c: string }>('SELECT count(*)::text c FROM routing_rules')
       ).rows[0];
-
-      const messages = Number(latestDaily?.messages ?? 0);
-      const dlrs = Number(latestDaily?.dlrs ?? 0);
-      const deliveryRate = messages > 0 ? Math.round((dlrs / messages) * 1000) / 10 : null;
-
-      return {
-        cards: [
-          { key: 'messages_today', label: 'Messages (latest day)', value: messages },
-          { key: 'dlrs_today', label: 'Delivery reports (latest day)', value: dlrs },
-          {
-            key: 'delivery_rate',
-            label: 'Delivery confirmation rate',
-            value: deliveryRate,
-            unit: '%',
-          },
-          {
-            key: 'messages_week',
-            label: 'Messages (latest week)',
-            value: Number(weekly?.messages ?? 0),
-          },
-          { key: 'smsc_total', label: 'SMSC connections', value: Number(smsc.total) },
-          { key: 'smsc_degraded', label: 'SMSCs degraded/disabled', value: Number(smsc.degraded) },
-          { key: 'routes', label: 'Routes', value: Number(routes.c) },
-          { key: 'alerts_open', label: 'Open alerts', value: Number(alerts.open) },
-        ],
-        latestDailyPeriod: latestDaily?.period_start ?? null,
-      };
+      const engineIds = (
+        await client.query<{ engine_id: string }>('SELECT engine_id FROM smsc_definitions')
+      ).rows.map((row) => row.engine_id);
+      return { latestDaily, weekly, smsc, alerts, routes, engineIds };
     });
+
+    const { latestDaily, weekly, smsc, alerts, routes } = snapshot;
+    const messages = Number(latestDaily?.messages ?? 0);
+    const dlrs = Number(latestDaily?.dlrs ?? 0);
+    // dlrs/messages is DLR *coverage*, not success: a failure receipt counts here.
+    const dlrCoverage = percent(ratio(dlrs, messages));
+    const outcomes = await this.outcomesFor(snapshot.engineIds);
+
+    return {
+      cards: [
+        { key: 'messages_today', label: 'Messages (latest day)', value: messages },
+        { key: 'dlrs_today', label: 'Delivery reports (latest day)', value: dlrs },
+        {
+          key: 'delivery_rate',
+          label: 'Delivery report coverage',
+          value: dlrCoverage,
+          unit: '%',
+        },
+        {
+          key: 'delivery_success_rate',
+          label: 'Delivery success rate',
+          value: percent(outcomes?.successRate ?? null),
+          unit: '%',
+        },
+        { key: 'delivered', label: 'Delivered', value: outcomes?.delivered ?? null },
+        {
+          key: 'delivery_failures',
+          label: 'Failed/rejected',
+          value: outcomes ? outcomes.failed + outcomes.rejected : null,
+        },
+        {
+          key: 'delivery_pending',
+          label: 'Awaiting delivery report',
+          value: outcomes?.pending ?? null,
+        },
+        {
+          key: 'messages_week',
+          label: 'Messages (latest week)',
+          value: Number(weekly?.messages ?? 0),
+        },
+        { key: 'smsc_total', label: 'SMSC connections', value: Number(smsc.total) },
+        { key: 'smsc_degraded', label: 'SMSCs degraded/disabled', value: Number(smsc.degraded) },
+        { key: 'routes', label: 'Routes', value: Number(routes.c) },
+        { key: 'alerts_open', label: 'Open alerts', value: Number(alerts.open) },
+      ],
+      latestDailyPeriod: latestDaily?.period_start ?? null,
+      outcomes,
+      note: OUTCOME_NOTE,
+      source: outcomes ? AVAILABLE : UNAVAILABLE,
+    };
   }
 
   /** Daily message/DLR time series for a trend chart. */
@@ -201,31 +348,65 @@ export class ReportingAnalyticsService implements OnModuleDestroy {
     });
   }
 
-  /** Delivered vs unconfirmed breakdown from the latest daily total snapshot. */
+  /**
+   * Delivery outcome breakdown. Segments are the real Kannel outcomes derived
+   * from each message's latest DLR — the previous version labelled "has a
+   * delivery report of any kind" as "Confirmed delivered", which counted
+   * failures and rejections as deliveries. Falls back to the snapshot's DLR
+   * coverage (honestly labelled) when SQLBox cannot be read.
+   */
   async deliveryBreakdown(actor: Actor) {
-    return this.database.tenantTransaction(actor.tenantId, async (client: PoolClient) => {
-      const row = (
-        await client.query<{ messages: string; dlrs: string }>(
-          `SELECT message_count messages, dlr_count dlrs FROM report_snapshots
+    const snapshot = await this.database.tenantTransaction(
+      actor.tenantId,
+      async (client: PoolClient) => {
+        const row = (
+          await client.query<{ messages: string; dlrs: string }>(
+            `SELECT message_count messages, dlr_count dlrs FROM report_snapshots
             WHERE period_type='daily' AND scope='total' ORDER BY period_start DESC LIMIT 1`,
-        )
-      ).rows[0];
-      const messages = Number(row?.messages ?? 0);
-      const dlrs = Math.min(Number(row?.dlrs ?? 0), messages);
+          )
+        ).rows[0];
+        const engineIds = (
+          await client.query<{ engine_id: string }>('SELECT engine_id FROM smsc_definitions')
+        ).rows.map((r) => r.engine_id);
+        return { row, engineIds };
+      },
+    );
+    const messages = Number(snapshot.row?.messages ?? 0);
+    const dlrs = Math.min(Number(snapshot.row?.dlrs ?? 0), messages);
+    const outcomes = await this.outcomesFor(snapshot.engineIds);
+    if (!outcomes)
       return {
         segments: [
-          { label: 'Confirmed delivered', value: dlrs },
+          { label: 'Has a delivery report (outcome unknown)', value: dlrs },
           { label: 'Awaiting/unconfirmed', value: Math.max(messages - dlrs, 0) },
         ],
         total: messages,
+        successRate: null,
+        outcomes: null,
+        note: OUTCOME_NOTE,
+        source: UNAVAILABLE,
       };
-    });
+    const segments = [
+      { label: 'Delivered', value: outcomes.delivered },
+      { label: 'Failed', value: outcomes.failed },
+      { label: 'Rejected', value: outcomes.rejected },
+      { label: 'In flight (buffered/accepted)', value: outcomes.inFlight },
+      { label: 'Awaiting delivery report', value: outcomes.pending },
+      { label: 'Unknown', value: outcomes.unknown },
+    ];
+    return {
+      segments,
+      total: segments.reduce((sum, segment) => sum + segment.value, 0),
+      successRate: outcomes.successRate,
+      outcomes,
+      note: OUTCOME_NOTE,
+      source: AVAILABLE,
+    };
   }
 
   /**
-   * Per-SMSC success/failure for the latest daily period. successRate is the
-   * fraction of messages that produced a delivery report (dlrs/messages);
-   * failureRate is its complement. Rates are null when a scope had no messages.
+   * Per-SMSC success/failure for the latest daily period. successRate is
+   * delivered / (delivered + failed + rejected) — see {@link summariseOutcomes}.
    */
   smscSuccess(actor: Actor) {
     return this.successRates(actor, 'smsc');
@@ -236,39 +417,80 @@ export class ReportingAnalyticsService implements OnModuleDestroy {
   }
 
   private async successRates(actor: Actor, scope: 'smsc' | 'route') {
-    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+    const snapshot = await this.database.tenantTransaction(actor.tenantId, async (client) => {
       const latest = (
         await client.query<{ period_start: string }>(
           `SELECT period_start FROM report_snapshots WHERE period_type='daily' AND scope=$1 ORDER BY period_start DESC LIMIT 1`,
           [scope],
         )
       ).rows[0];
-      if (!latest) return { period: null, groups: [] as SuccessRateGroup[] };
+      if (!latest) return { period: null as string | null, rows: [], engineIds: [] as string[] };
       const rows = (
-        await client.query<{ scope_label: string; messages: string; dlrs: string }>(
-          `SELECT scope_label, message_count messages, dlr_count dlrs
+        await client.query<{
+          scope_key: string | null;
+          scope_label: string;
+          messages: string;
+          dlrs: string;
+          details: { targetSmscEngineId?: string | null } | null;
+        }>(
+          `SELECT scope_key, scope_label, message_count messages, dlr_count dlrs, details
              FROM report_snapshots WHERE period_type='daily' AND scope=$1 AND period_start=$2
             ORDER BY message_count DESC`,
           [scope, latest.period_start],
         )
       ).rows;
-      return {
-        period: latest.period_start,
-        groups: rows.map((row): SuccessRateGroup => {
-          const messages = Number(row.messages);
-          const dlrs = Math.min(Number(row.dlrs), messages);
-          const successRate = messages > 0 ? Math.round((dlrs / messages) * 10000) / 10000 : null;
-          return {
-            label: row.scope_label,
-            messages,
-            dlrs,
-            successRate,
-            failureRate:
-              successRate === null ? null : Math.round((1 - successRate) * 10000) / 10000,
-          };
-        }),
-      };
+      const engineIds = (
+        await client.query<{ engine_id: string }>('SELECT engine_id FROM smsc_definitions')
+      ).rows.map((row) => row.engine_id);
+      return { period: latest.period_start, rows, engineIds };
     });
+
+    if (snapshot.period === null)
+      return {
+        period: null,
+        groups: [] as SuccessRateGroup[],
+        note: OUTCOME_NOTE,
+        source: UNAVAILABLE,
+      };
+
+    // One outcome query per distinct SMSC, memoised: several routes can share a
+    // target SMSC (the same 'target_smsc' attribution the snapshot writer uses).
+    const cache = new Map<string, DeliveryOutcomes | null>();
+    const groups: SuccessRateGroup[] = [];
+    let anyOutcomes = false;
+    for (const row of snapshot.rows) {
+      const messages = Number(row.messages);
+      const dlrs = Math.min(Number(row.dlrs), messages);
+      const engineId =
+        scope === 'smsc' ? (row.scope_key ?? null) : (row.details?.targetSmscEngineId ?? null);
+      let outcomes: DeliveryOutcomes | null = null;
+      if (engineId && snapshot.engineIds.includes(engineId)) {
+        if (!cache.has(engineId))
+          cache.set(engineId, await this.outcomesFor(snapshot.engineIds, engineId));
+        outcomes = cache.get(engineId) ?? null;
+      }
+      if (outcomes) anyOutcomes = true;
+      groups.push({
+        label: row.scope_label,
+        messages,
+        dlrs,
+        successRate: outcomes ? outcomes.successRate : null,
+        failureRate: outcomes ? outcomes.failureRate : null,
+        dlrRate: ratio(dlrs, messages),
+        delivered: outcomes ? outcomes.delivered : null,
+        failed: outcomes ? outcomes.failed : null,
+        rejected: outcomes ? outcomes.rejected : null,
+        pending: outcomes ? outcomes.pending : null,
+        inFlight: outcomes ? outcomes.inFlight : null,
+        finalised: outcomes ? outcomes.finalised : null,
+      });
+    }
+    return {
+      period: snapshot.period,
+      groups,
+      note: OUTCOME_NOTE,
+      source: anyOutcomes ? AVAILABLE : UNAVAILABLE,
+    };
   }
 
   /**

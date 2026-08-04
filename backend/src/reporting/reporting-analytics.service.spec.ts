@@ -1,4 +1,50 @@
-import { ReportingAnalyticsService } from './reporting-analytics.service';
+import { ReportingAnalyticsService, summariseOutcomes } from './reporting-analytics.service';
+import { DLR_EVENT_STATUS } from '../engine/kamex-sqlbox.repository';
+
+/** Zeroed delivery-status counts, overridden per test. */
+const counts = (overrides: Partial<Record<string, number>> = {}) => ({
+  delivered: 0,
+  failed: 0,
+  rejected: 0,
+  buffered: 0,
+  accepted: 0,
+  pending: 0,
+  unknown: 0,
+  ...overrides,
+});
+
+/**
+ * Snapshot-backed tenant transaction stub. `groups` are report_snapshots rows
+ * for the latest daily period; `engineIds` are the tenant's SMSC engine ids.
+ */
+function databaseWith(groups: any[], engineIds: string[] = [], period = '2026-07-09') {
+  const client = {
+    query: jest.fn(async (sql: string) => {
+      if (sql.includes('FROM smsc_definitions'))
+        return { rows: engineIds.map((engine_id) => ({ engine_id })) };
+      if (sql.includes('ORDER BY period_start DESC LIMIT 1'))
+        return { rows: [{ period_start: period, messages: '0', dlrs: '0' }] };
+      if (sql.includes('ORDER BY message_count DESC')) return { rows: groups };
+      return { rows: [] };
+    }),
+  };
+  return { tenantTransaction: (_t: string, work: any) => work(client) } as any;
+}
+
+/** SQLBox repository stub returning per-SMSC delivery status counts. */
+function sqlboxWith(bySmsc: Record<string, ReturnType<typeof counts>>) {
+  return {
+    deliveryStatusCounts: jest.fn(async ({ smscId }: { smscId?: string }) => {
+      const found = smscId ? bySmsc[smscId] : undefined;
+      if (!found) throw new Error(`no counts for ${smscId}`);
+      return {
+        ...found,
+        resendable: found.failed + found.rejected,
+        inFlight: found.buffered + found.accepted,
+      };
+    }),
+  } as any;
+}
 
 describe('ReportingAnalyticsService', () => {
   const service = new ReportingAnalyticsService({} as any, {} as any);
@@ -25,23 +71,60 @@ describe('ReportingAnalyticsService', () => {
     expect(performance.kinds.find((k) => k.key === 'latency_sla')!.available).toBe(true);
   });
 
-  it('computes per-SMSC success and failure rates from the latest daily snapshots', async () => {
-    const client = {
-      query: jest.fn(async (sql: string) => {
-        if (sql.includes('ORDER BY period_start DESC LIMIT 1'))
-          return { rows: [{ period_start: '2026-07-09' }] };
-        if (sql.includes('ORDER BY message_count DESC'))
-          return {
-            rows: [
-              { scope_label: 'Carrier A', messages: '200', dlrs: '150' },
-              { scope_label: 'Carrier B', messages: '0', dlrs: '0' },
-            ],
-          };
-        return { rows: [] };
-      }),
-    };
-    const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
-    const result = await new ReportingAnalyticsService(database, {} as any).smscSuccess({
+  describe('delivery outcome semantics', () => {
+    // The mask mapping lives in the engine repository; this asserts the shared
+    // table is what reporting relies on, so the two can never silently diverge.
+    it('maps each Kannel DLR event to success, failure or in-flight', () => {
+      expect(DLR_EVENT_STATUS[1]).toBe('delivered'); // success
+      expect(DLR_EVENT_STATUS[2]).toBe('failed'); // failure
+      expect(DLR_EVENT_STATUS[4]).toBe('buffered'); // in flight
+      expect(DLR_EVENT_STATUS[8]).toBe('accepted'); // in flight
+      expect(DLR_EVENT_STATUS[16]).toBe('rejected'); // failure
+      // 31 is the *requested* mask on an MT row, never a delivery event.
+      expect(DLR_EVENT_STATUS[31]).toBeUndefined();
+
+      const summary = summariseOutcomes(
+        counts({ delivered: 1, failed: 1, rejected: 1, buffered: 1, accepted: 1, pending: 1 }),
+      );
+      // Only delivered/failed/rejected are finalised; buffered/accepted/pending are not.
+      expect(summary.finalised).toBe(3);
+      expect(summary.inFlight).toBe(2);
+      expect(summary.successRate).toBeCloseTo(1 / 3, 4);
+      expect(summary.failureRate).toBeCloseTo(2 / 3, 4);
+    });
+
+    it('returns a null success rate when nothing has finalised', () => {
+      const summary = summariseOutcomes(counts({ pending: 500, buffered: 10, accepted: 5 }));
+      expect(summary.successRate).toBeNull();
+      expect(summary.failureRate).toBeNull();
+      expect(summary.finalised).toBe(0);
+    });
+
+    it('does not let a pending backlog drag the denominator', () => {
+      const summary = summariseOutcomes(counts({ delivered: 10, pending: 9990 }));
+      expect(summary.successRate).toBe(1);
+    });
+  });
+
+  it('computes per-SMSC success from delivery outcomes, not from DLR existence', async () => {
+    const database = databaseWith(
+      [
+        {
+          scope_key: 'smsc-a',
+          scope_label: 'Carrier A',
+          messages: '200',
+          dlrs: '150',
+          details: {},
+        },
+        { scope_key: 'smsc-b', scope_label: 'Carrier B', messages: '0', dlrs: '0', details: {} },
+      ],
+      ['smsc-a', 'smsc-b'],
+    );
+    const sqlbox = sqlboxWith({
+      'smsc-a': counts({ delivered: 120, failed: 20, rejected: 10, pending: 50 }),
+      'smsc-b': counts(),
+    });
+    const result = await new ReportingAnalyticsService(database, sqlbox).smscSuccess({
       tenantId: '1',
     });
     expect(result.period).toBe('2026-07-09');
@@ -49,11 +132,130 @@ describe('ReportingAnalyticsService', () => {
       label: 'Carrier A',
       messages: 200,
       dlrs: 150,
-      successRate: 0.75,
-      failureRate: 0.25,
+      // 120 delivered / 150 finalised — NOT 150 DLRs / 200 messages (0.75).
+      successRate: 0.8,
+      failureRate: 0.2,
+      dlrRate: 0.75, // the old successRate, kept under an honest name
+      delivered: 120,
+      failed: 20,
+      rejected: 10,
+      pending: 50,
+      inFlight: 0,
+      finalised: 150,
     });
-    // A scope with no messages yields null rates rather than dividing by zero.
+    // A scope with nothing finalised yields null rates rather than 0 or 1.
     expect(result.groups[1].successRate).toBeNull();
+    expect(result.groups[1].failureRate).toBeNull();
+  });
+
+  it('reports 0% success for a carrier whose traffic is entirely rejected', async () => {
+    // THE BUG: every message produced a DLR, so dlrs/messages said 100% success
+    // while the carrier delivered nothing at all.
+    const database = databaseWith(
+      [
+        {
+          scope_key: 'smsc-reject',
+          scope_label: 'Rejecting carrier',
+          messages: '500',
+          dlrs: '500',
+          details: {},
+        },
+      ],
+      ['smsc-reject'],
+    );
+    const sqlbox = sqlboxWith({ 'smsc-reject': counts({ rejected: 500 }) });
+    const result = await new ReportingAnalyticsService(database, sqlbox).smscSuccess({
+      tenantId: '1',
+    });
+    expect(result.groups[0].successRate).toBe(0);
+    expect(result.groups[0].failureRate).toBe(1);
+    expect(result.groups[0].rejected).toBe(500);
+    expect(result.groups[0].dlrRate).toBe(1); // what the old formula reported as success
+  });
+
+  it('attributes route performance through the snapshot target SMSC', async () => {
+    const database = databaseWith(
+      [
+        {
+          scope_key: 'route-1',
+          scope_label: 'Primary route',
+          messages: '10',
+          dlrs: '10',
+          details: { attribution: 'target_smsc', targetSmscEngineId: 'smsc-a' },
+        },
+        {
+          scope_key: 'route-2',
+          scope_label: 'Unrouted',
+          messages: '0',
+          dlrs: '0',
+          details: { attribution: 'target_smsc', targetSmscEngineId: null },
+        },
+      ],
+      ['smsc-a'],
+    );
+    const sqlbox = sqlboxWith({ 'smsc-a': counts({ delivered: 8, failed: 2 }) });
+    const result = await new ReportingAnalyticsService(database, sqlbox).routePerformance({
+      tenantId: '1',
+    });
+    expect(result.groups[0].successRate).toBe(0.8);
+    // A route with no resolvable target SMSC reports null, not a guessed rate.
+    expect(result.groups[1].successRate).toBeNull();
+    expect(result.groups[1].delivered).toBeNull();
+  });
+
+  it('reports null rates (never a wrong one) when SQLBox cannot be read', async () => {
+    const database = databaseWith(
+      [
+        {
+          scope_key: 'smsc-a',
+          scope_label: 'Carrier A',
+          messages: '200',
+          dlrs: '150',
+          details: {},
+        },
+      ],
+      ['smsc-a'],
+    );
+    const sqlbox = {
+      deliveryStatusCounts: jest.fn(async () => {
+        throw new Error('KAMEX_SQLBOX_DATABASE_URL is not configured');
+      }),
+    } as any;
+    const result = await new ReportingAnalyticsService(database, sqlbox).smscSuccess({
+      tenantId: '1',
+    });
+    expect(result.groups[0].successRate).toBeNull();
+    expect(result.groups[0].dlrRate).toBe(0.75);
+    expect(result.source.status).toBe('unavailable');
+  });
+
+  it('breaks delivery down by real outcome instead of labelling DLRs as delivered', async () => {
+    const database = databaseWith([], ['smsc-a']);
+    const sqlbox = {
+      deliveryStatusCounts: jest.fn(async () => ({
+        ...counts({
+          delivered: 70,
+          failed: 20,
+          rejected: 10,
+          buffered: 3,
+          accepted: 2,
+          pending: 5,
+        }),
+        resendable: 30,
+        inFlight: 8,
+      })),
+    } as any;
+    const result = await new ReportingAnalyticsService(database, sqlbox).deliveryBreakdown({
+      tenantId: '1',
+    });
+    const labels = result.segments.map((s) => s.label);
+    expect(labels).toEqual(
+      expect.arrayContaining(['Delivered', 'Failed', 'Rejected', 'Awaiting delivery report']),
+    );
+    expect(labels).not.toContain('Confirmed delivered');
+    expect(result.segments.find((s) => s.label === 'Delivered')!.value).toBe(70);
+    expect(result.successRate).toBe(0.7);
+    expect(result.total).toBe(110);
   });
 
   it('returns an honest unavailable heatmap when SQLBox is not configured', async () => {
@@ -76,16 +278,18 @@ describe('ReportingAnalyticsService', () => {
     expect(result.note).toContain('foreign_id');
   });
 
-  it('computes overview KPI cards including a delivery rate', async () => {
+  it('computes overview KPI cards including a real delivery success rate', async () => {
     const rows: Record<string, any[]> = {
       daily: [{ messages: '200', dlrs: '150', period_start: '2026-07-09' }],
       weekly: [{ messages: '1200', dlrs: '1000' }],
       smsc: [{ total: '3', enabled: '2', degraded: '1' }],
       alerts: [{ open: '4', critical: '1' }],
       routes: [{ c: '5' }],
+      engines: [{ engine_id: 'smsc-a' }],
     };
     const client = {
       query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT engine_id FROM smsc_definitions')) return { rows: rows.engines };
         if (sql.includes("period_type='daily' AND scope='total'")) return { rows: rows.daily };
         if (sql.includes("period_type='weekly'")) return { rows: rows.weekly };
         if (sql.includes('FROM smsc_definitions')) return { rows: rows.smsc };
@@ -95,10 +299,21 @@ describe('ReportingAnalyticsService', () => {
       }),
     };
     const database: any = { tenantTransaction: (_t: string, work: any) => work(client) };
-    const svc = new ReportingAnalyticsService(database, {} as any);
-    const overview = await svc.overview({ tenantId: '1' });
-    const rate = overview.cards.find((c) => c.key === 'delivery_rate')!;
-    expect(rate.value).toBe(75); // 150/200
+    const sqlbox = {
+      deliveryStatusCounts: jest.fn(async () => ({
+        ...counts({ delivered: 120, failed: 20, rejected: 10, pending: 50 }),
+        resendable: 30,
+        inFlight: 0,
+      })),
+    } as any;
+    const overview = await new ReportingAnalyticsService(database, sqlbox).overview({
+      tenantId: '1',
+    });
+    // Coverage keeps its old value under a label that says what it measures.
+    expect(overview.cards.find((c) => c.key === 'delivery_rate')!.value).toBe(75); // 150/200
+    // Success is 120 delivered of 150 finalised.
+    expect(overview.cards.find((c) => c.key === 'delivery_success_rate')!.value).toBe(80);
+    expect(overview.cards.find((c) => c.key === 'delivery_failures')!.value).toBe(30);
     expect(overview.cards.find((c) => c.key === 'messages_today')!.value).toBe(200);
   });
 });

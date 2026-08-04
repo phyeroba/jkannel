@@ -29,3 +29,6 @@ runtime/**/backups/
 *.dump.enc
 *.pgdump
 *.backup
+
+# Playwright MCP scratch output (browser snapshots/screenshots)
+.playwright-mcp/

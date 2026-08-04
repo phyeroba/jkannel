@@ -34,17 +34,32 @@ describe('ReportScheduleService', () => {
         smscSuccess: jest.fn(async () => ({
           period: '2026-07-09',
           groups: [
-            { label: 'Carrier A', messages: 10, dlrs: 8, successRate: 0.8, failureRate: 0.2 },
+            {
+              label: 'Carrier A',
+              messages: 10,
+              dlrs: 8,
+              delivered: 6,
+              failed: 1,
+              rejected: 1,
+              pending: 2,
+              successRate: 0.75,
+              failureRate: 0.25,
+            },
           ],
         })),
       };
       const report = await build({ analytics }).renderReport('smsc_success', '1', null);
       expect(analytics.smscSuccess).toHaveBeenCalledWith({ tenantId: '1' });
       expect(report.rows).toHaveLength(1);
+      // Raw outcome counts are exported alongside the rate so it is judgeable.
       expect(report.columns.map((c) => c.key)).toEqual([
         'label',
         'messages',
         'dlrs',
+        'delivered',
+        'failed',
+        'rejected',
+        'pending',
         'successRate',
         'failureRate',
       ]);

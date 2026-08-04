@@ -66,14 +66,24 @@ class MemoryAuth implements AuthRepository, AuditSink {
   async findCredential(tenant: string, username: string) {
     return tenant === 'acme' && username === 'operator' ? this.credential : undefined;
   }
+  // These two mirror the SQL in postgres-auth.repository.ts exactly. They used to
+  // only touch failedLoginCount/lockedUntil, which diverged from production (the
+  // real UPDATE also flips status to 'locked', and only a successful login flips
+  // it back) — that divergence is what hid the permanent-lockout defect from this
+  // suite. Keep them faithful to the queries.
   async recordFailedLogin(_: string, count: number, locked?: Date) {
     if (this.credential) {
       this.credential.failedLoginCount = count;
       this.credential.lockedUntil = locked;
+      if (locked) this.credential.status = 'locked';
     }
   }
   async recordSuccessfulLogin() {
-    if (this.credential) this.credential.failedLoginCount = 0;
+    if (this.credential) {
+      this.credential.failedLoginCount = 0;
+      this.credential.lockedUntil = undefined;
+      if (this.credential.status === 'locked') this.credential.status = 'active';
+    }
   }
   async saveSession(session: AuthSession) {
     this.session = { ...session };
@@ -217,6 +227,31 @@ describe('AuthService', () => {
     expect(store.credential!.failedLoginCount).toBe(countAtLock);
     expect(store.events).toHaveLength(eventsAtLock + 1);
     expect(store.events.at(-1)?.reason).toBe('account_locked');
+  });
+  it('lets the account back in once the lockout window has expired', async () => {
+    for (let i = 0; i < 5; i++)
+      await expect(service.login('acme', 'operator', 'wrong password')).rejects.toThrow(
+        'Invalid credentials',
+      );
+    // recordFailedLogin sets status='locked' as well as locked_until, but only
+    // locked_until expires. Simulate the window elapsing.
+    expect(store.credential!.status).toBe('locked');
+    store.credential!.lockedUntil = new Date(Date.now() - 60_000);
+    // The correct password must now work. Previously the stale 'locked' status
+    // failed the "account is not active" check forever, so five bad guesses from
+    // an unauthenticated attacker disabled any account permanently.
+    const session = await service.login('acme', 'operator', 'correct horse battery staple');
+    expect(session.accessToken).toBeTruthy();
+    // A successful login clears the lock entirely.
+    expect(store.credential!.status).toBe('active');
+    expect(store.credential!.lockedUntil).toBeUndefined();
+    expect(store.credential!.failedLoginCount).toBe(0);
+  });
+  it('still rejects a genuinely inactive account', async () => {
+    store.credential!.status = 'pending';
+    await expect(service.login('acme', 'operator', 'correct horse battery staple')).rejects.toThrow(
+      'Account is not active',
+    );
   });
 
   describe('password reset', () => {

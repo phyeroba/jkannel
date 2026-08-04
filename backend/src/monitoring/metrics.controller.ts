@@ -18,11 +18,16 @@ export class MetricsController {
     @Res() response: { setHeader(name: string, value: string): void; send(body: string): void },
   ): Promise<void> {
     const memory = process.memoryUsage();
-    const status = this.health.getStatus();
+    // Real probe (bounded by HealthService's per-dependency timeout), so the
+    // gauge reports 0 when the process cannot reach a required dependency
+    // instead of always claiming 1.
+    const status = await this.health.check();
     const lines = [
       '# HELP jkannel_backend_up Backend health status as a boolean gauge.',
       '# TYPE jkannel_backend_up gauge',
-      `jkannel_backend_up{service="${status.service}",status="${status.status}"} 1`,
+      `jkannel_backend_up{service="${status.service}",status="${status.status}"} ${
+        status.status === 'unhealthy' ? 0 : 1
+      }`,
       '# HELP jkannel_backend_uptime_seconds Node.js process uptime in seconds.',
       '# TYPE jkannel_backend_uptime_seconds gauge',
       `jkannel_backend_uptime_seconds ${process.uptime().toFixed(3)}`,

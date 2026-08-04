@@ -206,6 +206,12 @@ export class ReportScheduleService implements OnModuleInit, OnModuleDestroy {
             { key: 'label', header: reportType === 'smsc_success' ? 'SMSC' : 'Route' },
             { key: 'messages', header: 'Messages' },
             { key: 'dlrs', header: 'DLRs' },
+            // Raw outcome counts sit next to the rate so a rate over a tiny
+            // sample (or a null rate with nothing finalised) is judgeable.
+            { key: 'delivered', header: 'Delivered' },
+            { key: 'failed', header: 'Failed' },
+            { key: 'rejected', header: 'Rejected' },
+            { key: 'pending', header: 'Pending' },
             { key: 'successRate', header: 'Success rate' },
             { key: 'failureRate', header: 'Failure rate' },
           ],

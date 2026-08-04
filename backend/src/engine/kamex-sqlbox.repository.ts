@@ -14,9 +14,18 @@ export interface SqlboxListOptions {
   limit?: number;
   cursor?: number;
   query?: string;
+  /**
+   * Accepts the legacy values ('sent' / 'dlr' / 'delivery_report', which filter
+   * on momt) and the derived delivery statuses and group aliases below. Legacy
+   * behaviour is unchanged.
+   */
   status?: string;
+  /** Derived delivery status filter; same vocabulary as `status`, applied explicitly. */
+  deliveryStatus?: string | string[];
   smscId?: string;
   direction?: 'MO' | 'MT' | 'DLR';
+  /** Excludes DLR receipt rows, leaving only real messages. */
+  excludeDlr?: boolean;
   /**
    * Engine-level SMSC identifiers the caller's tenant owns. SQLBox tables are
    * engine-owned and carry no tenant column, so tenant isolation is applied by
@@ -25,6 +34,130 @@ export interface SqlboxListOptions {
    */
   allowedSmscIds?: string[];
 }
+
+/**
+ * Delivery status derived by correlating an MT row with its delivery reports.
+ * `queued` is a spool (send_sms) row and `delivery_report` is a DLR receipt row
+ * — neither is a delivery outcome, they just keep every row classifiable.
+ */
+export type DeliveryStatus =
+  | 'delivered'
+  | 'failed'
+  | 'rejected'
+  | 'buffered'
+  | 'accepted'
+  | 'pending'
+  | 'unknown'
+  | 'queued'
+  | 'delivery_report';
+
+/** The delivery outcomes an MT row can be correlated to. */
+export const DELIVERY_STATUSES: DeliveryStatus[] = [
+  'delivered',
+  'failed',
+  'rejected',
+  'buffered',
+  'accepted',
+  'pending',
+  'unknown',
+];
+
+/**
+ * Kannel DLR event values. CRITICAL: this mapping applies to `dlr_mask` ON A
+ * DLR ROW only. On an MT row `dlr_mask` is the *requested* mask (31 = "report
+ * every event"), which is a subscription, NOT a status — misreading it would
+ * classify every message as "rejected".
+ */
+export const DLR_EVENT_STATUS: Readonly<Record<number, DeliveryStatus>> = {
+  1: 'delivered',
+  2: 'failed',
+  4: 'buffered',
+  8: 'accepted',
+  16: 'rejected',
+};
+
+/**
+ * Operator-facing groupings: "everything that needs resending" and "everything
+ * still in flight", so the console can offer them as one click.
+ */
+export const DELIVERY_STATUS_GROUPS: Readonly<Record<string, DeliveryStatus[]>> = {
+  resendable: ['failed', 'rejected'],
+  failures: ['failed', 'rejected'],
+  'in-flight': ['pending', 'buffered'],
+  in_flight: ['pending', 'buffered'],
+  inflight: ['pending', 'buffered'],
+};
+
+/** Legacy momt-based filters, handled by filters() rather than the derived column. */
+const LEGACY_STATUS_TOKENS = ['sent', 'dlr', 'delivery_report'];
+
+const statusTokens = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [])
+    .map((entry) => String(entry).trim().toLowerCase())
+    .filter(Boolean);
+
+/** True when the token is a status/group this repository understands. */
+export function isKnownStatusToken(token: string): boolean {
+  const value = token.trim().toLowerCase();
+  return (
+    LEGACY_STATUS_TOKENS.includes(value) ||
+    value in DELIVERY_STATUS_GROUPS ||
+    DELIVERY_STATUSES.includes(value as DeliveryStatus)
+  );
+}
+
+/**
+ * Expands a status/group expression into concrete delivery statuses. Legacy
+ * momt tokens are ignored here because filters() already handles them, and an
+ * expression that yields nothing returns undefined (= no derived filter).
+ */
+export function resolveDeliveryStatuses(value: unknown): DeliveryStatus[] | undefined {
+  const resolved = new Set<DeliveryStatus>();
+  for (const token of statusTokens(value)) {
+    if (LEGACY_STATUS_TOKENS.includes(token)) continue;
+    const group = DELIVERY_STATUS_GROUPS[token];
+    if (group) group.forEach((status) => resolved.add(status));
+    else if (DELIVERY_STATUSES.includes(token as DeliveryStatus))
+      resolved.add(token as DeliveryStatus);
+  }
+  return resolved.size ? [...resolved] : undefined;
+}
+
+const MESSAGE_COLUMNS =
+  'm.sql_id,m.momt,m.sender,m.receiver,m.msgdata,m.time,m.smsc_id,m.service,m.account,m.dlr_mask,m.dlr_url,m.boxc_id,m.foreign_id';
+
+/**
+ * Latest delivery report for the MT row `m`, correlated on foreign_id (the same
+ * key trace() uses). Done as a LATERAL so one query classifies a whole page
+ * instead of issuing a follow-up query per message; the foreign_id index
+ * created by ensureIndexes() serves the lookup. Skipped for DLR rows so a
+ * receipt never correlates to itself.
+ */
+const LATEST_DLR_JOIN = `LEFT JOIN LATERAL (
+      SELECT r.dlr_mask,r.time
+        FROM sent_sms r
+       WHERE m.momt IS DISTINCT FROM 'DLR' AND m.foreign_id IS NOT NULL
+         AND r.momt = 'DLR' AND r.foreign_id = m.foreign_id
+       ORDER BY r.time DESC,r.sql_id DESC
+       LIMIT 1
+    ) d ON true`;
+
+/** Derived status. An MT row with no DLR yet is pending, not failed. */
+const DELIVERY_STATUS_SQL = `CASE
+      WHEN m.momt = 'DLR' THEN 'delivery_report'
+      WHEN d.dlr_mask IS NULL THEN 'pending'
+      WHEN d.dlr_mask = 1 THEN 'delivered'
+      WHEN d.dlr_mask = 2 THEN 'failed'
+      WHEN d.dlr_mask = 4 THEN 'buffered'
+      WHEN d.dlr_mask = 8 THEN 'accepted'
+      WHEN d.dlr_mask = 16 THEN 'rejected'
+      ELSE 'unknown' END`;
+
+// dlr_event is the delivery EVENT: the DLR row's own mask, or the correlated
+// DLR's mask for an MT row. Never the MT row's requested dlr_mask.
+const DERIVED_COLUMNS = `CASE WHEN m.momt = 'DLR' THEN m.dlr_mask ELSE d.dlr_mask END AS dlr_event,d.time AS dlr_time,${DELIVERY_STATUS_SQL} AS delivery_status`;
+
+const CLASSIFIED_MESSAGES = `SELECT ${MESSAGE_COLUMNS},${DERIVED_COLUMNS} FROM sent_sms m ${LATEST_DLR_JOIN}`;
 export interface SqlboxRetentionOptions {
   olderThanDays?: number;
   dryRun?: boolean;
@@ -67,8 +200,22 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       return { available: false, evidence: `SQLBox probe failed: ${(error as Error).message}` };
     }
   }
+  /**
+   * Derived delivery outcome. Only reads `delivery_status` when the query
+   * actually performed the DLR correlation; an uncorrelated MT row is reported
+   * as 'unknown' rather than guessed at from its own (requested) dlr_mask.
+   */
+  private deliveryStatusOf(row: any, source: 'sent_sms' | 'send_sms'): DeliveryStatus {
+    if (source === 'send_sms') return 'queued';
+    if (row.momt === 'DLR') return 'delivery_report';
+    return typeof row.delivery_status === 'string'
+      ? (row.delivery_status as DeliveryStatus)
+      : 'unknown';
+  }
   private normalize(row: any, source: 'sent_sms' | 'send_sms') {
     const epoch = Number(row.time);
+    const dlrEvent =
+      row.dlr_event === undefined || row.dlr_event === null ? null : Number(row.dlr_event);
     return {
       id: String(row.sql_id),
       source,
@@ -80,53 +227,77 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       smscId: row.smsc_id ?? null,
       service: row.service ?? null,
       account: row.account ?? null,
+      // The row's OWN mask. On an MT row this is the requested DLR mask (e.g.
+      // 31 = all events), not an outcome — see deliveryStatus / dlrEvent.
       dlrMask: row.dlr_mask ?? null,
       dlrUrl: row.dlr_url ?? null,
       boxcId: row.boxc_id ?? null,
       timestamp: Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : null,
+      // Unchanged legacy coarse status; existing callers depend on these values.
       status: source === 'send_sms' ? 'queued' : row.momt === 'DLR' ? 'delivery_report' : 'sent',
+      deliveryStatus: this.deliveryStatusOf(row, source),
+      /** Kannel DLR event value behind deliveryStatus, when one was correlated. */
+      dlrEvent: Number.isFinite(dlrEvent as number) ? dlrEvent : null,
+      dlrAt: row.dlr_time ? new Date(Number(row.dlr_time) * 1000).toISOString() : null,
       raw: row,
     };
   }
-  private filters(options: SqlboxListOptions, params: any[]) {
+  /**
+   * Base predicates. `prefix` qualifies the column names for queries that join
+   * (the DLR correlation aliases sent_sms twice, so bare names are ambiguous).
+   */
+  private filters(options: SqlboxListOptions, params: any[], prefix = '') {
     const clauses: string[] = [];
     if (options.allowedSmscIds) {
       params.push(options.allowedSmscIds);
-      clauses.push(`smsc_id = ANY($${params.length})`);
+      clauses.push(`${prefix}smsc_id = ANY($${params.length})`);
     }
     if (options.cursor) {
       params.push(options.cursor);
-      clauses.push(`sql_id < $${params.length}`);
+      clauses.push(`${prefix}sql_id < $${params.length}`);
     }
     if (options.smscId) {
       params.push(options.smscId);
-      clauses.push(`smsc_id = $${params.length}`);
+      clauses.push(`${prefix}smsc_id = $${params.length}`);
     }
     if (options.direction) {
       params.push(options.direction);
-      clauses.push(`momt = $${params.length}`);
+      clauses.push(`${prefix}momt = $${params.length}`);
     }
+    if (options.excludeDlr) clauses.push(`${prefix}momt IS DISTINCT FROM 'DLR'`);
     if (options.status) {
+      // Legacy momt-based values only; derived statuses are applied to the
+      // computed delivery_status column by the caller.
       const status = String(options.status).toLowerCase();
-      if (status === 'delivery_report' || status === 'dlr') clauses.push(`momt = 'DLR'`);
-      else if (status === 'sent') clauses.push(`momt <> 'DLR'`);
+      if (status === 'delivery_report' || status === 'dlr') clauses.push(`${prefix}momt = 'DLR'`);
+      else if (status === 'sent') clauses.push(`${prefix}momt <> 'DLR'`);
     }
     if (options.query) {
       params.push(`%${options.query}%`);
       clauses.push(
-        `(sender ILIKE $${params.length} OR receiver ILIKE $${params.length} OR foreign_id ILIKE $${params.length} OR msgdata ILIKE $${params.length})`,
+        `(${prefix}sender ILIKE $${params.length} OR ${prefix}receiver ILIKE $${params.length} OR ${prefix}foreign_id ILIKE $${params.length} OR ${prefix}msgdata ILIKE $${params.length})`,
       );
     }
     return clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   }
+  /**
+   * Message history with each MT row classified by its latest delivery report,
+   * so the log can be filtered to failed / pending / delivered and so on.
+   */
   async list(options: SqlboxListOptions | number = 100) {
     const settings = typeof options === 'number' ? { limit: options } : options;
     const size = Math.min(Math.max(settings.limit ?? 100, 1), 500);
     const params: any[] = [];
-    const where = this.filters(settings, params);
+    const where = this.filters(settings, params, 'm.');
+    const statuses = resolveDeliveryStatuses(settings.deliveryStatus ?? settings.status);
+    let outer = '';
+    if (statuses) {
+      params.push(statuses);
+      outer = `WHERE q.delivery_status = ANY($${params.length})`;
+    }
     params.push(size + 1);
     const result = await this.required().query(
-      `SELECT sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id FROM sent_sms ${where} ORDER BY sql_id DESC LIMIT $${params.length}`,
+      `SELECT * FROM (${CLASSIFIED_MESSAGES} ${where}) q ${outer} ORDER BY q.sql_id DESC LIMIT $${params.length}`,
       params,
     );
     const rows = result.rows.slice(0, size).map((row) => this.normalize(row, 'sent_sms'));
@@ -135,10 +306,39 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       nextCursor: result.rows.length > size ? Number(result.rows[size].sql_id) : null,
     };
   }
+  /**
+   * Counts per derived delivery status for the filtered scope, so the console
+   * can show "12 need resending" without paging the whole log. DLR receipt rows
+   * are excluded — they are not messages. Every status is always present.
+   */
+  async deliveryStatusCounts(options: SqlboxListOptions = {}) {
+    const params: any[] = [];
+    const where = this.filters(
+      { ...options, status: undefined, deliveryStatus: undefined, excludeDlr: true },
+      params,
+      'm.',
+    );
+    const result = await this.required().query<{ delivery_status: string; count: string }>(
+      `SELECT q.delivery_status,count(*)::text count FROM (${CLASSIFIED_MESSAGES} ${where}) q GROUP BY q.delivery_status`,
+      params,
+    );
+    const counts = Object.fromEntries(DELIVERY_STATUSES.map((status) => [status, 0])) as Record<
+      DeliveryStatus,
+      number
+    >;
+    for (const row of result.rows)
+      if (row.delivery_status in counts)
+        counts[row.delivery_status as DeliveryStatus] = Number(row.count);
+    return {
+      ...counts,
+      resendable: counts.failed + counts.rejected,
+      inFlight: counts.pending + counts.buffered,
+    };
+  }
   async trace(id: string, allowedSmscIds?: string[]) {
     const pool = this.required();
     const sent = await pool.query(
-      `SELECT sql_id,momt,sender,receiver,msgdata,time,smsc_id,service,account,dlr_mask,dlr_url,boxc_id,foreign_id FROM sent_sms WHERE sql_id::text=$1 OR foreign_id=$1 ORDER BY time,sql_id`,
+      `${CLASSIFIED_MESSAGES} WHERE m.sql_id::text=$1 OR m.foreign_id=$1 ORDER BY m.time,m.sql_id`,
       [id],
     );
     const queued = await pool.query(
@@ -247,12 +447,18 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     await this.required().query(
       'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_foreign_id_idx ON sent_sms(foreign_id)',
     );
+    // Serves the latest-DLR LATERAL used to derive delivery status: partial on
+    // the receipts, ordered so the correlation is an index-only top-1 lookup.
+    await this.required().query(
+      "CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_dlr_correlation_idx ON sent_sms(foreign_id, time DESC, sql_id DESC) WHERE momt = 'DLR'",
+    );
     return {
       source: 'kamex-sqlbox',
       indexes: [
         'jkannel_sqlbox_sent_sms_time_idx',
         'jkannel_sqlbox_sent_sms_smsc_time_idx',
         'jkannel_sqlbox_sent_sms_foreign_id_idx',
+        'jkannel_sqlbox_sent_sms_dlr_correlation_idx',
       ],
     };
   }
@@ -338,6 +544,80 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       dlrs: bySmsc.reduce((sum, row) => sum + row.dlrs, 0),
       bySmsc,
     };
+  }
+
+  /**
+   * Pending spool depth grouped by engine SMSC id. Always pass the tenant's
+   * allowed ids; an empty array yields no rows, undefined is system-wide.
+   */
+  async spoolBySmsc(allowedSmscIds?: string[]) {
+    const params: any[] = [];
+    let where = '';
+    if (allowedSmscIds) {
+      params.push(allowedSmscIds);
+      where = `WHERE smsc_id = ANY($${params.length})`;
+    }
+    const result = await this.required().query<{ smsc_id: string | null; count: string }>(
+      `SELECT smsc_id,count(*)::text count FROM send_sms ${where} GROUP BY smsc_id ORDER BY smsc_id`,
+      params,
+    );
+    return result.rows.map((row) => ({
+      smscId: row.smsc_id ?? 'unassigned',
+      count: Number(row.count),
+    }));
+  }
+
+  /**
+   * On-the-fly reroute: repoints still-spooled messages at a different bind.
+   * SQLBox picks the row up on its next poll, so no engine restart is involved.
+   *
+   * `allowedSmscIds` is a mandatory tenant-isolation predicate — a caller can
+   * never move a row that is currently owned by another tenant's SMSC.
+   *
+   * MEASURED: SQLBox drains send_sms in well under a second, so on a healthy
+   * system most requested ids will already be gone. The affected ids are
+   * returned so the caller can report precisely which rows moved and which were
+   * missed; a partial match is the normal outcome, never an error.
+   */
+  async rerouteSpool(sqlIds: number[], targetSmscId: string, allowedSmscIds: string[]) {
+    if (!sqlIds.length || !allowedSmscIds.length) return { rerouted: 0, sqlIds: [] as number[] };
+    const result = await this.required().query<{ sql_id: string }>(
+      `UPDATE send_sms SET smsc_id=$1 WHERE sql_id = ANY($2::bigint[]) AND smsc_id = ANY($3) RETURNING sql_id::text`,
+      [targetSmscId, sqlIds, allowedSmscIds],
+    );
+    const affected = result.rows.map((row) => Number(row.sql_id));
+    return { rerouted: affected.length, sqlIds: affected };
+  }
+
+  /**
+   * Removes still-spooled messages before SQLBox injects them. Tenant-scoped,
+   * and subject to the same sub-second drain race as {@link rerouteSpool}, so
+   * the ids actually deleted are returned rather than just a count.
+   */
+  async cancelSpool(sqlIds: number[], allowedSmscIds: string[]) {
+    if (!sqlIds.length || !allowedSmscIds.length) return { cancelled: 0, sqlIds: [] as number[] };
+    const result = await this.required().query<{ sql_id: string }>(
+      `DELETE FROM send_sms WHERE sql_id = ANY($1::bigint[]) AND smsc_id = ANY($2) RETURNING sql_id::text`,
+      [sqlIds, allowedSmscIds],
+    );
+    const affected = result.rows.map((row) => Number(row.sql_id));
+    return { cancelled: affected.length, sqlIds: affected };
+  }
+
+  /**
+   * Loads history rows (by sql_id or foreign_id) that a resend can be built
+   * from, restricted to the tenant's SMSCs. DLR rows are returned too so the
+   * caller can report them as skipped rather than as "not found".
+   */
+  async findSentForResend(ids: string[], allowedSmscIds: string[]) {
+    if (!ids.length || !allowedSmscIds.length) return [];
+    const result = await this.required().query(
+      `${CLASSIFIED_MESSAGES}
+        WHERE (m.sql_id::text = ANY($1) OR m.foreign_id = ANY($1)) AND m.smsc_id = ANY($2)
+        ORDER BY m.sql_id DESC`,
+      [ids, allowedSmscIds],
+    );
+    return result.rows.map((row) => this.normalize(row, 'sent_sms'));
   }
 
   async submit(value: SqlboxSubmission) {

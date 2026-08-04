@@ -7,6 +7,7 @@ describe('primary navigation contract', () => {
       expect.arrayContaining([
         '/dashboard/operations',
         '/messages',
+        '/live-queue',
         '/queues',
         '/delivery-reports',
         '/bulk-send',
@@ -29,7 +30,7 @@ describe('primary navigation contract', () => {
         '/sessions',
       ]),
     );
-    expect(navigation).toHaveLength(22);
+    expect(navigation).toHaveLength(23);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(

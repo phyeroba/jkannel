@@ -36,6 +36,9 @@ async function main() {
       'dashboard.view',
       'messages.view',
       'messages.export',
+      // Required by the Live Queue console for spool reroute/cancel and for
+      // resending failed traffic to another bind, as well as ad-hoc sends.
+      'messages.send',
       'smsc.view',
       'smsc.manage',
       'routes.view',

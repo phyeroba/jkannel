@@ -6,6 +6,8 @@ import { KannelAdapter } from './kannel.adapter';
 
 @Module({
   providers: [KannelAdapter, KamexSqlboxRepository, KamexAdapter, EngineAdapterRegistry],
-  exports: [EngineAdapterRegistry, KamexSqlboxRepository],
+  // KamexAdapter is exported directly for the queue console, which needs the
+  // Kamex-specific typed queueSnapshot() that the generic registry does not expose.
+  exports: [EngineAdapterRegistry, KamexSqlboxRepository, KamexAdapter],
 })
 export class EngineModule {}

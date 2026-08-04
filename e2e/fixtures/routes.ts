@@ -20,6 +20,7 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Alerts', path: '/alerts', root: 'module-workspace' },
   { label: 'Notifications', path: '/notifications', root: 'module-workspace' },
   { label: 'Messages', path: '/messages', root: 'module-workspace' },
+  { label: 'Live Queue', path: '/live-queue', root: 'live-queue-view' },
   { label: 'Queues', path: '/queues', root: 'module-workspace' },
   { label: 'Delivery Reports', path: '/delivery-reports', root: 'module-workspace' },
   { label: 'Bulk Send', path: '/bulk-send', root: 'bulk-send-view' },
