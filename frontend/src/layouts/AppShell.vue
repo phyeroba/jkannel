@@ -37,6 +37,30 @@ const navigationGroups = computed(() =>
     }))
     .filter((section) => section.items.length),
 );
+
+/**
+ * Collapsed navigation groups, persisted so the sidebar keeps its shape across
+ * reloads (same convention as the theme preference above). Only collapsed groups
+ * are stored, so a newly added group defaults to expanded rather than hidden.
+ */
+const collapsedGroups = ref<string[]>(
+  (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('jkannel-console-nav-collapsed') ?? '[]');
+      return Array.isArray(raw) ? raw.filter((g): g is string => typeof g === 'string') : [];
+    } catch {
+      return [];
+    }
+  })(),
+);
+const isCollapsed = (group: string) => collapsedGroups.value.includes(group);
+function toggleGroup(group: string) {
+  collapsedGroups.value = isCollapsed(group)
+    ? collapsedGroups.value.filter((g) => g !== group)
+    : [...collapsedGroups.value, group];
+  localStorage.setItem('jkannel-console-nav-collapsed', JSON.stringify(collapsedGroups.value));
+}
+const groupId = (group: string) => `nav-group-${group.toLowerCase()}`;
 const searchResults = computed(() =>
   visibleNavigation.value.filter((item) =>
     item.label.toLowerCase().includes(searchQuery.value.toLowerCase()),
@@ -180,15 +204,29 @@ onUnmounted(() => {
       </div>
       <nav>
         <section v-for="section in navigationGroups" :key="section.group" class="nav-group">
-          <p class="nav-label">{{ section.group }}</p>
-          <RouterLink
-            v-for="item in section.items"
-            :key="item.to"
-            :to="item.to"
-            @click="navOpen = false"
-            ><span class="nav-icon"><AppIcon :name="item.icon" /></span><span>{{ item.label }}</span
-            ><span v-if="item.badge" class="nav-badge">{{ item.badge }}</span></RouterLink
+          <button
+            type="button"
+            class="nav-label"
+            :class="{ collapsed: isCollapsed(section.group) }"
+            :aria-expanded="!isCollapsed(section.group)"
+            :aria-controls="groupId(section.group)"
+            :data-testid="`nav-group-toggle-${section.group.toLowerCase()}`"
+            @click="toggleGroup(section.group)"
           >
+            <span>{{ section.group }}</span>
+            <AppIcon class="nav-chevron" name="chevron" :size="14" />
+          </button>
+          <div v-show="!isCollapsed(section.group)" :id="groupId(section.group)" class="nav-items">
+            <RouterLink
+              v-for="item in section.items"
+              :key="item.to"
+              :to="item.to"
+              @click="navOpen = false"
+              ><span class="nav-icon"><AppIcon :name="item.icon" /></span
+              ><span>{{ item.label }}</span
+              ><span v-if="item.badge" class="nav-badge">{{ item.badge }}</span></RouterLink
+            >
+          </div>
         </section>
       </nav>
       <div class="sidebar-footer">

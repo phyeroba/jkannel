@@ -32,12 +32,51 @@
   display: grid;
   gap: 2px;
 }
+/* Group headers are interactive (they collapse their section) and sit above the
+   nav items, so they read brighter and slightly larger than the 13px links
+   beneath them. #fff on the #2f3349 sidebar is ~13:1 contrast. */
 .nav-label {
-  margin: 14px 12px 7px;
-  color: #6d7191;
-  font-size: 10.5px;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin: 14px 0 5px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #ffffff;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
   letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.nav-label:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.nav-label:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.nav-chevron {
+  flex: none;
+  opacity: 0.75;
+  transition: transform 0.18s ease;
+}
+/* Points down when expanded; swings to point right when the section is closed. */
+.nav-label.collapsed .nav-chevron {
+  transform: rotate(-90deg);
+}
+.nav-items {
+  display: grid;
+  gap: 2px;
 }
 .sidebar nav {
   gap: 2px;

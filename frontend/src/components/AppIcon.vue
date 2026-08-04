@@ -6,6 +6,8 @@ const icons: Record<string, string> = {
   sms: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
   queue: '<path d="M4 7h16M4 12h16M4 17h10"/><circle cx="19" cy="17" r="2"/>',
   check: '<path d="M20 6 9 17l-5-5"/><circle cx="12" cy="12" r="9"/>',
+  // Points down when a section is expanded; the nav rotates it when collapsed.
+  chevron: '<path d="M6 9l6 6 6-6"/>',
   server:
     '<rect x="3" y="4" width="18" height="7" rx="1.6"/><rect x="3" y="13" width="18" height="7" rx="1.6"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   route:

@@ -118,12 +118,37 @@ select:focus-visible {
   color: #8da5be;
   font-size: 12px;
 }
+/* Base styling for the collapsible nav group header. design-authority.css
+   refines this; both keep it brighter and larger than the links it heads. */
 .nav-label {
-  margin: 8px 10px;
-  color: #7089a4;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 5px 10px;
+  border: 0;
+  background: none;
+  color: #eaf1fb;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-chevron {
+  flex: none;
+  transition: transform 0.18s ease;
+}
+.nav-label.collapsed .nav-chevron {
+  transform: rotate(-90deg);
+}
+.nav-items {
+  display: grid;
+  gap: 4px;
 }
 .sidebar nav {
   display: grid;
