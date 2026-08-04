@@ -1,5 +1,23 @@
 # JKANNEL Roadmap
 
+> **Status, 2026-08-04.** The phase table below describes the original build sequence
+> and is retained for provenance. **Phases 0–15 have been built; phase 16 is partly
+> built and partly gated on external evidence.** The roadmap is no longer the working
+> plan — the delivery sequence is now driven by the audited gap list:
+>
+> - What is delivered: [`../progress/completed.md`](../progress/completed.md) and
+>   [`../FEATURES.md`](../FEATURES.md)
+> - What remains: [`../progress/pending.md`](../progress/pending.md)
+> - In what order: [`../progress/next-actions.md`](../progress/next-actions.md)
+> - What is gated on infrastructure or a third party:
+>   [`../progress/blockers.md`](../progress/blockers.md)
+>
+> Read the phase acceptance criteria below with one caveat learned the hard way: a phase
+> whose code merged and whose tests passed was, in several cases, still not *delivering*
+> anything, because nothing invoked it. The decisive test is now **does a non-test
+> caller reach this on a real request path?** — see the correction notice in
+> [`../progress/requirements-traceability.md`](../progress/requirements-traceability.md).
+
 Every phase requires documentation updates and a passing review for architecture, security, performance, and quality. Docker validation means `docker compose config` plus startup/health validation where the phase changes runtime behavior.
 
 | Phase | Outcome | Dependencies | Acceptance criteria and tests | Documentation / Docker gate |

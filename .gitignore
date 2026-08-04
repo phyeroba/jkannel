@@ -23,6 +23,9 @@ Thumbs.db
 infrastructure/nginx/certs/*.crt
 infrastructure/nginx/certs/*.key
 infrastructure/nginx/certs/*.pem
+# ACME http-01 challenge tokens written by certbot/lego/acme.sh (ephemeral).
+infrastructure/nginx/acme/*
+!infrastructure/nginx/acme/.gitkeep
 # Backup artifacts (full database dumps — contain all data, never publish)
 runtime/**/backups/
 *.dump

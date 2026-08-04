@@ -2,7 +2,47 @@
 
 This catalog is the ownership authority. A `Master` document controls its subject; `Supporting` documents add detail; `Archived` documents remain for provenance and must not drive implementation. `Gap` means the named source was absent or empty.
 
-> **Repository structure (2026-07-10):** the canonical specifications live under `docs/`; living project documents (state, roadmap, changelog, proposals, handover, memory, this catalog) live under `project/`; only `README.md` remains at the repository root. The former root-level duplicate copies of the specifications were removed — the `docs/` paths below are the single source of truth.
+> **Repository structure (2026-07-10):** the canonical specifications live under `docs/`; living project documents (state, roadmap, changelog, proposals, memory, this catalog) live under `project/`; only `README.md`, `FEATURES.md`, `AGENTS.md` and the licence files remain at the repository root. The former root-level duplicate copies of the specifications were removed — the `docs/` paths below are the single source of truth.
+
+## Current-state authorities (2026-08-05)
+
+The specifications below say what JKANNEL *should* do. These say what it *does*, and
+they take precedence over any specification when someone asks "does this work?".
+
+> **Dating caveat.** `FEATURES.md` and `IMPLEMENTATION_VERIFICATION.md` are anchored to
+> commit `eefa320`. Commit `d58a3d2` closed several gaps they still list as open, so
+> they now **understate** the product. Until the verification is re-run, the current
+> position lives in `progress/pending.md`, `project/PROJECT_STATE.md` and
+> `docs/user-guides/`, and `/api/v1/openapi.json` — generated from the live route
+> table — is the final word on which routes exist.
+
+| Document | Current path | Class | Authority |
+|---|---|---|---|
+| FEATURES.md | `FEATURES.md` | Master | **The answer to "can JKANNEL do X?"** Every entry verified by tracing a non-test caller on a real request path; includes an explicit "Not yet implemented" section. |
+| IMPLEMENTATION_VERIFICATION.md | `project/IMPLEMENTATION_VERIFICATION.md` | Master | File-by-file evidence for every claim in FEATURES.md, plus the honest "not implemented" list and the claims it could not substantiate. |
+| SPEC_GAP_ANALYSIS.md | `project/SPEC_GAP_ANALYSIS.md` | Supporting | The audit that produced the 20-gap list and the remediation build order. Supersedes the traceability ledger wherever the two disagree. |
+| requirements-traceability.md | `progress/requirements-traceability.md` | Supporting | Per-requirement ledger. **Read its correction notice first** — earlier revisions booked *capability shipped* as *capability delivered*. |
+
+## Operator documentation
+
+| Document | Current path | Class |
+|---|---|---|
+| Operator guide index | `docs/user-guides/README.md` | Master |
+| Getting started and console tour | `docs/user-guides/01-getting-started.md` | Supporting |
+| Connecting an SMSC | `docs/user-guides/02-connecting-an-smsc.md` | Supporting |
+| Sending messages | `docs/user-guides/03-sending-messages.md` | Supporting |
+| Live Queue and recovering a bad bind | `docs/user-guides/04-live-queue-and-recovery.md` | Supporting |
+| Routing | `docs/user-guides/05-routing.md` | Supporting |
+| Monitoring and alerts | `docs/user-guides/06-monitoring-and-alerts.md` | Supporting |
+| Reports and exports | `docs/user-guides/07-reports-and-exports.md` | Supporting |
+| Customers, quotas, credit and sender IDs | `docs/user-guides/08-customers-and-quotas.md` | Supporting |
+| Backup and restore | `docs/user-guides/09-backup-and-restore.md` | Supporting |
+| Users, roles and permissions | `docs/user-guides/10-users-and-roles.md` | Supporting |
+| Troubleshooting and FAQ | `docs/user-guides/11-troubleshooting.md` | Supporting |
+
+`docs/admin-guides/` and `docs/developer-guides/` exist but are empty. That is recorded
+as a gap rather than disguised; administrator material currently lives in the operator
+guides above, and developer material in `docs/handbook/` and `docs/specifications/`.
 
 ## Governance and domain
 
@@ -77,11 +117,40 @@ This catalog is the ownership authority. A `Master` document controls its subjec
 | BACKUP_AND_DISASTER_RECOVERY_ENGINEERING_SPECIFICATION.md | `docs/specifications/operations/BACKUP_AND_DISASTER_RECOVERY_ENGINEERING_SPECIFICATION.md` | Reliability | Active; restored source | HA, database | Master |
 | PERFORMANCE_AND_SCALABILITY_ENGINEERING_SPECIFICATION.md | `docs/specifications/operations/PERFORMANCE_AND_SCALABILITY_ENGINEERING_SPECIFICATION.md` | Performance | Active; restored source | HA, testing | Master |
 
+## Architecture decision records
+
+ADRs live in two directories. Both are canonical.
+
+| ADR | Current path | Subject |
+|---|---|---|
+| ADR-0001 | `decisions/ADR-0001-monorepo-structure.md` | Monorepo structure |
+| ADR-0002 | `decisions/ADR-0002-backend-stack.md` | Backend stack |
+| ADR-0003 | `decisions/ADR-0003-frontend-stack.md` | Frontend stack (supersedes the React choice in the frontend specification) |
+| ADR-0004 | `decisions/ADR-0004-docker-first-runtime.md` | Docker-first runtime |
+| ADR-0005 | `decisions/ADR-0005-engine-adapter-abstraction.md` | Engine Adapter abstraction |
+| ADR-0006 | `decisions/ADR-0006-design-spec-as-visual-authority.md` | `design/design_spec/` as visual authority |
+| ADR-0007 | `decisions/ADR-0007-KANNEL-VS-KAMEX.md` | Kannel and Kamex as independently assessed siblings |
+| ADR-0008 | `decisions/ADR-0008-kamex-first-container-runtime.md` | Kamex as the first containerized runtime |
+| ADR-0008 | `docs/adr/ADR-0008-control-plane-boundary.md` | **JKANNEL is a control plane; the engine owns the data plane** |
+
+> **Known defect: the number 0008 is used twice.** The control-plane-boundary ADR was
+> authored in `docs/adr/` without checking `decisions/`. Both documents are accepted and
+> in force; neither is superseded. Cite them by path or by title, never by number alone.
+> Renumbering is deferred rather than done silently, because the control-plane ADR is
+> already referenced by number from `FEATURES.md`, `README.md`, the operator guides and
+> `backend/src/queue-console/`.
+
 ## Visual authority
 
 | Canonical document | Current path | Owning module | Status | Related documents | Class |
 |---|---|---|---|---|---|
 | Visual design reference set | `design/design_spec/` | Frontend/design | Preserved unchanged | UI screen specification, ADR-0006 | Master visual reference |
+
+## Retired
+
+| Document | Retired | Why | Superseded by |
+|---|---|---|---|
+| `project/SUPERVISOR_HANDOVER_SUMMARY.md` | 2026-08-04 | A point-in-time status memo written for a single review on 2026-07-09. Its capability claims and test counts were nine cycles out of date, and its "honest limitations" section had been overtaken by the spec-gap audit. Keeping a stale second answer to "what works?" invites the reader to trust the wrong one. | `FEATURES.md` (capability), `project/IMPLEMENTATION_VERIFICATION.md` (evidence), `docs/user-guides/` (how to operate it), `README.md` (how to run it) |
 
 ## Archive inventory
 

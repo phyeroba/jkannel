@@ -1,71 +1,205 @@
 # Project State
 
-**Current phase:** Phases 1-16 foundations are present; canonical-requirement completion is being tracked in `progress/requirements-traceability.md`. Maintenance transitioned to Claude on 2026-07-09; the active improvement plan is `SYSTEM_IMPROVEMENT_PROPOSALS.md`.
+Updated: 2026-08-05, against the audited baseline in
+[`IMPLEMENTATION_VERIFICATION.md`](IMPLEMENTATION_VERIFICATION.md) (commit `eefa320`)
+**plus commit `d58a3d2`**.
 
-## What exists
+**Current position:** JKANNEL is a working control plane for Kannel/Kamex SMS gateways,
+deployed and reachable. Six remediation waves closed the three integration voids that
+previously made it a console over disconnected parts; an independent verification then
+found **10 of 20 gaps closed, 7 partial and 3 open**. A follow-up commit closed most of
+that remainder — including the largest identity gap. Four release gates are outstanding
+external evidence, not code.
 
-- Organized documentation, architecture, decision, progress, design, application, infrastructure, SDK, plugin, test, and deployment boundaries.
-- Canonical documentation catalog and six initial ADRs.
-- Phase 1 backend/frontend health-check and Docker Compose scaffold.
-- Reproducible npm lockfiles, clean image builds, passing backend test/typecheck and frontend production build.
-- PostgreSQL, Redis, backend, and frontend reached healthy Compose state during validation.
-- Evidence-backed Kannel/Kamex separation and a pre-implementation Engine Adapter capability contract.
-- Versioned API foundation with validated environment, structured JSON logs, correlation IDs, response envelopes, and safe global errors.
-- Deterministic Phase 3 PostgreSQL migrations for tenants, configuration, immutable audit, and engine observability/control history.
-- Phase 4 cryptographic primitives: salted scrypt password hashing and typed HMAC access/refresh token validation.
-- Phase 5 permission-aware Vue operations shell with JKANNEL-native navigation and responsive views.
-- Phase 6 generic adapter core, typed capability manifests, registry, and distinct Kannel/Kamex fixtures.
-- Official digest-pinned Kamex 1.8.3 bearerbox/smsbox Compose profile with authenticated status and metrics readiness.
-- PostgreSQL authentication, refresh rotation, tenant claims, RBAC guards, development-operator provisioning, and audit writes.
-- Tenant-RLS persistence and guarded APIs for SMSCs, routing, configuration versions, alert rules/acknowledgements, settings, users, and invitations.
-- Functional Vue login/session/logout flow, permission-aware routing, global search, module workspaces, real API states, create forms, and not-found handling.
-- Native Kamex SQLBox integration: official checksum-pinned extension image, PostgreSQL `send_sms`/`sent_sms` queue and event reads, outbound enqueue, queue depth, delivery-report reads, and live capability probing.
-- Deterministic Kamex configuration rendering with SQLBox groups, immutable versions, validation, atomic runtime writes, audit transitions, and authenticated graceful reload.
-- Vendor-native Kamex configuration validation through a least-privilege internal validator, plus history, diff, persisted validation, approval, deployment and rollback API workflows with approval/deployment metadata.
-- Configuration workspace workflow controls for generated Kamex configuration versions: Validate, Approve, Deploy, Rollback and version comparison.
-- Live adapter-backed monitoring/capability and tenant-scoped audit-event read models.
-- Adapter-backed SMSC test/enable/disable/reconnect operations with idempotent deployment history and workspace controls.
-- Route validation, conflict checks, simulation, deploy/rollback/history records, and route workspace simulation/deployment controls.
-- Normalized Kamex SQLBox message pagination/filtering, trace lookup, DLR read model, authenticated bounded CSV export, read indexes, and dry-run/apply retention controls.
-- Prometheus/Grafana Compose monitoring profile with backend Prometheus metrics, initial dashboard provisioning, and auditable dashboard/webhook notification delivery records.
-- API platform primitives for OpenAPI, authenticated mutating-request idempotency and tenant-scoped long-running job records: raw `/api/v1/openapi.json`, `Idempotency-Key` replay protection, and `/api/v1/jobs` create/list/get/cancel APIs.
-- Strict versioned plugin manifests and a coordinator that requires a real worker-process executor boundary; no untrusted plugin is loaded in-process.
-- Deployment-disabled-by-default AI Operations with per-request consent, privacy redaction, deterministic local explanations, tenant persistence, audit, and human approval records.
-- Defensive API headers plus runnable security, bounded readiness-load, and PostgreSQL backup/disposable-restore smoke checks.
-- Enforced tenant isolation: FORCE row level security on all RLS tables including audit_log, a non-owner `jkannel_app` application role, a least-privilege BYPASSRLS `jkannel_auth` role for pre-authentication lookups, a deterministic migration runner (`npm run migrate`, boot-time application), and a live-database cross-tenant integration proof.
-- Tenant-scoped SQLBox reads: message lists, traces, queue depth, DLRs, exports and outbound submission are restricted to the tenant's own SMSC engine identifiers with honest empty states.
-- Full audit trail: a global interceptor records every authenticated mutating request and sensitive read (who/what/when, redacted parameters, outcome, correlation id, source IP); audit events are searchable, sortable, filterable and exportable.
-- Uniform grid capabilities (whitelisted search/sort/filter with pagination totals) plus CSV and PDF exports across SMSC, route, alert, alert-rule, user, invitation, configuration, audit-event, notification and volume-report endpoints.
-- Scheduled daily and weekly message-volume reports per tenant — total, per SMSC and per route (target-SMSC attribution) — with idempotent period claims and in-app notifications to report subscribers, plus a notification centre API.
-- Separate access/refresh token signing keys with deprecated single-key fallback, and Prettier-enforced readable source formatting across both packages.
-- A working SQLBox runtime: sqlbox rebuilt from the official checksum-pinned source RPM with the PostgreSQL backend (the official binary RPM panics on non-MSSQL configs) and credential rendering at container start; live end-to-end proof of API message submission through bearerbox to sent_sms and back into the tenant-scoped console grids.
-- Live-stack evidence: migrations 001-015 verified on a fresh database, forced-RLS isolation proven as the non-owner role, and grids/exports/reports/notifications/audit exercised through the running API with all eight Compose services healthy.
-- Real notification channel delivery: SMTP email (honest "unavailable" without SMTP_URL) and webhooks, wired to both alerts and scheduled reports.
-- Backend Prometheus metrics (HTTP counters, latency histogram, event counters) at `/metrics` for the Grafana profile.
-- AI Ops Copilot: a read-only, RBAC-scoped, opt-in, audit-logged assistant with privacy-safe tools; local answers by default and Claude Messages API when configured; cannot execute changes.
-- Traffic anomaly detection over daily snapshots (volume drop/spike, DLR failure) opening deduplicated alerts into the existing pipeline.
-- Identity workflows: password reset, invitation acceptance, and session administration (list/revoke), all proven live.
-- A live carrier SMPP bind configured as a managed SMSC; blocked only by carrier-side IP allowlisting, with honest connection-state reporting.
-- Complete Platform console modules: API Gateway clients, Plugins (enable/disable/install), Backups (catalog/verify/restore-request), Runtime Containers (live-probed health with honest unknowns), grouped System Settings with inline editing, and a Customers honest-unavailable placeholder (migration 016).
-- Full user lifecycle (create/detail/edit/archive with roles), session search/sort/export, paginated searchable Queues and Delivery Reports with export, SMSC detail/edit with connection status, audit-event detail, and an Analytics dashboard (KPIs, traffic trend, per-SMSC/route breakdowns, delivery breakdown, seven-category report catalog) with SVG charts.
+> **The two authorities are now behind the code.** `FEATURES.md` and
+> `IMPLEMENTATION_VERIFICATION.md` are anchored to `eefa320` and therefore *understate*
+> the product. Re-running the verification is tracked in
+> [`../progress/next-actions.md`](../progress/next-actions.md). Until then, this
+> document and [`../progress/pending.md`](../progress/pending.md) carry the current
+> position, and `/api/v1/openapi.json` is the final word on which routes exist.
 
-## What does not exist
+> **Reading rule for this document.** Nothing here is recorded as delivered unless a
+> non-test caller reaches it on a real request path. That rule exists because earlier
+> revisions of the project ledger violated it systematically — see the correction
+> notice in [`progress/requirements-traceability.md`](../progress/requirements-traceability.md).
+> The authoritative per-capability answer is [`FEATURES.md`](../FEATURES.md).
 
-- Production deployment automation and production Kannel integration. Production scale, historical partition/archive, job workers/large export execution, and alert escalation/correlation remain outstanding. Notification channels deliver (email/webhook) but production delivery-provider evidence (deliverability, retries/backoff) is not yet gathered.
-- Full specialized UI editors for every planned module and browser acceptance for every workflow; unsupported services render honest unavailable states rather than simulated behavior.
-- Production plugin worker implementation, independent penetration testing, HA/failover, and production-scale load/soak evidence. Carrier-grade SMPP send evidence is pending the carrier allowlisting the deployment egress IP (the bind is configured and honest about its blocked state).
-- MFA and the deeper AI pipeline items (predictive analytics, AI config review, alert triage) remain proposed; the Ops Copilot is read-only and advisory only.
+---
 
-## Assumptions
+## Scale
 
-- Development runs on current Node.js LTS-compatible containers.
-- Local Compose credentials are supplied through `.env`; committed defaults are non-secret placeholders.
-- `/api/v1/health` is the liveness/readiness contract.
+39 API controllers · ~250 endpoints · 34 database migrations · 26 console screens ·
+81 tables · 100 backend test suites (836 tests) · 18 frontend suites (112 tests) ·
+14-service Compose topology across 4 isolated networks.
 
-## Selected stack
+## Stack
 
-NestJS/TypeScript backend, Vue 3/TypeScript/Vite/Tailwind frontend, PostgreSQL, Redis, Docker Compose, generic Engine Adapter with Kamex as the first containerized runtime and upstream Kannel as an external sibling adapter.
+NestJS/TypeScript backend · Vue 3 + Vite frontend · PostgreSQL (system of record, forced
+row-level security) · Redis (rate limiting, idempotency, throttling) · Docker Compose ·
+Kamex 1.8.3 pinned by OCI digest, behind a generic Engine Adapter · upstream Kannel as a
+sibling adapter.
+
+## Architectural position
+
+**JKANNEL is a control plane; the engine owns the data plane.**
+[ADR-0008](../docs/adr/ADR-0008-control-plane-boundary.md) records the decision and its
+consequences: JKANNEL will not build a competing outbound queue and will not fork the
+engine for per-message queue control. Where the engine does not expose a capability,
+JKANNEL reports that honestly rather than simulating it.
+
+The practical consequence, and the workflow built around it: messages already inside
+bearerbox are visible only as an aggregate per-bind counter and cannot be moved
+individually. The supported recovery path is **disable the sick bind, then resend the
+affected traffic to a healthy one** — an equivalent outcome achieved without owning the
+data plane.
+
+---
+
+## What works end to end
+
+Summarised. The verified, itemised list is [`FEATURES.md`](../FEATURES.md).
+
+- **One transactional send pipeline.** `MessageSendService` is the single funnel for the
+  console, API-gateway, bulk and replay send paths. Normalise → blocklist → route →
+  entitlements → record decision → submit, inside one database transaction. Fails
+  closed when nothing matches.
+- **Routing on the send path**, with all five route types and all five selection
+  strategies, health-aware failover driven by live bind state, per-message decision
+  audit, and a resolve/preview that runs the same selector as production.
+- **Configuration generated from the database.** The SMSCs created in the console are
+  what gets rendered, with credentials emitted as `${ENV}` references. Immutable
+  versions, native validation, approval, atomic deploy, drift detection, and automatic
+  rollback when the post-deploy health check fails.
+- **Bind observability that reaches a human.** A poller writes bind state, transitions
+  and metric samples; the alert-rule evaluator runs on a schedule; escalation honours
+  per-step targets; real SMS metrics feed Prometheus and an SMS-focused Grafana
+  dashboard.
+- **Customer entitlements enforced atomically** — quota, prepaid credit with an
+  append-only ledger, sender-ID approval and route bindings, all consumed inside the
+  send transaction.
+- **Live Queue console** — per-bind depth/failures/throughput, spool reroute and cancel,
+  bulk resend by status filter, and per-bind start/stop without disturbing the engine.
+- **Security that is enforced where it counts** — RBAC on every endpoint, forced
+  row-level security proven by a live cross-tenant test, refresh-token family
+  revocation, privileges re-resolved on refresh, TOTP MFA, auth throttling that counts
+  only failures, spoof-resistant client-IP derivation, and a database-enforced
+  tamper-evident audit hash chain with a verification endpoint.
+- **Platform primitives that are actually wired** — auto-generated OpenAPI from the live
+  route table, idempotency keys with crash recovery, an async job queue with backoff and
+  dead-lettering, and a real dependency health probe.
+- **Backup and DR** — encrypted `pg_dump` on a schedule with retention classes,
+  integrity verification, restore into an isolated verification database, and failure
+  alerting.
+
+## Closed since the verification report
+
+Commit `d58a3d2`, with console screens following shortly after: **role and permission
+administration** with
+eight seeded roles and a described permission catalogue; the **full alert lifecycle**;
+**notification readiness** seeding a default in-app channel and reporting per-channel
+deliverability; **message date-range search with export parity** and encoding/segment
+detail; a **real SMPP bind probe** and a **genuine reconnect cycle**, both reporting how
+far they actually got; an **enforced password and session policy**; **customer
+rate limiting**; an **S3 backup destination**; **container resource limits**; an
+**opt-in TLS profile**; and **correlation IDs in log lines** with a query endpoint.
+
+Itemised, with the guard rails and caveats, in
+[`../progress/completed.md`](../progress/completed.md).
+
+## What does not work
+
+The **open** gaps:
+
+1. **No durable log store.** A log query endpoint exists, but it reads a process-local
+   in-memory ring buffer — 1000 lines by default, no retention window, lost on restart,
+   one replica's view only. Triage convenience, not observability.
+2. **No real-time push.** Polling on three surfaces; everything else is manual refresh.
+3. **No ticketing or ITSM integration.**
+
+Plus the partials, each with the working part and the missing part named, in
+[`../progress/pending.md`](../progress/pending.md). The ones most likely to surprise:
+
+- **One screen still contradicts the code.** The alerts workspace displays a note saying
+  there is no manual resolve, assign or per-alert suppress endpoint. Those actions exist
+  on the **Alert Lifecycle** screen. Tracked as the top next action.
+- **Some workflows have no console screen at all** — customer quota, credit and
+  sender-ID approval; API-key issuance; notification channels. All API-only.
+- **A fresh install pages nobody.** Alerts always reach the console, but the seeded
+  policy's email and webhook steps have empty targets, so no human is notified until
+  you configure a destination.
+- **The SMPP bind probe falls back to TCP** whenever the API container cannot resolve
+  the credential — which is the standard topology, since credentials live in the engine
+  container. It says so explicitly rather than claiming a bind.
+- **JKANNEL owns no message store.** Retention deletes engine rows without archiving,
+  free-text search is an unindexed scan, and a message export returns at most 500 rows
+  per call.
+- **Notification-channel secrets are stored and returned in plaintext**, and the webhook
+  "signature" is a replayable static token. This is now the most serious remaining
+  security defect.
+- **Password hashing is scrypt, not Argon2id.** There is no password-expiry setting at
+  all, and tenant-wide MFA forcing is advisory only.
+- **Plugins register and validate but do not execute** — there is no plugin runtime.
+- **No PITR**, and no Azure or SFTP backup destination.
+- **TLS is terminated upstream by default.** The `tls` profile is opt-in and the live
+  deployment does not use it.
+
+## Test reality
+
+Backend unit testing is genuine and broad (100 suites / 836 tests) with a real coverage
+gate, though set at the current floor rather than the specification's 95 %. Two
+integration specs exist of the nine areas the specification names; the row-level
+security proof among them is high quality.
+
+**The e2e figure should not be quoted without its caveat.** Of 40 runtime cases, 26 are
+a single navigation loop and **5 are genuinely mutating workflows**. Several tests
+tolerate a broken backend by design. The "36 acceptance tests across nine workflow
+groups" framing in earlier documents does not survive inspection and has been retracted.
+
+## Deployment
+
+Running on a **shared VPS beside an unrelated stack**, on remapped **loopback-only**
+ports (backend 3200, frontend 5173, JKANNEL proxy 8081, Kamex admin 13000, Kamex sendsms
+13013), with a **system nginx terminating TLS** and proxying to `127.0.0.1:8081`.
+
+Console: `https://jkannel.34-134-248-1.sslip.io` · tenant `default` · username
+`operator`. **There is no email login** — the users table has `username` and no email
+column, and the login form's "Email or Username" label is misleading.
+
+The frontend container runs the **Vite dev server** (`vite --host 0.0.0.0`), not a
+static build behind nginx. It is deployable behind a reverse proxy via
+`VITE_ALLOWED_HOSTS`, which satisfies Vite's host check.
+
+## Release gates outstanding
+
+Not code. Not fabricated. See [`progress/blockers.md`](../progress/blockers.md).
+
+1. A generated configuration bound to a **live carrier** — blocked on carrier-side IP
+   allow-listing of the deployment's egress IP.
+2. An **independent penetration test**.
+3. A **production-scale soak** — the local baseline only proves the paths are healthy on
+   a near-empty database, and it already surfaces one honest failure (auth ~535 ms p95
+   against a 100 ms target).
+4. A **multi-node HA failover drill** with measured RPO/RTO, plus a
+   restore-to-production drill.
 
 ## Next milestone
 
-Exercise SMSC lifecycle, routing deployment, SQLBox pagination/trace/export and retention flows against carrier-like SMPP traffic; connect the platform job foundation to worker-backed large exports and historical archive/partition jobs; then obtain independent penetration-test, production-scale soak, and multi-node failover evidence before a production release.
+Two loose ends from the catch-up: delete the stale alerts note that denies a shipped
+capability, and make the Log Explorer state its own non-durable limits prominently.
+
+Then: **encrypt notification-channel secrets** — now the most serious remaining security
+defect — and **re-run the independent verification** against the current commit so
+`FEATURES.md` stops understating the product. Ordered plan:
+[`../progress/next-actions.md`](../progress/next-actions.md).
+
+## Where to read more
+
+| Document | Purpose |
+|---|---|
+| [`../FEATURES.md`](../FEATURES.md) | Verified capability list, including what is not built |
+| [`IMPLEMENTATION_VERIFICATION.md`](IMPLEMENTATION_VERIFICATION.md) | File-by-file evidence for every claim |
+| [`SPEC_GAP_ANALYSIS.md`](SPEC_GAP_ANALYSIS.md) | The audit that drove the remediation waves |
+| [`../progress/requirements-traceability.md`](../progress/requirements-traceability.md) | Per-requirement ledger with its correction notice |
+| [`../progress/pending.md`](../progress/pending.md) · [`../progress/next-actions.md`](../progress/next-actions.md) · [`../progress/blockers.md`](../progress/blockers.md) | What is left, in what order, and what is gated externally |
+| [`../docs/user-guides/README.md`](../docs/user-guides/README.md) | Operator manuals |
+| [`SYSTEM_IMPROVEMENT_PROPOSALS.md`](SYSTEM_IMPROVEMENT_PROPOSALS.md) | Forward proposals and rationale |

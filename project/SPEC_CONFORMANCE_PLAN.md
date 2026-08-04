@@ -58,6 +58,80 @@ We will provide the *software and configuration* to make them achievable (replic
 - **Wave 4 — complete and pushed.** REST/OpenAPI auto-generation from the live route table + opt-in cursor pagination + field selection; data-model completeness (migration 027: soft-delete + optimistic-lock columns, DB-enforced audit hash-chain + verifier, archive tables + retention scheduler); fuller Docker topology (nginx reverse proxy, loki/promtail observability profile, watchdog, split-out scheduler/backup-service workers, isolated networks, hardening). Migration 028 fixed three defects found in live integration (audit-trigger SECURITY DEFINER so login no longer 500s, ambiguous verifier column, retention param casts) plus an nginx header-inheritance 403. Backend 70 suites / 387 tests; stack recreated onto the new topology with all 9 services healthy; live-verified.
 - **Wave 5 — complete and pushed.** HA/DR overlay (`docker-compose.ha.yml`: Postgres streaming replication + slot, Redis Sentinel 3-quorum, rolling-update backend replica behind an HA proxy) — profile-gated, config-validated, live stack untouched. Performance/soak harness (`perf/`) with encoded SLOs, a Grafana dashboard, and a passing local baseline (auth-vs-spec gap honestly surfaced). Playwright e2e acceptance (`e2e/`): 36/36 green against the live stack across all nine operational workflow groups. Latent auth lockout defect fixed (locked accounts no longer re-extend their own window) with a regression test. External-evidence gates (independent pen-test, production-scale soak, multi-node failover drill, carrier live-send) documented as outstanding in `progress/requirements-traceability.md`, not fabricated.
 
-**All five waves complete.** Per-requirement status and the external-evidence gates live in `progress/requirements-traceability.md`.
+- **Wave 6 (polish) — complete and pushed.** Idempotency failure-state recovery (a crashed request releases its key instead of blocking retries forever) and a Sentinel-aware Redis client wired through both Redis consumers.
 
-This document is updated as each wave completes; per-requirement status lives in `progress/requirements-traceability.md`.
+**All six waves complete** — as *code shipped*. That is not the same as capability delivered, and the audit below proved the difference.
+
+---
+
+## Correction: what the wave status lines above got wrong
+
+Read the status lines with this section beside them.
+
+A systematic specification-vs-implementation audit
+([`SPEC_GAP_ANALYSIS.md`](SPEC_GAP_ANALYSIS.md), 2026-08-04) applied one test to every
+claim above: **does a non-test caller reach this on a real request path?** It found
+that several wave deliverables had been merged, tested, and recorded as done while
+nothing invoked them. Specifically:
+
+- **Wave 1's monitoring depth** shipped `AlertEvaluatorService` with **zero callers**.
+  Console-authored alert rules were never evaluated.
+- **Wave 2's configuration generator** never read `smsc_definitions`. The SMSCs an
+  operator created in the console did not reach the generator, so a generated
+  configuration could not bind to an authenticated carrier.
+- **Wave 3's routing depth and customers depth** were not on the send path.
+  `selectRoute()` was reachable from one preview endpoint and **zero send paths**;
+  customer quota and credit were enforced **nowhere**. The Wave 3 line above does
+  concede "enforcement primitives exposed, not yet wired into the send path" — that
+  concession was correct and should have prevented the domain rows from being treated
+  as delivered.
+- **Wave 4's REST primitives** reached 1 of 18 grids for cursor pagination, 1 of 18 for
+  `?fields=`, and 4 of 71 tables for soft-delete. `requireCapability()` and
+  `PluginManifestValidator` had **zero callers**.
+- **Wave 5's QA line — "36/36 Playwright e2e acceptance across all nine operational
+  workflow groups" — does not survive inspection.** The count reconciles only if a
+  single `for` loop over 26 routes is counted as 26 acceptance tests. Of 40 runtime
+  cases, **5 are genuinely mutating workflows**; several others pass on a broken
+  backend by design. This claim is retracted.
+
+These are stated here rather than edited out of the status lines above, because the
+pattern matters more than any individual row: **this plan recorded merges, and merges
+were then read as outcomes.**
+
+## Remediation waves A–F (2026-08-04)
+
+Six further waves ran against the gap analysis's recommended build order and closed the
+three integration voids. They are summarised in
+[`../progress/completed.md`](../progress/completed.md) and detailed in
+[`CHANGELOG.md`](CHANGELOG.md); the per-gap evidence is in
+[`IMPLEMENTATION_VERIFICATION.md`](IMPLEMENTATION_VERIFICATION.md).
+
+| Wave | Theme | Outcome |
+|---|---|---|
+| **A** | Stop the bleeding | Permanent lockout, stale privileges on refresh, XFF bypass, auth throttling, real `/health`, wrong success rates, no CI — all fixed. |
+| **B** | Make configuration real | Generator now composes from `smsc_definitions`; full SMPP render with `${ENV}` secret references and `requiredSecrets`. |
+| **C** | Close the observability loop | Bind poller, real SMS metrics, alert-rule evaluator finally driven, escalation targets honoured. |
+| **D** | Routing and customers on the send path | One transactional `MessageSendService`; entitlements enforced; API-key scopes on real endpoints. |
+| **E** | Operator surfaces | Polling composable, dense columns, alert actions, UI for already-built backends. |
+| **F** | Durability and platform depth | Mandatory backup key, failure alerting, honest backup kinds, a real job queue, plugin validation called. |
+
+**Independently verified result: 10 of 20 gaps CLOSED, 7 PARTIAL, 3 OPEN.**
+Nothing has been promoted back to *Complete* in the traceability ledger; the same rule
+still applies, and several items need a live carrier or a real incident before they can
+honestly be called done.
+
+## Method note for future waves
+
+Three rules, adopted after the audit and binding on anything added to this plan:
+
+1. **A wave is not complete when its code merges.** It is complete when a non-test
+   caller reaches it on a real request path, and that call site is named.
+2. **State the residual limit in the same sentence as the deliverable.** Wave 3's
+   parenthetical about unwired enforcement was the only line in this document that did
+   this, and it was the only line the audit did not have to correct.
+3. **Do not aggregate test counts across kinds.** Name what each number measures. A
+   navigation loop is not an acceptance test.
+
+This document is updated as each wave completes; per-requirement status lives in
+[`../progress/requirements-traceability.md`](../progress/requirements-traceability.md),
+and the user-facing capability answer is [`../FEATURES.md`](../FEATURES.md).

@@ -20,11 +20,77 @@
 - [x] Configure a live carrier SMPP bind as a managed SMSC and prove honest connection reporting (send pending carrier-side IP allowlisting of the deployment egress IP; carrier endpoint/credentials kept in the gitignored `.env`).
 - [x] Repair the SQLBox runtime and prove the message pipeline live end to end.
 
+## Completed 2026-08-04 (Live Queue, audit, six remediation waves, deployment)
+
+- [x] Live Queue console with per-bind control, spool reroute/cancel and bulk resend; ADR-0008 accepted (control plane vs data plane).
+- [x] Independent spec-gap audit (`SPEC_GAP_ANALYSIS.md`) — 20 gaps found, three of them integration voids; traceability ledger corrected.
+- [x] Remediation Wave A: lockout, refresh privileges, XFF trust, auth throttling, real `/health`, `dlr_mask` decode, CI.
+- [x] Remediation Wave B: configuration generator composes from `smsc_definitions`; full SMPP render with secret references and `requiredSecrets`.
+- [x] Remediation Wave C: bind poller, real SMS metrics + Grafana dashboard, alert-rule evaluator driven, escalation targets honoured.
+- [x] Remediation Wave D: one transactional `MessageSendService`; routing and customer entitlements on the send path; API-key scopes on real endpoints.
+- [x] Remediation Wave E: polling composable, dense grid columns, alert row actions, UI for escalation/maintenance/backup schedules/routing depth.
+- [x] Remediation Wave F: mandatory backup encryption key, failure alerting, honest backup kinds, real job queue, plugin manifest validation called.
+- [x] Independent implementation verification (`IMPLEMENTATION_VERIFICATION.md`) — 10 closed / 7 partial / 3 open.
+- [x] Frontend deployable behind a reverse proxy (`VITE_ALLOWED_HOSTS`); deployed to a shared VPS on loopback-only ports behind a system nginx terminating TLS.
+- [x] `FEATURES.md` — verified capability list with an honest "not implemented" section.
+- [x] Rewrote `README.md`; added operator manuals under `docs/user-guides/`; retired `SUPERVISOR_HANDOVER_SUMMARY.md`.
+
+## Completed 2026-08-05 (close the verified gaps, `d58a3d2`)
+
+- [x] Role and permission administration (migration 036): role CRUD, seeded 21-code permission catalogue with descriptions/categories, **8 seeded roles per tenant**, system-role protection, `users.manage` orphan check, session revocation on grant change.
+- [x] Full alert lifecycle (migration 037): resolve, assign, suppress, reopen, close, comments, validated transitions, lifecycle history.
+- [x] Notification readiness: boot-seeded default in-app channel and escalation policy, per-channel deliverability report, warning when open alerts have nothing deliverable.
+- [x] Message depth (migration 038): server-side `from`/`to`, shared filter parser giving CSV/PDF/grid export parity, encoding/charset/UDH/validity/segment columns.
+- [x] Real SMPP bind test with an explicit `smpp_bind` / `tcp_socket` / `not_applicable` verification level persisted to operation history.
+- [x] Genuine reconnect cycle recording `bind_cycled` vs `command_accepted`.
+- [x] Enforced per-tenant security policy: password complexity/history, lockout, token TTL, session idle timeout, absolute lifetime, concurrent-session cap.
+- [x] Customer `rate_limit_per_min` enforced on the send path (429 + `retryAfterSeconds`).
+- [x] S3-compatible offsite backup destination; container resource limits; opt-in `tls` profile.
+- [x] Correlation IDs in log lines via `AsyncLocalStorage`, `x-correlation-id` header, and `GET /observability/logs` over an in-memory ring buffer.
+
 ## Active
 
-- [ ] Complete the traceability gaps in `progress/requirements-traceability.md`; foundations must not be represented as complete operational modules.
-- [ ] Remaining [PROPOSED] items in `SYSTEM_IMPROVEMENT_PROPOSALS.md`: MFA, refresh-token family revocation, digest-pinning non-Kamex images, doc consolidation, SMPP synthetic probe, config drift detection, historical partition/archive jobs, backup scheduler, per-module detail pages, AI config review / alert triage / routing optimization.
-- [ ] Carrier-grade SMPP send once the carrier allowlists the deployment egress IP (bind is configured and auto-retrying).
+Ordered detail, with rationale, is in
+[`../progress/next-actions.md`](../progress/next-actions.md).
+
+**Finish the console catch-up** — Roles admin, Alert Lifecycle, Log Explorer and message date filters have landed; two loose ends remain
+
+- [ ] **Delete the stale in-page note on the Alerts workspace** — it still denies the resolve/assign/suppress endpoints that now exist on the Alert Lifecycle screen.
+- [ ] Make the Log Explorer display its `durable: false` / `scope: process` limits prominently, so nobody mistakes a 1000-line in-memory buffer for a log store.
+
+**Fix what still misleads**
+
+- [ ] Encrypt notification-channel secrets at rest, redact them on read, and replace the static `x-jkannel-signature` with an HMAC. *Now the most serious remaining security defect.*
+- [ ] Surface `requiredSecrets` in the configuration UI (the backend returns it; the frontend drops it).
+- [ ] Expose `credentialSecretRef` / `systemId` / bind mode / TON / NPI in the SMSC form — API-only today, and the reason the bind probe falls back to TCP.
+- [ ] Reconcile the message export cap: `exportLimits()` advertises 5000, `list()` clamps to 500.
+- [ ] Route the raw `console.warn` callers (notification readiness, customer rate limit) through the structured logger so their warnings are queryable.
+- [ ] Surface `POST /auth/api-keys` in the console, and either retire or clearly relabel the API Gateway client registry, which authenticates nothing.
+
+**Complete the remaining partials**
+
+- [ ] A durable log path — Loki dashboards with the `observability` profile, or persisted warn/error lines.
+- [ ] Real-time push (SSE) for the queue and log tails.
+- [ ] `pg_trgm` index for free-text message search; run `ensureIndexes()` automatically instead of requiring `POST /messages/indexes`.
+- [ ] Per-recipient retry in bulk send (`attempts` / `next_attempt_at`).
+- [ ] Cursor + `?fields=` across the remaining 14 grids (one-line delegations to the existing `grid-runner`).
+- [ ] Rebuild the `monitoring` workspace — the spec's primary NOC console is a one-row table over a hardcoded endpoint.
+- [ ] Distributed lock on configuration and route deploy.
+- [ ] cAdvisor/node_exporter; replication-lag and Sentinel-role metrics.
+- [ ] PITR / WAL archiving; Azure or SFTP backup destination.
+- [ ] Multi-part segment billing — the segment data now exists, the rating model does not.
+- [ ] Production out-of-process plugin worker execution and signed-package install.
+- [ ] Ticketing / ITSM integration for the alert lifecycle.
+
+**Raise the quality floor**
+
+- [ ] Convert navigation-smoke e2e cases into mutating workflow tests — priority: create → validate → deploy → bind, and the Live Queue disable-then-resend recovery.
+- [ ] Ratchet coverage gates off the current floor; make the CI `security` job blocking once findings clear.
+- [ ] **Re-run the independent verification against the current commit.** `FEATURES.md` and `IMPLEMENTATION_VERIFICATION.md` are anchored to `eefa320` and now understate the product.
+
+**External evidence** — see [`../progress/blockers.md`](../progress/blockers.md)
+
+- [ ] Carrier-grade SMPP send once the carrier allow-lists the deployment egress IP (the bind is configured and auto-retrying).
 - [x] Add native Kamex `bearerbox --test` validation behind an internal least-privilege validator boundary.
 - [x] Complete configuration history/diff/approval/rollback APIs and specialized UI.
 - [x] Complete SMSC lifecycle/test-connection APIs and UI through adapter providers.

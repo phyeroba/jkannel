@@ -1,5 +1,241 @@
 # Changelog
 
+## 2026-08-05 (close the verified gaps: RBAC, alert lifecycle, message depth, deployment hardening — `d58a3d2`)
+
+A follow-up pass against the open and partial items in
+`project/IMPLEMENTATION_VERIFICATION.md`. **Backend only** — the matching console
+screens are in progress, so several of these are API-reachable but not yet clickable.
+
+- **Role and permission administration** (migration `036_rbac`) — the verification's
+  single largest open gap. `POST` / `PATCH` / `DELETE /users/roles` plus
+  `GET /users/permissions`, a seeded 21-code permission catalogue with human
+  descriptions and eight categories, and **eight seeded roles per tenant**: Super
+  Administrator, Administrator, Network Engineer, Operations Engineer, Support Engineer,
+  Read Only, Auditor, API Client. Guard rails: system roles cannot be renamed or
+  deleted; a change that would leave nobody holding `users.manage` is refused with 409;
+  a role held by at least one user cannot be deleted; and editing a role's grants
+  revokes every holder's live session. `PATCH` **replaces** the whole grant set rather
+  than merging. API-key scopes are deliberately excluded from the catalogue so a human
+  role cannot be granted a machine scope. *`RolesView.vue` still shows a read-only
+  banner that is now factually wrong.*
+- **Full alert lifecycle** (migration `037_alert_lifecycle`) — resolve, assign,
+  suppress, reopen, close and comments alongside acknowledge, with a transition table
+  that returns 409 naming the current state, and `GET /alerts/:id/lifecycle`. Suppress
+  requires `system.manage` and is capped at 30 days. Assignment resolves against real
+  tenant users. **No ticketing** — there is no ticket field and no ticket route.
+- **Notification readiness** — seeds a `Default dashboard` channel and a
+  `Default escalation` policy at boot, exposes `GET /monitoring/notifications/readiness`
+  and a `repair` route, and warns when a tenant has open alerts but nothing deliverable.
+  Undeliverable steps now record a reason rather than being silently skipped. The
+  seeded policy's email and webhook steps have empty targets, so **out of the box only
+  the in-app step delivers**.
+- **Message depth** (migration `038_messaging_depth2`) — server-side `from`/`to` date
+  range (strict ISO 8601, inclusive), and a single shared filter parser used by the
+  list, CSV and PDF routes so **export parity now holds** and an unknown status token is
+  a 400 everywhere. Encoding, charset, UDH, validity, deferred, mclass, pid, binfo and
+  metadata are selected and returned, with a derived segment count (GSM-7 160/153,
+  UCS-2 70/67, 8-bit 140/134; a UDH-declared part count wins). Free-text search is
+  **still an unindexed leading-wildcard scan**, and an export still returns at most 500
+  rows per call.
+- **A real SMPP bind test** — a `bind_transceiver` PDU (or transmitter/receiver per bind
+  mode), reading the response and reporting `ESME_*` status. Crucially it records a
+  `verified` level of `smpp_bind`, `tcp_socket` or `not_applicable`, persisted to the
+  operation history, so a TCP fallback can never be read as a successful bind. It falls
+  back to TCP when the API container cannot resolve the credential — the standard
+  topology, since credentials live in the engine container — and says so verbatim.
+- **A genuine reconnect cycle** — observes the bind, issues `stop-smsc`, waits for it to
+  leave `online`, issues `start-smsc`, waits for it to return, and records `bind_cycled`
+  or `command_accepted`. Gated on the `runtime.smsc.reconnect` capability. Both this and
+  the bind test had been flagged in two consecutive audits without changing.
+- **An enforced security policy** — password minimum length and four complexity rules,
+  history depth, lockout threshold and duration, access-token TTL, session idle timeout,
+  absolute session lifetime and a concurrent-session cap, resolved per tenant with a
+  30-second cache. These were previously decorative settings read by no code. Values are
+  clamped one-sidedly toward strictness, and the session cap ships **off** by default.
+  Hashing remains **scrypt, not Argon2id**, and **no password-expiry setting exists**.
+- **Customer `rate_limit_per_min` enforced** on the send path — 429 with `limit`,
+  `windowSeconds` and `retryAfterSeconds`. It fails open on Redis loss, counts attempts
+  rather than successes, and uses a fixed 60-second window.
+- **An S3-compatible offsite backup destination** (AWS, MinIO, Ceph) with SSE and
+  path-style options, alongside the existing filesystem driver.
+- **Container resource limits** — `mem_limit`, `cpus`, `pids_limit` and `ulimits` across
+  the compose services, closing a gap where only `restart:` was set.
+- **An opt-in `tls` profile.** The default topology is unchanged and **the live
+  deployment still terminates TLS on an upstream system nginx**.
+- **Correlation IDs in log lines** via `AsyncLocalStorage` — correlation ID, request ID,
+  user, tenant, method, route and client IP — plus an `x-correlation-id` response header
+  and `GET /observability/logs`. **That endpoint reads a process-local, non-durable
+  in-memory ring buffer** (1000 lines by default, 20 000 maximum, no retention window,
+  lost on restart, one replica's view only); every response says `durable: false`. It is
+  triage convenience, not a log store.
+
+Not changed by this commit, and still true: **a generated configuration has never bound
+to a real carrier**; notification-channel secrets are stored and returned in plaintext;
+there is no real-time push; plugins do not execute.
+
+`FEATURES.md` and `project/IMPLEMENTATION_VERIFICATION.md` are anchored to `eefa320` and
+now **understate** the product. Re-running the verification is tracked in
+`progress/next-actions.md`.
+
+## 2026-08-04 (documentation: honest README, operator manuals, ledger refresh)
+
+- **Rewrote `README.md`.** It now states the control-plane boundary
+  ([ADR-0008](../docs/adr/ADR-0008-control-plane-boundary.md)) in one paragraph, links
+  the capability summary to `FEATURES.md` rather than restating it, gives an
+  architecture diagram, a Compose quick start with profiles, the configuration
+  essentials, how to run every test layer, and a documentation map. It is explicit that
+  the frontend is a **Vite dev server** and that **TLS is terminated upstream by
+  default**.
+- **Added task-oriented operator manuals** under
+  [`docs/user-guides/`](../docs/user-guides/README.md): getting started and console
+  tour, connecting an SMSC, sending messages, **Live Queue and recovering a bad bind**,
+  routing, monitoring and alerts, reports and exports, customers and quotas, backup and
+  restore, users and roles, and troubleshooting. Every screen name, button label and
+  field was verified against `frontend/src/views/` and `frontend/src/navigation.ts`.
+- Verifying those labels surfaced three gaps now stated plainly in the guides rather
+  than omitted: the configuration UI **drops the `requiredSecrets` array** the backend
+  returns; the SMSC create/edit forms expose **no field for `credentialSecretRef`,
+  `systemId` or bind mode** (API only); and **`POST /auth/api-keys` — the only
+  credential that authenticates the gateway — has no console UI**, while the API Gateway
+  screen manages a registry that authenticates nothing.
+- **Retired `project/SUPERVISOR_HANDOVER_SUMMARY.md`.** It was a point-in-time status
+  memo from 2026-07-09, superseded by `FEATURES.md` and
+  `project/IMPLEMENTATION_VERIFICATION.md`. The single inbound link (from `README.md`)
+  was repointed.
+- Brought `progress/completed.md`, `pending.md`, `next-actions.md`, `blockers.md` and
+  `session-log.md`, plus `project/PROJECT_STATE.md`, `TASKS.md`,
+  `SPEC_CONFORMANCE_PLAN.md`, `ROADMAP.md` and the documentation catalog, into line with
+  the audited state. The honesty discipline from the traceability correction notice —
+  *code merged is not capability delivered* — is applied throughout, including to the
+  waves' own summaries.
+
+## 2026-08-04 (verified feature list + collapsible navigation, `4ed4bda`)
+
+- Added **`FEATURES.md`**: a capability list where every entry was verified by tracing
+  that a **non-test caller reaches it on a real request path**. Code that exists but
+  nothing invokes is not listed. Its "Not yet implemented" section is deliberately long
+  and specific.
+- Added **`project/IMPLEMENTATION_VERIFICATION.md`**: an independent, read-only,
+  file-by-file verification of the six remediation waves. Method: call-site tracing of
+  every previously-callerless symbol, route-table extraction of all non-test controllers
+  paired with their guards and permissions, and direct inspection of every migration,
+  compose file and CI workflow. **Result: 10 of 20 gaps closed, 7 partial, 3 open.**
+- It also retracts the ledger's "36/36 Playwright e2e acceptance" claim. Of 40 runtime
+  cases, **26 are one navigation loop and 5 are genuinely mutating workflows**.
+- Frontend: collapsible navigation groups in the console shell.
+
+## 2026-08-04 (deployable behind a reverse proxy, `eefa320`)
+
+- The frontend container runs the Vite dev server, whose host check returned **403**
+  behind a reverse proxy because it receives the *public* hostname in `Host`. Added
+  **`VITE_ALLOWED_HOSTS`** (comma-separated; a leading dot allows a whole suffix).
+- Deployed to a **shared VPS running an unrelated stack alongside it**. JKANNEL's
+  published ports were remapped to **loopback only** so nothing is exposed publicly and
+  nothing collides: backend 3200, frontend 5173, JKANNEL proxy 8081, Kamex admin 13000,
+  Kamex sendsms 13013. A **system nginx terminates TLS** and proxies to
+  `127.0.0.1:8081`.
+- The shipped `reverse-proxy` service stays **HTTP-only by design** — the "TLS
+  terminated upstream" topology. A profile-gated `reverse-proxy-tls` service exists for
+  deployments that want JKANNEL to hold the certificate, with a deliberately separate
+  port list so enabling it cannot republish a port publicly.
+- Console live at `https://jkannel.34-134-248-1.sslip.io` (tenant `default`, username
+  `operator`).
+
+## 2026-08-04 (six remediation waves, `9ba2bae`)
+
+Executed against the build order recommended by `project/SPEC_GAP_ANALYSIS.md`.
+
+- **Wave A — stop the bleeding.** Fixed **permanent account lockout** (an
+  unauthenticated DoS against any account). Fixed **stale privileges on refresh** —
+  `refresh()` re-resolves status, roles and permissions and revokes the token family on
+  a non-usable account. Closed the **`X-Forwarded-For` allowlist bypass** with
+  `trust proxy` plus a platform-derived `request.clientIp`. Added **MFA and `/auth/*`
+  throttling**; a wrong TOTP now increments the lockout counter. Replaced the
+  **hardcoded `/health`** with a real PostgreSQL + Redis probe under bounded timeouts
+  that redacts driver detail and returns 503. **Decoded `dlr_mask`**, so the shipped
+  success-rate reports stopped being wrong — `successRate = delivered / (delivered +
+  failed + rejected)`, with the old figure surviving under the honest label "DLR
+  coverage". **Added CI**: five GitHub Actions jobs (backend, frontend, compose,
+  migrations, security) with coverage gated at the current floor and ESLint at zero
+  errors.
+- **Wave B — make configuration real.** Migration 029 adds the 20-column SMSC attribute
+  set. `SecretResolver` renders every credential as a `${ENV}` placeholder — never a
+  literal — and reports `requiredSecrets`. The renderer emits the full SMPP bind
+  parameter set plus the `smsbox`, `sendsms-user`, `sms-service`, `pgsql-connection` and
+  `dlr-db` groups. **`ConfigurationModelBuilder` composes the model from
+  `smsc_definitions`**, closing the void between the SMSC Manager and the generator, and
+  `POST /configurations/generate` defaults to `source='database'`. Deploy rollback fires
+  on a 503 health check. Verified live that Kamex expands `${VAR}` from its own
+  environment.
+- **Wave C — close the observability loop.** `SmscStatusPoller` (migration 031) observes
+  every bind and writes state, transitions and metric samples. Live-verified: a bind
+  drop detected (`connecting → disconnected`), transition audited, alert raised, no
+  flapping. Real SMS metrics exported (`jkannel_smsc_bind_up`, queue depth, failures,
+  throughput, DLR queued); the dead bearerbox scrape job deleted; an SMS-focused Grafana
+  dashboard added. **`AlertRuleEvaluatorScheduler` now drives the previously callerless
+  `AlertEvaluatorService`.** `deliverSms` submits through SQLBox instead of returning
+  `skipped`; escalation honours `step.target`.
+- **Wave D — routing and customers on the send path.** A single **`MessageSendService`**
+  funnels the console, API-gateway, bulk and replay send paths. `smscId` is optional;
+  when omitted the router selects and the send **fails closed**. Decisions persist to
+  `message_route_decisions` for successes *and* refusals. Candidates come from live
+  `smsc_bind_state`; `deployment_state='deployed'` is respected; the two divergent
+  routing engines were converged onto one `selectRoute()`. **Customer entitlements are
+  consumed inside the same transaction as the engine submit.** `POST /gateway/messages`
+  and its read endpoints sit behind `ApiKeyAuthGuard` with enforced
+  `sms.send`/`sms.read`/`routing.read` scopes, and customer identity comes from
+  `api_keys.customer_id`, never from the body. Blocklist/allowlist/DND evaluate before
+  selection via a shared E.164 normaliser.
+- **Wave E — operator surfaces.** `useLiveResource` (overlap guard, `document.hidden`
+  guard, caller pause predicate, deterministic cleanup) on the Operations dashboard,
+  Live Queue and three workspace modules. Real dense column sets on 13 modules. Alert
+  row actions. New UI for escalation policies, maintenance windows, backup schedules and
+  routing depth.
+- **Wave F — durability and platform depth.** `BACKUP_ENCRYPTION_KEY` made **mandatory**
+  with placeholder rejection; the JWT-key fallback chain removed. Backup and
+  verification failures open real alert instances. Config and certificate capture added.
+  **The false `incremental` label was retired rather than faked** — a requested
+  incremental is recorded as `full` with an explanatory note. A **real job queue**
+  (migration 034): `FOR UPDATE SKIP LOCKED` claiming, exponential backoff,
+  dead-lettering, stale-claim reaping, and `POST /jobs` returning 202 + `Location`.
+  `PluginManifestValidator` — previously zero callers — is now called on install.
+- Verification: backend 100 suites / 836 tests, frontend 18 files / 112 tests, `tsc`
+  clean, ESLint 0 errors, schema at migration 035, all 9 Compose services healthy.
+  Live-verified: Live Queue reroute/resend, a bind drop detected and alerted, `/health`
+  failing and recovering, an async job executing to `succeeded`.
+
+## 2026-08-04 (Live Queue console + spec-gap audit, `e7d9df9`)
+
+- **Live Queue console** (`backend/src/queue-console/` + `LiveQueueView.vue`, 7 routes,
+  5-second polling): per-bind status, queue depth, failures and throughput with an
+  honest `source` when the engine is unreachable; a pending-spool grid with
+  **`POST /spool/reroute`** (true zero-restart retarget, tenant predicate in the SQL) and
+  `/spool/cancel`; **`POST /resend`** (bulk resend of failed traffic to any bind, by id
+  or status filter); and **`POST /binds/:engineId/control`** to start, stop or reconnect
+  **one** bind — verified live that the engine and every other bind keep running.
+- DLR-derived delivery status with `resendable` and `in-flight` presets, shared by the
+  Live Queue and the Messages explorer.
+- **Accepted [ADR-0008](../docs/adr/ADR-0008-control-plane-boundary.md).** Building this
+  surfaced a hard boundary: bearerbox's internal per-SMSC queue is exposed only as an
+  aggregate counter and cannot be listed, moved or cancelled per message. Owning the
+  outbound queue in JKANNEL was **considered and rejected** — it duplicates two decades
+  of hardened retry, throttling, windowing, store-and-forward, DLR correlation and SMPP
+  flow control, and would turn a control-plane bug into a message-loss bug. Forking the
+  engine was also rejected. The boundary is stated in the UI and the supported
+  workaround (disable the bind, then resend) is built.
+- **`project/SPEC_GAP_ANALYSIS.md`**: a systematic specification-vs-implementation audit
+  applying one decisive test — *does a non-test caller reach this on a real request
+  path?* It found 20 gaps, three of them **integration voids**: the configuration
+  generator never read `smsc_definitions`, the routing engine was not on the send path,
+  and alert rules were never evaluated. Measured adoption of components the ledger had
+  cited as evidence: `AlertEvaluatorService` **0 callers**, `requireCapability()` **0
+  callers**, `PluginManifestValidator` **0 callers**, `SmscService` **0 injections**,
+  `selectRoute()` **0 send paths**, customer quota/credit **0 send paths**.
+- A correction notice was added to the head of
+  `progress/requirements-traceability.md`: the ledger had been booking **capability
+  shipped** as **capability delivered**. Eight rows previously marked Complete were
+  downgraded. That discipline is now permanent across every project document.
+
 ## 2026-07-10 (Claude cycle 4: user-reported fixes + Customers domain)
 
 - Fixed the **AI Copilot "Failed to fetch"** — the `x-jkannel-ai-opt-in` consent header was missing from the CORS allowlist, so the browser preflight blocked the request (curl worked). Added it.
