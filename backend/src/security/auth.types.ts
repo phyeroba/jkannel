@@ -48,6 +48,7 @@ export interface AuditEvent {
     | 'login.failed'
     | 'account.locked'
     | 'token.refreshed'
+    | 'token.refresh.rejected'
     | 'token.reuse.detected'
     | 'logout'
     | 'mfa.required'

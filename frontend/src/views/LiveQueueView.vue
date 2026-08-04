@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -721,64 +722,27 @@ async function controlBind(bind: BindSnapshot, operation: 'enable' | 'disable' |
 }
 
 // --- Auto refresh -----------------------------------------------------------
-const autoRefresh = ref(true);
-const refreshSeconds = ref(5);
+// One poll = live snapshot + spool grid. The shared composable owns the timer,
+// the overlap guard, the hidden-tab guard and the unmount cleanup; `pauseWhen`
+// holds automatic ticks off while a bulk action is in flight so the grid does
+// not reload out from under a selection.
 const refreshChoices = [2, 5, 10, 30, 60];
-const refreshing = ref(false);
-let timer: ReturnType<typeof setInterval> | undefined;
-
-/**
- * One poll of the live snapshot + spool grid. Overlapping ticks are skipped
- * (`refreshing`), ticks are dropped while the tab is hidden or a bulk action is
- * in flight, and the interval is cleared on unmount.
- */
-async function refreshNow(manual = false) {
-  if (refreshing.value) return;
-  if (!manual && typeof document !== 'undefined' && document.hidden) return;
-  if (!manual && actionBusy.value) return;
-  refreshing.value = true;
-  try {
-    await Promise.all([loadLive(), loadSpool()]);
-  } finally {
-    refreshing.value = false;
-  }
-}
-
-function stopTimer() {
-  if (timer !== undefined) {
-    clearInterval(timer);
-    timer = undefined;
-  }
-}
-function startTimer() {
-  stopTimer();
-  if (!autoRefresh.value) return;
-  timer = setInterval(
-    () => {
-      void refreshNow();
-    },
-    Math.max(1, refreshSeconds.value) * 1000,
-  );
-}
-function onVisibilityChange() {
-  if (typeof document !== 'undefined' && !document.hidden && autoRefresh.value) void refreshNow();
-}
-
-watch([autoRefresh, refreshSeconds], () => startTimer());
+const {
+  autoRefresh,
+  intervalSeconds: refreshSeconds,
+  refreshing,
+  refreshNow,
+} = useLiveResource(() => Promise.all([loadLive(), loadSpool()]), {
+  intervalSeconds: 5,
+  immediate: false,
+  pauseWhen: () => actionBusy.value,
+});
 
 onMounted(() => {
   void loadLive();
   void loadSpool();
   void loadLog();
   void loadSmscOptions();
-  if (typeof document !== 'undefined')
-    document.addEventListener('visibilitychange', onVisibilityChange);
-  startTimer();
-});
-onUnmounted(() => {
-  stopTimer();
-  if (typeof document !== 'undefined')
-    document.removeEventListener('visibilitychange', onVisibilityChange);
 });
 </script>
 

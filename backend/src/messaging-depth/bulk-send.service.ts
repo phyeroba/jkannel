@@ -8,6 +8,7 @@ import {
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { MessageSendService } from './message-send.service';
 
 export interface Actor {
   tenantId: string;
@@ -16,9 +17,29 @@ export interface Actor {
 
 export interface CreateBulkSendInput {
   name: string;
-  smscId: string;
+  /**
+   * Engine-level bind to pin the campaign to. OPTIONAL: omit it and the routing
+   * engine chooses per recipient at dispatch time (so a campaign follows route
+   * configuration and fails over instead of being nailed to one carrier).
+   */
+  smscId?: string | null;
   message: string;
   recipients: string[];
+  /** Sender ID for every message; defaults to {@link defaultBulkSender}. */
+  sender?: string | null;
+  /** Customer the campaign is attributed to and entitlement-checked against. */
+  customerId?: string | null;
+}
+
+/**
+ * Campaign sender ID when the caller supplies none. Bulk send previously
+ * hard-coded `sender: ''`, so every campaign message went out with an empty
+ * sender ID; an alphanumeric default is at least deliverable and is overridable
+ * per job and per deployment.
+ */
+export function defaultBulkSender(): string {
+  const configured = (process.env.BULK_SEND_DEFAULT_SENDER ?? '').trim();
+  return configured || 'JKANNEL';
 }
 
 export interface GridPage<T> {
@@ -34,7 +55,7 @@ export const BULK_SEND_MAX_RECIPIENTS = 5000;
 const BULK_SEND_LOCK_NAMESPACE = 0x2c3d;
 
 const JOB_COLUMNS =
-  'id,name,smsc_id,status,total,submitted,failed,detail,created_by,created_at,completed_at';
+  'id,name,smsc_id,sender,customer_id::text,status,total,submitted,failed,detail,created_by,created_at,completed_at';
 const RECIPIENT_COLUMNS = 'id,job_id,receiver,text,status,foreign_id,error,created_at';
 
 /**
@@ -57,6 +78,7 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly database: DatabaseService,
     private readonly sqlbox: KamexSqlboxRepository,
+    private readonly send: MessageSendService,
   ) {}
 
   onModuleInit(): void {
@@ -86,15 +108,36 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
         `recipients exceeds the maximum of ${BULK_SEND_MAX_RECIPIENTS} per job`,
       );
 
+    const smscId = input.smscId?.trim() || null;
+    const sender = input.sender?.trim() || defaultBulkSender();
+
     const job = await this.database.tenantTransaction(actor.tenantId, async (client) => {
-      const allowed = await this.tenantSmscScope(client);
-      if (!allowed.includes(input.smscId))
-        throw new BadRequestException('smscId must reference one of your tenant’s SMSCs');
+      // A pinned bind must belong to the tenant; an unpinned job is resolved by
+      // the routing engine per recipient when the job runs.
+      if (smscId) {
+        const allowed = await this.tenantSmscScope(client);
+        if (!allowed.includes(smscId))
+          throw new BadRequestException('smscId must reference one of your tenant’s SMSCs');
+      }
+      if (input.customerId) {
+        const found = (
+          await client.query('SELECT 1 FROM customers WHERE id=$1', [input.customerId])
+        ).rows[0];
+        if (!found) throw new NotFoundException('Customer not found');
+      }
       const created = (
         await client.query(
-          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,status,total,created_by)
-           VALUES($1,$2,$3,'queued',$4,$5) RETURNING ${JOB_COLUMNS}`,
-          [actor.tenantId, input.name, input.smscId, recipients.length, actor.userId],
+          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,sender,customer_id,status,total,created_by)
+           VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING ${JOB_COLUMNS}`,
+          [
+            actor.tenantId,
+            input.name,
+            smscId,
+            sender,
+            input.customerId ?? null,
+            recipients.length,
+            actor.userId,
+          ],
         )
       ).rows[0];
       // Bulk insert recipients via UNNEST so one round-trip handles the batch.
@@ -111,7 +154,13 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           'bulk_send.created',
           'bulk_send_job',
           created.id,
-          JSON.stringify({ name: input.name, smscId: input.smscId, total: recipients.length }),
+          JSON.stringify({
+            name: input.name,
+            smscId,
+            sender,
+            customerId: input.customerId ?? null,
+            total: recipients.length,
+          }),
         ],
       );
       return created;
@@ -251,8 +300,14 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
       );
       if (!lock.rows[0]?.locked) return null;
       const job = (
-        await client.query<{ id: string; smsc_id: string }>(
-          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status='queued' RETURNING id,smsc_id",
+        await client.query<{
+          id: string;
+          smsc_id: string | null;
+          sender: string | null;
+          customer_id: string | null;
+          created_by: string | null;
+        }>(
+          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status='queued' RETURNING id,smsc_id,sender,customer_id::text,created_by",
           [jobId],
         )
       ).rows[0];
@@ -263,7 +318,13 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           [jobId],
         )
       ).rows;
-      return { smscId: job.smsc_id, recipients };
+      return {
+        smscId: job.smsc_id,
+        sender: job.sender ?? defaultBulkSender(),
+        customerId: job.customer_id,
+        createdBy: job.created_by ?? 'bulk-send',
+        recipients,
+      };
     });
     if (!claim) return { submitted: 0, failed: 0, status: 'skipped' };
 
@@ -283,12 +344,22 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
     const outcomes: Array<{ id: string; ok: boolean; foreignId?: string; error?: string }> = [];
     for (const recipient of claim.recipients) {
       try {
-        const queued = await this.sqlbox.submit({
-          sender: '',
-          receiver: recipient.receiver,
-          text: recipient.text,
-          smscId: claim.smscId,
-        });
+        // Every campaign message now goes through the one send path: blocklist,
+        // route selection (when the job pinned no bind), the customer's quota,
+        // credit, sender-ID approval and route bindings, and a recorded routing
+        // decision. A refusal fails only that recipient, never the whole job.
+        const queued = await this.send.send(
+          { tenantId, userId: claim.createdBy },
+          {
+            sender: claim.sender,
+            receiver: recipient.receiver,
+            text: recipient.text,
+            smscId: claim.smscId,
+            customerId: claim.customerId,
+            channel: 'bulk',
+            reference: jobId,
+          },
+        );
         outcomes.push({ id: recipient.id, ok: true, foreignId: queued.sqlId });
       } catch (error) {
         outcomes.push({ id: recipient.id, ok: false, error: String((error as Error).message) });

@@ -24,6 +24,13 @@ export const navigation: NavigationItem[] = [
     group: 'Operations',
   },
   { label: 'Alerts', to: '/alerts', icon: 'alert', permission: 'alerts.view', group: 'Operations' },
+  {
+    label: 'Escalation & Maintenance',
+    to: '/alert-response',
+    icon: 'bell',
+    permission: 'alerts.view',
+    group: 'Operations',
+  },
   { label: 'Notifications', to: '/notifications', icon: 'bell', group: 'Operations' },
   {
     label: 'Messages',
@@ -70,6 +77,13 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Routing',
     to: '/routing',
+    icon: 'route',
+    permission: 'routes.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Advanced Routing',
+    to: '/routing-advanced',
     icon: 'route',
     permission: 'routes.view',
     group: 'Messaging',
@@ -140,6 +154,13 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Users & Roles',
     to: '/users',
+    icon: 'shield',
+    permission: 'users.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Roles & Permissions',
+    to: '/roles',
     icon: 'shield',
     permission: 'users.view',
     group: 'Platform',

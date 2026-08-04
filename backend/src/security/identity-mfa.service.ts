@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
@@ -9,11 +10,14 @@ import { toDataURL } from 'qrcode';
 import { DatabaseService } from '../database/database.service';
 import { encryptSecret, decryptSecret, normalizeRecoveryCode, sha256Hex } from './identity-crypto';
 import { newTotpSecret, totpUri, verifyTotp } from './identity-totp';
+import { AuthThrottleService } from './auth-throttle.service';
 
 export interface MfaActor {
   tenantId: string;
   userId: string;
   username: string;
+  /** Right-most untrusted hop; used only as a throttle bucket key. */
+  ipAddress?: string;
 }
 
 const RECOVERY_CODE_COUNT = 10;
@@ -31,7 +35,24 @@ function newRecoveryCode(): string {
  */
 @Injectable()
 export class IdentityMfaService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Optional so the isolated unit spec can construct the service with only a
+    // fake database. Absent throttle == no penalties recorded.
+    @Optional() private readonly throttle?: AuthThrottleService,
+  ) {}
+
+  /**
+   * Count one wrong verification code. `AuthThrottleGuard` (policy 'mfa') reads
+   * these counters before the handler runs and returns 429 + Retry-After once
+   * the ceiling is hit — without it a 6-digit TOTP is exhaustible in minutes.
+   */
+  private async penalizeCode(actor: MfaActor): Promise<void> {
+    if (!this.throttle) return;
+    await this.throttle.penalize(
+      this.throttle.mfaBuckets(actor.tenantId, actor.userId, actor.ipAddress),
+    );
+  }
 
   async enroll(
     actor: MfaActor,
@@ -68,6 +89,24 @@ export class IdentityMfaService {
   }
 
   async confirm(actor: MfaActor, code: string): Promise<{ confirmed: true }> {
+    return this.withCodePenalty(actor, () => this.confirmInTransaction(actor, code));
+  }
+
+  /**
+   * Run a code-verifying operation and record a throttle penalty when the code
+   * was rejected. Done outside the database transaction so the Redis round trip
+   * never happens while a tenant transaction is open.
+   */
+  private async withCodePenalty<T>(actor: MfaActor, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof UnauthorizedException) await this.penalizeCode(actor);
+      throw error;
+    }
+  }
+
+  private confirmInTransaction(actor: MfaActor, code: string): Promise<{ confirmed: true }> {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const device = (
         await client.query<{ id: string; secret_encrypted: string }>(
@@ -88,6 +127,10 @@ export class IdentityMfaService {
   }
 
   async disable(actor: MfaActor, code: string): Promise<{ disabled: true }> {
+    return this.withCodePenalty(actor, () => this.disableInTransaction(actor, code));
+  }
+
+  private disableInTransaction(actor: MfaActor, code: string): Promise<{ disabled: true }> {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const device = (
         await client.query<{ id: string; secret_encrypted: string }>(

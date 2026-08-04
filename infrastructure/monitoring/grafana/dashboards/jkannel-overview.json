@@ -1,19 +1,32 @@
 {
   "uid": "jkannel-overview",
-  "title": "JKANNEL Operations Overview",
+  "title": "JKANNEL Platform Health",
+  "description": "Process, database and cache health for the control plane itself. This dashboard is deliberately NOT about SMS traffic - carrier binds, queue depth, throughput and failures are on 'JKANNEL SMS Operations'.",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
-  "tags": ["jkannel", "kamex", "messaging"],
+  "tags": ["jkannel", "platform", "infrastructure"],
   "time": { "from": "now-1h", "to": "now" },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Backend Up",
+      "description": "Real dependency probe (PostgreSQL required, Redis optional), not a hardcoded literal.",
       "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
       "targets": [{ "expr": "jkannel_backend_up", "refId": "A" }],
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Dependencies",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [
+        { "expr": "jkannel_db_up", "refId": "A", "legendFormat": "postgres" },
+        { "expr": "jkannel_redis_up", "refId": "B", "legendFormat": "redis" }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
     },
     {
       "id": 2,
@@ -21,7 +34,8 @@
       "title": "Backend Memory",
       "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
       "targets": [{ "expr": "jkannel_backend_memory_bytes", "refId": "A" }],
-      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 }
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
     },
     {
       "id": 3,
@@ -29,7 +43,66 @@
       "title": "Backend Uptime",
       "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
       "targets": [{ "expr": "jkannel_backend_uptime_seconds", "refId": "A" }],
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 }
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "API request rate by status class",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [
+        {
+          "expr": "rate(jkannel_http_requests_total[5m])",
+          "refId": "A",
+          "legendFormat": "{{method}} {{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "API latency p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(jkannel_http_request_duration_ms_bucket[5m])) by (le))",
+          "refId": "A",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Database",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [
+        { "expr": "jkannel_db_connections", "refId": "A", "legendFormat": "connections" },
+        {
+          "expr": "rate(jkannel_db_rollbacks_total[5m])",
+          "refId": "B",
+          "legendFormat": "rollbacks/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Redis",
+      "datasource": { "type": "prometheus", "uid": "jkannel-prometheus" },
+      "targets": [
+        { "expr": "jkannel_redis_used_memory_bytes", "refId": "A", "legendFormat": "used memory" },
+        { "expr": "jkannel_redis_connected_clients", "refId": "B", "legendFormat": "clients" }
+      ],
+      "fieldConfig": { "defaults": { "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }
     }
   ]
 }

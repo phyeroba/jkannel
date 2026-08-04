@@ -22,6 +22,63 @@ describe('console domain controllers', () => {
     ).toThrow(BadRequestException);
     expect(repository.createSmsc).not.toHaveBeenCalled();
   });
+  it('refuses to store a plaintext SMSC password', () => {
+    expect(() =>
+      new SmscController(repository).create(request, {
+        name: 'carrier',
+        type: 'smpp',
+        host: 'smpp.carrier.example',
+        port: 2775,
+        tps: 50,
+        credentialSecretRef: 'hunter2',
+      }),
+    ).toThrow(BadRequestException);
+    expect(repository.createSmsc).not.toHaveBeenCalled();
+  });
+  it('accepts and persists the full SMPP attribute set', () => {
+    const repo: any = { createSmsc: jest.fn().mockResolvedValue({ id: validUuid }) };
+    void new SmscController(repo).create(request, {
+      name: 'Carrier A',
+      type: 'smpp',
+      host: 'smpp.carrier.example',
+      port: 2775,
+      tps: 50,
+      credentialSecretRef: 'secret://kamex/carrier-a-password',
+      systemId: 'jkannel_prod',
+      systemType: 'VMA',
+      bindMode: 'transceiver',
+      windowSize: 20,
+      keepaliveSeconds: 30,
+      sourceAddrTon: 5,
+      useTls: true,
+    });
+    expect(repo.createSmsc).toHaveBeenCalledWith(
+      { tenantId: '7', userId: 'user-1' },
+      expect.objectContaining({
+        engineId: 'carrier-a',
+        systemId: 'jkannel_prod',
+        systemType: 'VMA',
+        bindMode: 'transceiver',
+        windowSize: 20,
+        keepaliveSeconds: 30,
+        sourceAddrTon: 5,
+        useTls: true,
+      }),
+    );
+  });
+  it('rejects an out-of-range SMPP attribute before persistence', () => {
+    expect(() =>
+      new SmscController(repository).create(request, {
+        name: 'carrier',
+        type: 'smpp',
+        host: 'h',
+        port: 2775,
+        tps: 10,
+        windowSize: 99999,
+      }),
+    ).toThrow(BadRequestException);
+    expect(repository.createSmsc).not.toHaveBeenCalled();
+  });
   it('archives an SMSC via DELETE', async () => {
     const repo: any = {
       archiveSmsc: jest.fn().mockResolvedValue({ id: validUuid, lifecycle_state: 'archived' }),
@@ -105,6 +162,85 @@ describe('console domain controllers', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(deployment.deploy).not.toHaveBeenCalled();
     expect(repo.markConfigurationDeployed).not.toHaveBeenCalled();
+  });
+  it('generates from the database by default, rendering the tenant’s own SMSCs', async () => {
+    const generator: any = {
+      validate: jest.fn().mockReturnValue([]),
+      generate: jest
+        .fn()
+        .mockReturnValue({ content: 'group = core', checksum: 'abc', requiredSecrets: [] }),
+    };
+    const deployment: any = { validateNative: jest.fn().mockResolvedValue({ valid: true }) };
+    const builder: any = {
+      build: jest.fn().mockResolvedValue({
+        model: { adminPort: 13000, smsc: [{ id: 'carrier-a' }] },
+        sources: { smscCount: 1, excluded: [], settingsApplied: [] },
+      }),
+    };
+    const controller = new ConfigurationsController(
+      repository,
+      generator,
+      deployment,
+      undefined,
+      undefined,
+      builder,
+    );
+    const result: any = await controller.generate(request, undefined, {});
+    expect(builder.build).toHaveBeenCalledWith({ tenantId: '7', userId: 'user-1' });
+    expect(generator.generate).toHaveBeenCalledWith({
+      adminPort: 13000,
+      smsc: [{ id: 'carrier-a' }],
+    });
+    expect(result.source).toBe('database');
+    expect(result.sources).toMatchObject({ smscCount: 1 });
+  });
+  it('still renders an explicitly supplied model, flagged as a preview', async () => {
+    const generator: any = {
+      validate: jest.fn().mockReturnValue([]),
+      generate: jest
+        .fn()
+        .mockReturnValue({ content: 'group = core', checksum: 'abc', requiredSecrets: [] }),
+    };
+    const deployment: any = { validateNative: jest.fn().mockResolvedValue({ valid: true }) };
+    const builder: any = { build: jest.fn() };
+    const body: any = { adminPort: 13000, smsboxPort: 13001, smsc: [] };
+    const result: any = await new ConfigurationsController(
+      repository,
+      generator,
+      deployment,
+      undefined,
+      undefined,
+      builder,
+    ).generate(request, body, {});
+    expect(builder.build).not.toHaveBeenCalled();
+    expect(generator.generate).toHaveBeenCalledWith(body);
+    expect(result.source).toBe('body');
+    expect(result.warning).toMatch(/source of truth/i);
+  });
+  it('lets ?source=database override a supplied body', async () => {
+    const generator: any = {
+      validate: jest.fn().mockReturnValue([]),
+      generate: jest
+        .fn()
+        .mockReturnValue({ content: 'group = core', checksum: 'abc', requiredSecrets: [] }),
+    };
+    const deployment: any = { validateNative: jest.fn().mockResolvedValue({ valid: true }) };
+    const builder: any = {
+      build: jest.fn().mockResolvedValue({
+        model: { adminPort: 1 },
+        sources: { smscCount: 0, excluded: [], settingsApplied: [] },
+      }),
+    };
+    const result: any = await new ConfigurationsController(
+      repository,
+      generator,
+      deployment,
+      undefined,
+      undefined,
+      builder,
+    ).generate(request, { adminPort: 99 } as any, { source: 'database' });
+    expect(builder.build).toHaveBeenCalled();
+    expect(result.source).toBe('database');
   });
   it('validates a persisted configuration version and records the result', async () => {
     const repo: any = {

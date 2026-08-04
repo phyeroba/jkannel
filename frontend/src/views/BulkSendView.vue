@@ -62,11 +62,7 @@ async function loadSmscOptions() {
     const data = await apiRequest<{ items?: RecordValue[] } | RecordValue[]>(
       '/smscs?limit=500&offset=0',
     );
-    const items = Array.isArray(data)
-      ? data
-      : Array.isArray(data.items)
-        ? data.items
-        : [];
+    const items = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : [];
     smscOptions.value = items
       .map((row) => {
         const engineId = text(row.engine_id ?? row.engineId, '');
@@ -265,11 +261,7 @@ onMounted(() => {
         <div>
           <h2>Bulk send jobs</h2>
           <p aria-live="polite">
-            {{
-              jobsState === 'loading'
-                ? 'Loading jobs…'
-                : `${jobs.length} of ${jobsTotal} jobs`
-            }}
+            {{ jobsState === 'loading' ? 'Loading jobs…' : `${jobs.length} of ${jobsTotal} jobs` }}
           </p>
         </div>
       </header>

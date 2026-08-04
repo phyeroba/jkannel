@@ -28,9 +28,12 @@ describe('primary navigation contract', () => {
         '/system',
         '/copilot',
         '/sessions',
+        '/alert-response',
+        '/routing-advanced',
+        '/roles',
       ]),
     );
-    expect(navigation).toHaveLength(23);
+    expect(navigation).toHaveLength(26);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(

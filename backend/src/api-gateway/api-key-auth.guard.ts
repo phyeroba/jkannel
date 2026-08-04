@@ -19,6 +19,12 @@ export interface GatewayRequest {
   originalUrl?: string;
   url?: string;
   ip?: string;
+  /**
+   * Trustworthy client IP published by RequestContextMiddleware. Prefer this
+   * over `ip`/`socket.remoteAddress` and never parse X-Forwarded-For directly —
+   * see callerIp() below.
+   */
+  clientIp?: string;
   socket?: { remoteAddress?: string };
   correlationId?: string;
   principal?: AuthenticatedPrincipal;
@@ -31,12 +37,22 @@ interface GatewayResponse {
 
 const RATE_WINDOW_SECONDS = 60;
 
-/** Read the first client IP from X-Forwarded-For, else the socket address. */
+/**
+ * The caller's IP, as trusted by the platform.
+ *
+ * This previously read the LEFT-MOST X-Forwarded-For entry. That header is
+ * client-supplied and nginx only appends to it, so the left-most value is
+ * whatever the caller typed — meaning anyone could set `X-Forwarded-For` to an
+ * allow-listed address and walk straight through the per-key IP allowlist, and
+ * every `gateway_request_log.ip_address` row was attacker-controlled.
+ *
+ * `request.clientIp` is published by RequestContextMiddleware, which derives it
+ * from the right-most hop the platform did not add, honouring TRUSTED_PROXIES /
+ * TRUSTED_PROXY_COUNT (see backend/src/security/client-ip.ts). Read that single
+ * trustworthy value; never re-parse the raw header here.
+ */
 export function callerIp(request: GatewayRequest): string | undefined {
-  const forwarded = request.headers['x-forwarded-for'];
-  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  if (typeof raw === 'string' && raw.trim()) return raw.split(',')[0].trim();
-  return request.ip ?? request.socket?.remoteAddress ?? undefined;
+  return request.clientIp ?? request.ip ?? request.socket?.remoteAddress ?? undefined;
 }
 
 /** Pull the presented key from X-API-Key or an `Authorization: ApiKey …` header. */
@@ -143,6 +159,9 @@ export class ApiKeyAuthGuard implements CanActivate {
       outcome,
       ipAddress: ip ?? null,
       correlationId: request.correlationId ?? null,
+      // The handler never ran, so there is no duration to report.
+      durationMs: null,
+      userId: client.userId ?? null,
     });
   }
 }

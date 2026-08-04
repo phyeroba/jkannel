@@ -1,12 +1,18 @@
 import { Module } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { AuthModule } from '../security/auth.module';
+import { EngineModule } from '../engine/engine.module';
+import { AlertEvaluatorService } from '../monitoring/alert-evaluator.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
 import { MonitoringDepthRepository } from './monitoring-depth.repository';
 import { PlatformMetricsService } from './platform-metrics.service';
 import { AlertEscalationService } from './alert-escalation.service';
 import { MaintenanceWindowService } from './maintenance-window.service';
 import { AlertCorrelationService } from './alert-correlation.service';
+import { EngineSnapshotCache } from './engine-snapshot.cache';
+import { EngineMetricsService } from './engine-metrics.service';
+import { SmscStatusPoller } from './smsc-status.poller';
+import { AlertRuleEvaluatorScheduler } from './alert-rule-evaluator.scheduler';
 import {
   CorrelationController,
   EscalationController,
@@ -14,15 +20,27 @@ import {
 } from './monitoring-depth.controller';
 
 /**
- * Monitoring-depth feature module: platform/DB/Redis metrics, alert escalation
- * chains, maintenance windows, and alert correlation/dedup.
+ * Monitoring-depth feature module: platform/DB/Redis metrics, SMS/SMSC engine
+ * telemetry, alert rule evaluation, escalation chains, maintenance windows, and
+ * alert correlation/dedup.
  *
- * Exports {@link PlatformMetricsService} so the app-level MetricsController can
- * append platform metrics to /metrics once AppModule imports this module (the
- * controller injects it with @Optional, so wiring is additive).
+ * This module owns the whole observability loop:
+ *
+ *   SmscStatusPoller -> EngineSnapshotCache -> EngineMetricsService -> /metrics
+ *                    -> metric_samples -> AlertRuleEvaluatorScheduler
+ *                    -> alert_instances -> AlertEscalationService
+ *                    -> NotificationDeliveryService
+ *
+ * EngineModule is imported for the Kamex adapter's typed `queueSnapshot()`
+ * (the poller's only engine dependency) and for the SQLBox repository that
+ * backs `sms` notification delivery.
+ *
+ * Exports {@link PlatformMetricsService} and {@link EngineMetricsService} so the
+ * app-level MetricsController can append their output to /metrics; the
+ * controller injects both with @Optional, so the wiring stays additive.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, EngineModule],
   controllers: [EscalationController, MaintenanceController, CorrelationController],
   providers: [
     DatabaseService,
@@ -32,12 +50,20 @@ import {
     AlertEscalationService,
     AlertCorrelationService,
     NotificationDeliveryService,
+    AlertEvaluatorService,
+    EngineSnapshotCache,
+    EngineMetricsService,
+    SmscStatusPoller,
+    AlertRuleEvaluatorScheduler,
   ],
   exports: [
     PlatformMetricsService,
+    EngineMetricsService,
     MaintenanceWindowService,
     AlertCorrelationService,
     AlertEscalationService,
+    EngineSnapshotCache,
+    SmscStatusPoller,
   ],
 })
 export class MonitoringDepthModule {}

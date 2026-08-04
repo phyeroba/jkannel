@@ -15,15 +15,22 @@ import { CustomerRoutesService } from './customer-routes.service';
  * auth/permissions guards. The quota and credit services expose enforcement
  * primitives ({@link CustomerQuotaService.consume},
  * {@link CustomerCreditService.postTransaction} /
- * {@link CustomerCreditService.hasSufficientBalance}) that a message send path
- * can call before dispatching; they are not yet wired into the live send path
- * (owned by the messaging-depth module).
+ * {@link CustomerCreditService.hasSufficientBalance}). Those primitives are now
+ * exported and consumed by messaging-depth's `SendEntitlementsService`, which
+ * calls their `*InClient` variants inside the same transaction as the send, so
+ * quota and credit are consumed atomically with dispatch.
  */
 @Module({
   imports: [AuthModule],
   controllers: [CustomerAccountsController],
   providers: [
     DatabaseService,
+    CustomerQuotaService,
+    CustomerCreditService,
+    CustomerSenderIdsService,
+    CustomerRoutesService,
+  ],
+  exports: [
     CustomerQuotaService,
     CustomerCreditService,
     CustomerSenderIdsService,

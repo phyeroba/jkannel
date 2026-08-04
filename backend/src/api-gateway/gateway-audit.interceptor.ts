@@ -24,12 +24,21 @@ export class GatewayAuditInterceptor implements NestInterceptor {
     const request = http.getRequest<GatewayRequest>();
     if (!request.gatewayClient) return next.handle();
     const response = http.getResponse<StatusResponse>();
+    const startedAt = Date.now();
 
     return next.handle().pipe(
-      tap(() => void this.write(request, response.statusCode ?? 200, 'allowed')),
+      tap(
+        () =>
+          void this.write(request, response.statusCode ?? 200, 'allowed', Date.now() - startedAt),
+      ),
       catchError((error: unknown) => {
         const status = (error as { status?: number }).status ?? 500;
-        void this.write(request, status, status === 401 ? 'unauthorized' : 'error');
+        void this.write(
+          request,
+          status,
+          status === 401 ? 'unauthorized' : 'error',
+          Date.now() - startedAt,
+        );
         return throwError(() => error);
       }),
     );
@@ -39,6 +48,7 @@ export class GatewayAuditInterceptor implements NestInterceptor {
     request: GatewayRequest,
     status: number,
     outcome: 'allowed' | 'unauthorized' | 'error',
+    durationMs: number,
   ): void {
     const client = request.gatewayClient!;
     void this.log.record({
@@ -51,6 +61,8 @@ export class GatewayAuditInterceptor implements NestInterceptor {
       outcome,
       ipAddress: callerIp(request) ?? null,
       correlationId: request.correlationId ?? null,
+      durationMs,
+      userId: client.userId ?? null,
     });
   }
 }

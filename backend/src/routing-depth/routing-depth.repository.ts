@@ -16,6 +16,17 @@ export interface GridPage<T> {
   offset: number;
 }
 
+/** Scope controls for loading the selector's candidate route set. */
+export interface CandidateRouteOptions {
+  /**
+   * Only consider routes whose `deployment_state` is 'deployed'. The live send
+   * path sets this so a draft, validated-but-undeployed, rolled-back, disabled
+   * or archived route can never carry traffic; the preview endpoint leaves it
+   * off so an operator can reason about a route before deploying it.
+   */
+  deployedOnly?: boolean;
+}
+
 /** A weighted target as accepted from the API / stored in route_targets. */
 export interface TargetInput {
   smscId: string;
@@ -452,51 +463,71 @@ export class RoutingDepthRepository {
   }
 
   /** All enabled routes mapped to the pure selector's CandidateRoute shape. */
-  async candidateRoutes(actor: Actor): Promise<CandidateRoute[]> {
-    return this.inTenant(actor, async (client) => {
-      const routes = (
-        await client.query<RouteRow>(
-          `SELECT ${ROUTE_COLUMNS} FROM routing_rules WHERE enabled=true ORDER BY priority, name`,
-        )
-      ).rows;
-      return Promise.all(
-        routes.map(async (route) => {
-          const targets =
-            route.route_type === 'weighted' ? await this.loadTargets(client, route.id) : [];
-          const window: TimeWindow | null =
-            route.window_start && route.window_end
-              ? {
-                  start: toHhmm(route.window_start) as string,
-                  end: toHhmm(route.window_end) as string,
-                  days: parseActiveDays(route.active_days),
-                }
-              : null;
-          const candidate: CandidateRoute = {
-            id: route.id,
-            name: route.name,
-            priority: route.priority,
-            enabled: route.enabled,
-            routeType: route.route_type,
-            strategy: route.strategy,
-            matchPrefix: route.match_prefix,
-            countryCode: route.country_code,
-            operator: route.operator,
-            destinationPrefix: route.destination_prefix,
-            sender: route.sender,
-            cost: route.cost === null ? null : Number(route.cost),
-            targetSmscId: route.target_smsc_id,
-            fallbackSmscId: route.fallback_smsc_id,
-            targets: targets.map((t) => ({
-              smscId: t.smsc_id,
-              weight: t.weight,
-              cost: t.cost === null ? null : Number(t.cost),
-              enabled: t.enabled,
-            })),
-            window,
-          };
-          return candidate;
-        }),
-      );
-    });
+  async candidateRoutes(
+    actor: Actor,
+    options: CandidateRouteOptions = {},
+  ): Promise<CandidateRoute[]> {
+    return this.inTenant(actor, (client) => this.candidateRoutesInClient(client, options));
+  }
+
+  /**
+   * The transactional core of {@link candidateRoutes}, for callers that already
+   * hold a tenant transaction — specifically the live send path, which resolves
+   * the route, consumes entitlements and records the decision atomically.
+   *
+   * `deployedOnly` implements the routing spec's lifecycle requirement: a route
+   * that has not been deployed (still draft/validated, or rolled back, disabled
+   * or archived) must never carry live traffic. The preview endpoint leaves it
+   * off so an operator can still reason about a route before deploying it.
+   */
+  async candidateRoutesInClient(
+    client: PoolClient,
+    options: CandidateRouteOptions = {},
+  ): Promise<CandidateRoute[]> {
+    const where = ['enabled=true'];
+    if (options.deployedOnly) where.push("deployment_state='deployed'");
+    const routes = (
+      await client.query<RouteRow>(
+        `SELECT ${ROUTE_COLUMNS} FROM routing_rules WHERE ${where.join(' AND ')} ORDER BY priority, name`,
+      )
+    ).rows;
+    return Promise.all(
+      routes.map(async (route) => {
+        const targets =
+          route.route_type === 'weighted' ? await this.loadTargets(client, route.id) : [];
+        const window: TimeWindow | null =
+          route.window_start && route.window_end
+            ? {
+                start: toHhmm(route.window_start) as string,
+                end: toHhmm(route.window_end) as string,
+                days: parseActiveDays(route.active_days),
+              }
+            : null;
+        const candidate: CandidateRoute = {
+          id: route.id,
+          name: route.name,
+          priority: route.priority,
+          enabled: route.enabled,
+          routeType: route.route_type,
+          strategy: route.strategy,
+          matchPrefix: route.match_prefix,
+          countryCode: route.country_code,
+          operator: route.operator,
+          destinationPrefix: route.destination_prefix,
+          sender: route.sender,
+          cost: route.cost === null ? null : Number(route.cost),
+          targetSmscId: route.target_smsc_id,
+          fallbackSmscId: route.fallback_smsc_id,
+          targets: targets.map((t) => ({
+            smscId: t.smsc_id,
+            weight: t.weight,
+            cost: t.cost === null ? null : Number(t.cost),
+            enabled: t.enabled,
+          })),
+          window,
+        };
+        return candidate;
+      }),
+    );
   }
 }

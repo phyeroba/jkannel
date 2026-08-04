@@ -6,6 +6,9 @@ import SessionsView from '../views/SessionsView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
 import BulkSendView from '../views/BulkSendView.vue';
 import LiveQueueView from '../views/LiveQueueView.vue';
+import AlertResponseView from '../views/AlertResponseView.vue';
+import RoutingDepthView from '../views/RoutingDepthView.vue';
+import RolesView from '../views/RolesView.vue';
 import { canAccess, session } from '../stores/session';
 import { initializeSession, isAuthenticated } from '../stores/session';
 import LoginView from '../views/LoginView.vue';
@@ -174,6 +177,41 @@ const routes: RouteRecordRaw[] = [
         'Watch the live queue and per-bind engine state, and move traffic to another bind without restarting the engine.',
       breadcrumb: ['Live Queue'],
       permission: 'messages.view',
+    },
+  },
+  {
+    path: '/alert-response',
+    name: 'alert-response',
+    component: AlertResponseView,
+    meta: {
+      title: 'Escalation & Maintenance',
+      description:
+        'Define who an unacknowledged alert escalates to, and suppress alerting during planned work.',
+      breadcrumb: ['Alerts', 'Escalation & Maintenance'],
+      permission: 'alerts.view',
+    },
+  },
+  {
+    path: '/routing-advanced',
+    name: 'routing-advanced',
+    component: RoutingDepthView,
+    meta: {
+      title: 'Advanced Routing',
+      description:
+        'Prefix, country, operator and weighted routes, selection strategies, version history, and a resolve preview.',
+      breadcrumb: ['Routing', 'Advanced'],
+      permission: 'routes.view',
+    },
+  },
+  {
+    path: '/roles',
+    name: 'roles',
+    component: RolesView,
+    meta: {
+      title: 'Roles & Permissions',
+      description: 'Review every role, the permissions it grants, and who holds it.',
+      breadcrumb: ['Roles & Permissions'],
+      permission: 'users.view',
     },
   },
   {

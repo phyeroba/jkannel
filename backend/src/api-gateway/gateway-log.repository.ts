@@ -13,6 +13,10 @@ export interface GatewayLogEntry {
   outcome: GatewayOutcome;
   ipAddress: string | null;
   correlationId: string | null;
+  /** Handler wall-clock duration; null when the guard rejected before it ran. */
+  durationMs?: number | null;
+  /** api_keys.user_id behind the credential (migration 033). */
+  userId?: string | null;
 }
 
 export interface GatewayLogRow {
@@ -25,11 +29,13 @@ export interface GatewayLogRow {
   outcome: GatewayOutcome;
   ip_address: string | null;
   correlation_id: string | null;
+  duration_ms: number | null;
+  user_id: string | null;
   created_at: string;
 }
 
 const LOG_COLUMNS =
-  'id,api_key_id,key_prefix,route,method,status_code,outcome,ip_address,correlation_id,created_at';
+  'id,api_key_id,key_prefix,route,method,status_code,outcome,ip_address,correlation_id,duration_ms,user_id,created_at';
 
 /**
  * Persistence for the per-request gateway audit trail (migration 024). Every
@@ -46,8 +52,9 @@ export class GatewayLogRepository {
       await this.database.tenantTransaction(entry.tenantId, (client) =>
         client.query(
           `INSERT INTO gateway_request_log
-             (tenant_id, api_key_id, key_prefix, route, method, status_code, outcome, ip_address, correlation_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             (tenant_id, api_key_id, key_prefix, route, method, status_code, outcome, ip_address,
+              correlation_id, duration_ms, user_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
           [
             entry.tenantId,
             entry.apiKeyId,
@@ -58,6 +65,8 @@ export class GatewayLogRepository {
             entry.outcome,
             entry.ipAddress,
             entry.correlationId,
+            entry.durationMs ?? null,
+            entry.userId ?? null,
           ],
         ),
       );

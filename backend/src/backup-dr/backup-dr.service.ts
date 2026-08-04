@@ -13,9 +13,22 @@ import {
   BackupScope,
   RetentionClass,
 } from './backup-dr.repository';
+import { BackupDestination, NO_OFFSITE_WARNING, resolveDestination } from './backup-destination';
+import { captureConfiguration, captureWarning, ConfigCaptureResult } from './config-capture';
 
-const KINDS: BackupKind[] = ['full', 'schema', 'incremental'];
+/**
+ * `incremental` is deliberately absent (migration 035). pg_dump has no
+ * incremental mode and nothing in this deployment configures WAL archiving, so
+ * the old `kind='incremental'` produced a FULL dump under an incremental label
+ * — a lie about both recovery capability and RPO. A requested 'incremental' is
+ * now recorded as 'full' with an explicit note rather than silently accepted.
+ */
+const KINDS: BackupKind[] = ['full', 'schema'];
 const SCOPES: BackupScope[] = ['full', 'database', 'configurations'];
+export const INCREMENTAL_NOTE =
+  " Requested kind 'incremental' was recorded as 'full': a true incremental backup " +
+  'requires PostgreSQL WAL archiving (archive_mode/archive_command), which this ' +
+  'deployment does not configure, so a full dump was taken instead.';
 /**
  * Tables captured by a configuration-only (scope='configurations') dump. These
  * hold the operator-authored gateway configuration; message/DLR data lives in
@@ -68,6 +81,15 @@ interface ExecResult {
   missing: boolean;
 }
 
+/** Minimum length for BACKUP_ENCRYPTION_KEY (a 32-byte base64 secret is 44 chars). */
+export const MIN_ENCRYPTION_KEY_LENGTH = 24;
+/** Values shipped in examples/defaults that must never protect a real backup. */
+export const WEAK_ENCRYPTION_KEYS = new Set([
+  'jkannel-development-backup-encryption-key-change-me',
+  'change-me',
+  'changeme',
+]);
+
 const MISSING_PG_DUMP = 'pg_dump not available in this image';
 const MISSING_PG_RESTORE = 'pg_restore not available in this image';
 const PLATFORM_VERSION = process.env.JKANNEL_VERSION ?? process.env.npm_package_version ?? '0.1.0';
@@ -99,7 +121,7 @@ export class BackupDrService {
     actor: Actor,
     input: { kind?: string; retentionClass?: string; label?: string; scope?: string },
   ): Promise<BackupRecord> {
-    const kind = this.validKind(input.kind);
+    const { kind, kindNote } = this.validKind(input.kind);
     const retentionClass = this.validRetention(input.retentionClass);
     const { scope, scopeNote } = this.validScope(input.scope);
     const label =
@@ -107,10 +129,9 @@ export class BackupDrService {
       `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 
     const dir = backupDir();
-    const artifactPath = join(
-      dir,
-      `${this.safeName(label)}-${randomBytes(4).toString('hex')}.dump.enc`,
-    );
+    const stem = `${this.safeName(label)}-${randomBytes(4).toString('hex')}`;
+    const artifactPath = join(dir, `${stem}.dump.enc`);
+    const configArtifactPath = join(dir, `${stem}.config.json.gz.enc`);
     const databaseVersion = await this.repository.databaseVersion();
 
     const record = await this.repository.insertRunning(actor, {
@@ -122,6 +143,24 @@ export class BackupDrService {
       platformVersion: PLATFORM_VERSION,
       databaseVersion,
     });
+
+    // Fail BEFORE doing any work if the artifact could not be protected
+    // properly. A weakly-keyed backup that reports success is worse than none.
+    let encryptionKey: Buffer;
+    try {
+      encryptionKey = this.encryptionKey();
+    } catch (error) {
+      return this.repository.failBackup(actor, record.id, (error as Error).message);
+    }
+
+    // Likewise, an unresolvable destination must fail loudly rather than
+    // silently degrading to a host-local copy the operator thinks is offsite.
+    let destination: BackupDestination | null;
+    try {
+      destination = this.resolveDestination();
+    } catch (error) {
+      return this.repository.failBackup(actor, record.id, (error as Error).message);
+    }
 
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
@@ -149,19 +188,59 @@ export class BackupDrService {
       }
       const plain = await readFile(dumpPath);
       const checksum = createHash('sha256').update(plain).digest('hex');
-      const encrypted = this.encrypt(plain);
-      await writeFile(artifactPath, encrypted);
+      await writeFile(artifactPath, this.encrypt(plain, encryptionKey));
+
+      // ---- configuration / certificate capture ----------------------------
+      const capture = await this.captureConfig();
+      let capturedPath: string | null = null;
+      if (capture.bundle) {
+        await writeFile(configArtifactPath, this.encrypt(capture.bundle, encryptionKey));
+        capturedPath = configArtifactPath;
+      }
+      const warnings: string[] = [];
+      const captureProblem = captureWarning(capture);
+      if (captureProblem) warnings.push(captureProblem);
+
+      // ---- offsite replication --------------------------------------------
+      let offsiteLocation: string | null = null;
+      let offsiteSynced = false;
+      if (!destination) {
+        warnings.push(NO_OFFSITE_WARNING);
+      } else {
+        try {
+          const stored = await destination.put(artifactPath, `${stem}.dump.enc`);
+          if (capturedPath) await destination.put(capturedPath, `${stem}.config.json.gz.enc`);
+          offsiteLocation = stored.uri;
+          offsiteSynced = true;
+        } catch (error) {
+          warnings.push(
+            `Offsite replication to ${destination.describe()} failed: ${(error as Error).message}. ` +
+              'The artifact exists on the backup host only.',
+          );
+        }
+      }
+
       const coverage =
         scope === 'configurations'
           ? `Configuration-only pg_dump (tables: ${CONFIG_TABLES.join(', ')})`
           : `Whole-database ${kind} pg_dump`;
+      const configSummary = capture.bundle
+        ? ` Configuration capture: ${capture.files} file(s), ${capture.bytes} bytes from ${capture.capturedRoots.join(', ')}.`
+        : ' Configuration capture: none.';
       return this.repository.completeBackup(actor, record.id, {
         sizeBytes: plain.length,
         checksum,
         location: `file://${artifactPath}`,
         detail:
           `${coverage} (custom format), AES-256-GCM encrypted at rest. ` +
-          `Logical size ${plain.length} bytes.${scopeNote}`,
+          `Logical size ${plain.length} bytes.${configSummary}${scopeNote}${kindNote}`,
+        configArtifactPath: capturedPath,
+        configArtifactChecksum: capture.checksum,
+        configFileCount: capture.files,
+        configBytes: capture.bytes,
+        offsiteLocation,
+        offsiteSynced,
+        warning: warnings.length ? warnings.join(' ') : null,
       });
     } catch (error) {
       return this.repository.failBackup(
@@ -293,6 +372,14 @@ export class BackupDrService {
   ): Promise<Array<{ retentionClass: RetentionClass; removed: number }>> {
     const limit = Number(process.env.BACKUP_RETENTION_BATCH ?? 500);
     const summary: Array<{ retentionClass: RetentionClass; removed: number }> = [];
+    // Retention must reach the offsite copy too, or expired artifacts would
+    // accumulate there forever, outliving the policy that governs them.
+    let destination: BackupDestination | null = null;
+    try {
+      destination = this.resolveDestination();
+    } catch {
+      destination = null;
+    }
     for (const retentionClass of RETENTION_CLASSES) {
       const cutoff = retentionCutoff(retentionClass, now);
       if (!cutoff) continue; // permanent class
@@ -304,6 +391,10 @@ export class BackupDrService {
       );
       for (const row of removed) {
         if (row.artifact_path) await rm(row.artifact_path, { force: true }).catch(() => undefined);
+        if (row.config_artifact_path)
+          await rm(row.config_artifact_path, { force: true }).catch(() => undefined);
+        if (row.offsite_location && destination)
+          await destination.remove(row.offsite_location).catch(() => undefined);
       }
       summary.push({ retentionClass, removed: removed.length });
     }
@@ -311,11 +402,14 @@ export class BackupDrService {
   }
 
   // ---- validation helpers -------------------------------------------------
-  private validKind(kind: unknown): BackupKind {
-    if (kind === undefined || kind === null || kind === '') return 'full';
-    if (typeof kind !== 'string' || !KINDS.includes(kind as BackupKind))
+  private validKind(kind: unknown): { kind: BackupKind; kindNote: string } {
+    if (kind === undefined || kind === null || kind === '') return { kind: 'full', kindNote: '' };
+    if (typeof kind !== 'string')
       throw new BadRequestException(`kind must be one of ${KINDS.join(', ')}`);
-    return kind as BackupKind;
+    if (kind === 'incremental') return { kind: 'full', kindNote: INCREMENTAL_NOTE };
+    if (!KINDS.includes(kind as BackupKind))
+      throw new BadRequestException(`kind must be one of ${KINDS.join(', ')}`);
+    return { kind: kind as BackupKind, kindNote: '' };
   }
 
   private validRetention(retentionClass: unknown): RetentionClass {
@@ -380,23 +474,59 @@ export class BackupDrService {
   }
 
   // ---- crypto -------------------------------------------------------------
+  /**
+   * BACKUP_ENCRYPTION_KEY is MANDATORY.
+   *
+   * It used to fall back to AUTH_SIGNING_KEY, then AUTH_ACCESS_TOKEN_KEY, then a
+   * hardcoded development string. Both fallbacks were wrong: reusing the JWT
+   * signing key as the backup KEK couples two independent blast radii (rotating
+   * the JWT key silently makes every prior backup undecryptable), and the
+   * hardcoded default meant a misconfigured deployment produced backups
+   * encrypted with a public constant while reporting success.
+   *
+   * Throws instead — the caller records a failed backup with this message.
+   */
   private encryptionKey(): Buffer {
-    const secret =
-      process.env.BACKUP_ENCRYPTION_KEY ||
-      process.env.AUTH_SIGNING_KEY ||
-      process.env.AUTH_ACCESS_TOKEN_KEY ||
-      'jkannel-development-backup-encryption-key-change-me';
+    const secret = (process.env.BACKUP_ENCRYPTION_KEY ?? '').trim();
+    if (!secret)
+      throw new Error(
+        'BACKUP_ENCRYPTION_KEY is not configured. Backups are encrypted at rest and this ' +
+          'key is mandatory; it is deliberately NOT derived from the auth signing keys. ' +
+          'Generate one with `openssl rand -base64 48` and store it outside this host — ' +
+          'without it the artifacts cannot be decrypted.',
+      );
+    if (secret.length < MIN_ENCRYPTION_KEY_LENGTH)
+      throw new Error(
+        `BACKUP_ENCRYPTION_KEY is too short (${secret.length} characters); at least ` +
+          `${MIN_ENCRYPTION_KEY_LENGTH} are required.`,
+      );
+    if (WEAK_ENCRYPTION_KEYS.has(secret))
+      throw new Error(
+        'BACKUP_ENCRYPTION_KEY is a known placeholder value; set a real secret before ' +
+          'taking backups.',
+      );
     // Derive a fixed 32-byte key from whatever secret is provided so any input
     // (hex, base64, passphrase) yields a valid AES-256 key.
     return createHash('sha256').update(secret).digest();
   }
 
-  private encrypt(plain: Buffer): Buffer {
+  private encrypt(plain: Buffer, key: Buffer = this.encryptionKey()): Buffer {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.encryptionKey(), iv);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
     const body = Buffer.concat([cipher.update(plain), cipher.final()]);
     const tag = cipher.getAuthTag();
     return Buffer.concat([iv, tag, body]);
+  }
+
+  // ---- pluggable seams (overridden in tests) ------------------------------
+  /** The configured offsite destination, or null when none is configured. */
+  protected resolveDestination(): BackupDestination | null {
+    return resolveDestination();
+  }
+
+  /** Reads gateway configuration + certificates off disk for the bundle. */
+  protected captureConfig(): Promise<ConfigCaptureResult> {
+    return captureConfiguration();
   }
 
   // ---- protected process boundaries (overridden in tests) -----------------

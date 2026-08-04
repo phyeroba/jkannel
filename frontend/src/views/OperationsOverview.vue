@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
 import { apiRequest } from '../api';
+import { useLiveResource } from '../composables/useLiveResource';
 
 type RecordValue = Record<string, unknown>;
 type SourceState = 'checking' | 'ok' | 'unavailable';
@@ -110,12 +111,12 @@ async function checkAlerts() {
   }
 }
 
+/**
+ * A background poll updates the tiles in place; it deliberately does NOT reset
+ * them to "checking", because blanking a NOC screen every 30 seconds is worse
+ * than a number that is a few seconds old. Only an explicit refresh does that.
+ */
 async function refresh() {
-  apiState.value = 'checking';
-  queueState.value = 'checking';
-  monitoringState.value = 'checking';
-  volumeState.value = 'checking';
-  alertsState.value = 'checking';
   await Promise.all([
     checkHealth(),
     checkQueues(),
@@ -126,7 +127,21 @@ async function refresh() {
   refreshed.value = new Date().toLocaleTimeString();
 }
 
-onMounted(() => void refresh());
+// Live dashboard: the shared composable owns the timer, the overlap guard, the
+// hidden-tab pause and the unmount cleanup.
+const { autoRefresh, intervalSeconds, refreshing, refreshNow } = useLiveResource(refresh, {
+  intervalSeconds: 30,
+});
+const refreshChoices = [15, 30, 60, 300];
+
+function manualRefresh() {
+  apiState.value = 'checking';
+  queueState.value = 'checking';
+  monitoringState.value = 'checking';
+  volumeState.value = 'checking';
+  alertsState.value = 'checking';
+  return refreshNow(true);
+}
 
 const latestVolume = computed(() =>
   volumeSnapshots.value.length ? volumeSnapshots.value[volumeSnapshots.value.length - 1] : null,
@@ -235,11 +250,31 @@ function statusTone(status: string) {
 </script>
 <template>
   <div class="dashboard-actions">
-    <button class="secondary-button" data-testid="refresh-dashboard" @click="refresh">
-      Refresh dashboard</button
+    <button
+      class="secondary-button"
+      data-testid="refresh-dashboard"
+      :disabled="refreshing"
+      @click="manualRefresh"
+    >
+      {{ refreshing ? 'Refreshing…' : 'Refresh dashboard' }}</button
     ><RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
       >Ask AI Copilot</RouterLink
-    ><span>Last checked: {{ refreshed }}</span>
+    ><label class="filter-select"
+      ><span>Auto refresh</span
+      ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
+        <option :value="true">On</option>
+        <option :value="false">Off</option>
+      </select></label
+    ><label class="filter-select"
+      ><span>Every</span
+      ><select v-model.number="intervalSeconds" data-testid="dashboard-interval">
+        <option v-for="choice in refreshChoices" :key="choice" :value="choice">
+          {{ choice }}s
+        </option>
+      </select></label
+    ><span data-testid="dashboard-last-checked"
+      >Last checked: {{ refreshed }}{{ autoRefresh ? '' : ' — auto refresh is off' }}</span
+    >
   </div>
   <section class="metrics-grid">
     <MetricCard

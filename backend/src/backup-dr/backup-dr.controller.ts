@@ -130,9 +130,15 @@ export class BackupDrController {
       throw new BadRequestException('intervalMinutes must be a positive integer');
     if (!cron && intervalMinutes === null)
       throw new BadRequestException('Provide either cron or intervalMinutes');
-    const kind = b?.kind ?? 'full';
-    if (!['full', 'schema', 'incremental'].includes(kind))
-      throw new BadRequestException('kind must be full, schema or incremental');
+    // 'incremental' is no longer a backup kind: pg_dump has no incremental mode
+    // and WAL archiving is not configured, so it always produced a full dump
+    // under a false label (migration 035). Recorded as 'full' instead.
+    const kind = b?.kind === 'incremental' ? 'full' : (b?.kind ?? 'full');
+    if (!['full', 'schema'].includes(kind))
+      throw new BadRequestException(
+        "kind must be full or schema ('incremental' is not supported: it requires WAL " +
+          'archiving, which this deployment does not configure)',
+      );
     const retentionClass = b?.retentionClass ?? 'daily';
     if (!['hourly', 'daily', 'weekly', 'monthly', 'yearly', 'manual'].includes(retentionClass))
       throw new BadRequestException('retentionClass is not a recognised class');

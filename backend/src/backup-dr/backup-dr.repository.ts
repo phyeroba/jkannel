@@ -1,19 +1,20 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { PoolClient, QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
-import { GridDefinition, buildGridSql, parseListQuery } from '../platform/list-query';
+import { GridDefinition } from '../platform/list-query';
+import { GridResult, GridRunnerOptions, runGrid } from '../platform/grid-runner';
 
 export interface Actor {
   tenantId: string;
   userId: string;
 }
 
-export interface GridPage<T> {
-  items: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+/**
+ * Grid page shape. Now the shared platform shape: `total`/`offset` are numbers
+ * under offset pagination and null under keyset pagination (where a count is
+ * deliberately not paid for), and `nextCursor` carries the keyset continuation.
+ */
+export type GridPage<T> = GridResult<T>;
 
 export type RetentionClass = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'manual';
 export type BackupKind = 'full' | 'schema' | 'incremental';
@@ -39,6 +40,15 @@ export interface BackupRecord {
   started_at: string;
   completed_at: string | null;
   created_by: string;
+  /** Companion configuration/certificate bundle (migration 035). */
+  config_artifact_path: string | null;
+  config_artifact_checksum: string | null;
+  config_file_count: number;
+  config_bytes: string | number;
+  offsite_location: string | null;
+  offsite_synced_at: string | null;
+  /** Non-fatal degradation on an otherwise-completed backup. Never hidden. */
+  warning: string | null;
 }
 
 export interface BackupScheduleRow {
@@ -90,7 +100,9 @@ export const BACKUP_DR_GRIDS = {
 
 const BACKUP_COLUMNS =
   'id,label,kind,scope,status,size_bytes,checksum,location,encrypted,detail,retention_class,' +
-  'verified_at,artifact_path,platform_version,database_version,started_at,completed_at,created_by';
+  'verified_at,artifact_path,platform_version,database_version,started_at,completed_at,created_by,' +
+  'config_artifact_path,config_artifact_checksum,config_file_count,config_bytes,' +
+  'offsite_location,offsite_synced_at,warning';
 
 const SCHEDULE_COLUMNS =
   'id,tenant_id,name,cron,interval_minutes,kind,retention_class,enabled,last_run_at,next_run_at,created_by,created_at';
@@ -128,23 +140,29 @@ export class BackupDrRepository {
     );
   }
 
-  private async grid<T extends QueryResultRow>(
+  /**
+   * Delegates to the shared platform grid runner, so both backup grids get
+   * search/sort/filter/limit/offset (unchanged), plus opt-in keyset pagination
+   * (?cursor / ?paginate=cursor) and ?fields= projection, with no controller
+   * change. See platform/grid-runner.ts.
+   */
+  private grid<T extends QueryResultRow>(
     actor: Actor,
     select: string,
     from: string,
     gridDef: GridDefinition,
     rawQuery: Record<string, unknown>,
+    options: GridRunnerOptions = { idExpr: 'id' },
   ): Promise<GridPage<T>> {
-    const parsed = parseListQuery(rawQuery, gridDef);
-    const fragments = buildGridSql(parsed, gridDef, []);
-    const where = fragments.andWhere ? `WHERE ${fragments.andWhere.slice(' AND '.length)}` : '';
-    const sql = `${select}, count(*) OVER() AS __total ${from} ${where} ${fragments.orderBy} ${fragments.limitOffset}`;
-    return this.inTenant(actor, async (client) => {
-      const result = await client.query<T & { __total: string }>(sql, fragments.params);
-      const total = result.rows.length ? Number(result.rows[0].__total) : 0;
-      const items = result.rows.map(({ __total, ...row }) => row as unknown as T);
-      return { items, total, limit: parsed.limit, offset: parsed.offset };
-    });
+    return this.inTenant(actor, (client) =>
+      runGrid<T>(
+        { select, from },
+        gridDef,
+        rawQuery,
+        (sql, params) => client.query(sql, params).then((result) => result.rows),
+        options,
+      ),
+    );
   }
 
   // ---- Server metadata ----------------------------------------------------
@@ -227,25 +245,72 @@ export class BackupDrRepository {
   completeBackup(
     actor: Actor,
     id: string,
-    value: { sizeBytes: number; checksum: string; location: string; detail: string },
+    value: {
+      sizeBytes: number;
+      checksum: string;
+      location: string;
+      detail: string;
+      configArtifactPath?: string | null;
+      configArtifactChecksum?: string | null;
+      configFileCount?: number;
+      configBytes?: number;
+      offsiteLocation?: string | null;
+      offsiteSynced?: boolean;
+      warning?: string | null;
+    },
   ): Promise<BackupRecord> {
     return this.inTenant(actor, async (client) => {
       const row = (
         await client.query<BackupRecord>(
           `UPDATE backup_records
-              SET status='completed',size_bytes=$2,checksum=$3,location=$4,detail=$5,completed_at=now()
+              SET status='completed',size_bytes=$2,checksum=$3,location=$4,detail=$5,
+                  config_artifact_path=$6,config_artifact_checksum=$7,config_file_count=$8,
+                  config_bytes=$9,offsite_location=$10,
+                  offsite_synced_at=CASE WHEN $11::boolean THEN now() ELSE NULL END,
+                  warning=$12,completed_at=now()
             WHERE id=$1 RETURNING ${BACKUP_COLUMNS}`,
-          [id, value.sizeBytes, value.checksum, value.location, value.detail],
+          [
+            id,
+            value.sizeBytes,
+            value.checksum,
+            value.location,
+            value.detail,
+            value.configArtifactPath ?? null,
+            value.configArtifactChecksum ?? null,
+            value.configFileCount ?? 0,
+            value.configBytes ?? 0,
+            value.offsiteLocation ?? null,
+            value.offsiteSynced === true,
+            value.warning ?? null,
+          ],
         )
       ).rows[0];
       await this.audit(client, actor, 'backup.completed', 'backup', id, {
         sizeBytes: value.sizeBytes,
         checksum: value.checksum,
+        configFileCount: value.configFileCount ?? 0,
+        offsiteLocation: value.offsiteLocation ?? null,
+        warning: value.warning ?? null,
       });
+      // A completed-but-degraded backup is not a success story. Surface it at
+      // warning severity so it appears in the operator's alert grid rather than
+      // only in a detail string nobody reads until a restore.
+      if (value.warning)
+        await this.raiseAlert(client, actor, {
+          severity: 'warning',
+          dedupKey: `backup:degraded:${id}`,
+          summary: 'Backup completed with a warning',
+          details: { backupId: id, warning: value.warning },
+        });
       return row;
     });
   }
 
+  /**
+   * Marks a backup failed AND opens an alert. Before this, a failed backup
+   * wrote status='failed' plus an audit row and paged nobody — the classic way
+   * an operator discovers backup failure at restore time.
+   */
   failBackup(actor: Actor, id: string, detail: string): Promise<BackupRecord> {
     return this.inTenant(actor, async (client) => {
       const row = (
@@ -256,8 +321,59 @@ export class BackupDrRepository {
         )
       ).rows[0];
       await this.audit(client, actor, 'backup.failed', 'backup', id, { detail });
+      await this.raiseAlert(client, actor, {
+        severity: 'critical',
+        dedupKey: `backup:failed:${row?.label ?? id}`,
+        summary: `Backup "${row?.label ?? id}" failed`,
+        details: { backupId: id, label: row?.label ?? null, detail },
+      });
       return row;
     });
+  }
+
+  /**
+   * Opens (or de-duplicates onto) an alert_instances row with source='backup'.
+   *
+   * There is no alert service injectable from this module without reaching into
+   * monitoring/, so this writes the same table monitoring writes, using the same
+   * partial-unique dedup index (migration 014). Failure to raise the alert must
+   * never mask the underlying backup failure, so it is logged and swallowed.
+   */
+  private async raiseAlert(
+    client: PoolClient,
+    actor: Actor,
+    value: {
+      severity: 'info' | 'warning' | 'critical';
+      dedupKey: string;
+      summary: string;
+      details: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    try {
+      await client.query(
+        `INSERT INTO alert_instances (tenant_id, rule_id, status, severity, source, dedup_key, summary, details)
+         VALUES ($1, NULL, 'open', $2, 'backup', $3, $4, $5)
+         ON CONFLICT (tenant_id, dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL
+         DO NOTHING`,
+        [
+          actor.tenantId,
+          value.severity,
+          value.dedupKey,
+          value.summary,
+          JSON.stringify({ ...value.details, raisedBy: 'backup-dr' }),
+        ],
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          context: 'BackupDrRepository',
+          message: 'could not raise backup alert; the backup failure itself still stands',
+          dedupKey: value.dedupKey,
+          error: String((error as Error).message ?? error),
+        }),
+      );
+    }
   }
 
   markVerified(actor: Actor, id: string, detail: string): Promise<BackupRecord> {
@@ -274,6 +390,7 @@ export class BackupDrRepository {
     });
   }
 
+  /** Verification failure is alerted too: an unverifiable artifact is not a backup. */
   markVerifyFailed(actor: Actor, id: string, detail: string): Promise<BackupRecord> {
     return this.inTenant(actor, async (client) => {
       const row = (
@@ -283,6 +400,12 @@ export class BackupDrRepository {
         )
       ).rows[0];
       await this.audit(client, actor, 'backup.verify_failed', 'backup', id, { detail });
+      await this.raiseAlert(client, actor, {
+        severity: 'critical',
+        dedupKey: `backup:verify_failed:${row?.label ?? id}`,
+        summary: `Backup "${row?.label ?? id}" failed verification`,
+        details: { backupId: id, label: row?.label ?? null, detail },
+      });
       return row;
     });
   }
@@ -297,10 +420,22 @@ export class BackupDrRepository {
     retentionClass: RetentionClass,
     cutoffIso: string,
     limit: number,
-  ): Promise<Array<{ id: string; artifact_path: string | null }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      artifact_path: string | null;
+      config_artifact_path: string | null;
+      offsite_location: string | null;
+    }>
+  > {
     return this.inTenant(actor, async (client) => {
       const rows = (
-        await client.query<{ id: string; artifact_path: string | null }>(
+        await client.query<{
+          id: string;
+          artifact_path: string | null;
+          config_artifact_path: string | null;
+          offsite_location: string | null;
+        }>(
           `DELETE FROM backup_records
             WHERE id IN (
               SELECT id FROM backup_records
@@ -308,7 +443,7 @@ export class BackupDrRepository {
                ORDER BY started_at ASC
                LIMIT $3
             )
-            RETURNING id, artifact_path`,
+            RETURNING id, artifact_path, config_artifact_path, offsite_location`,
           [retentionClass, cutoffIso, limit],
         )
       ).rows;

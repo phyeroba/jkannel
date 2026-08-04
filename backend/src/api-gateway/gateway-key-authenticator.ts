@@ -11,6 +11,12 @@ export interface GatewayClient {
   scopes: string[];
   allowedIps: string[];
   rateLimit: number | null;
+  /**
+   * Customer this credential submits on behalf of (migration 033), or null for
+   * an operator key. This is where the send path gets the identity whose quota,
+   * credit, sender IDs and route bindings it enforces.
+   */
+  customerId: string | null;
 }
 
 interface ApiKeyAuthRow {
@@ -23,6 +29,7 @@ interface ApiKeyAuthRow {
   rate_limit: number | null;
   expires_at: Date | null;
   is_enabled: boolean;
+  customer_id: string | null;
 }
 
 /**
@@ -57,7 +64,8 @@ export class GatewayKeyAuthenticator {
 
     const row = (
       await this.database.authQuery<ApiKeyAuthRow>(
-        `SELECT id, tenant_id, user_id, key_hash, scopes, allowed_ips, rate_limit, expires_at, is_enabled
+        `SELECT id, tenant_id, user_id, key_hash, scopes, allowed_ips, rate_limit, expires_at, is_enabled,
+                customer_id::text AS customer_id
            FROM api_keys WHERE key_prefix = $1`,
         [parsed.prefix],
       )
@@ -80,6 +88,7 @@ export class GatewayKeyAuthenticator {
       scopes: row.scopes ?? [],
       allowedIps: row.allowed_ips ?? [],
       rateLimit: row.rate_limit ?? null,
+      customerId: row.customer_id ?? null,
     };
   }
 

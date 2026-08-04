@@ -14,6 +14,7 @@ import { encryptSecret, normalizeRecoveryCode, sha256Hex } from './identity-cryp
 import { generateTotp, newTotpSecret } from './identity-totp';
 import { PasswordHasher } from './password-hasher';
 import { TokenService } from './token.service';
+import { AuthThrottleService, ThrottleRedis } from './auth-throttle.service';
 import { randomUUID } from 'node:crypto';
 
 class MemoryIdentity implements IdentityStore {
@@ -51,6 +52,39 @@ class MemoryIdentity implements IdentityStore {
   }
 }
 
+/**
+ * In-memory stand-in for the Redis behind AuthThrottleService. It distinguishes
+ * the two Lua scripts by looking for INCR, and models TTLs well enough to prove
+ * the window rolls off. Kept local to the spec (a near-identical copy lives in
+ * auth-throttle.service.spec.ts) so no test-only module leaks into src/.
+ */
+class FakeThrottleRedis implements ThrottleRedis {
+  counters = new Map<string, number>();
+  ttls = new Map<string, number>();
+  async eval(script: string, numKeys: number, ...args: (string | number)[]) {
+    const keys = args.slice(0, numKeys).map(String);
+    if (script.includes('INCR')) {
+      const windows = args.slice(numKeys).map(Number);
+      return keys.map((key, index) => {
+        const next = (this.counters.get(key) ?? 0) + 1;
+        this.counters.set(key, next);
+        if (next === 1) this.ttls.set(key, windows[index]);
+        return next;
+      });
+    }
+    const out: number[] = [];
+    for (const key of keys) {
+      out.push(this.counters.get(key) ?? 0, this.ttls.get(key) ?? -2);
+    }
+    return out;
+  }
+  /** Simulate every window expiring. */
+  expireAll() {
+    this.counters.clear();
+    this.ttls.clear();
+  }
+}
+
 interface StoredResetToken extends PasswordResetToken {
   tokenHash: string;
 }
@@ -65,6 +99,12 @@ class MemoryAuth implements AuthRepository, AuditSink {
   takenUsernames = new Set<string>();
   async findCredential(tenant: string, username: string) {
     return tenant === 'acme' && username === 'operator' ? this.credential : undefined;
+  }
+  // Mirrors the production lookup: same columns, same role/permission
+  // aggregation, keyed by id. refresh() reads through this so a token rotation
+  // reflects the CURRENT row rather than the claims it was handed.
+  async findCredentialById(userId: string) {
+    return this.credential?.id === userId ? this.credential : undefined;
   }
   // These two mirror the SQL in postgres-auth.repository.ts exactly. They used to
   // only touch failedLoginCount/lockedUntil, which diverged from production (the
@@ -406,6 +446,105 @@ describe('AuthService', () => {
         service.login('acme', 'operator', 'correct horse battery staple', {}, { totp: '000000' }),
       ).rejects.toThrow(UnauthorizedException);
     });
+    // G12/3 — the MFA-failure branch used to skip recordFailedLogin entirely, so
+    // a 6-digit code could be guessed without limit against a known password.
+    it('counts a wrong TOTP code towards lockout', async () => {
+      for (let i = 0; i < 5; i++)
+        await expect(
+          service.login('acme', 'operator', 'correct horse battery staple', {}, { totp: '000000' }),
+        ).rejects.toThrow(UnauthorizedException);
+      expect(store.credential!.failedLoginCount).toBe(5);
+      expect(store.credential!.lockedUntil).toBeInstanceOf(Date);
+      expect(store.events.at(-1)?.reason).toBe('mfa_invalid');
+      // Even the correct code is now refused while the window is open.
+      await expect(
+        service.login(
+          'acme',
+          'operator',
+          'correct horse battery staple',
+          {},
+          { totp: generateTotp(secret) },
+        ),
+      ).rejects.toThrow('Invalid credentials');
+    });
+    it('counts a wrong recovery code towards lockout', async () => {
+      await expect(
+        service.login(
+          'acme',
+          'operator',
+          'correct horse battery staple',
+          {},
+          { recoveryCode: 'aaaaa-bbbbb' },
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(store.credential!.failedLoginCount).toBe(1);
+    });
+    it('does not penalise the first leg of a normal MFA login (no code supplied)', async () => {
+      await expect(
+        service.login('acme', 'operator', 'correct horse battery staple'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(store.credential!.failedLoginCount).toBe(0);
+      expect(store.events.at(-1)?.reason).toBe('mfa_required');
+    });
+  });
+
+  // G12/3 — the service records penalties; AuthThrottleGuard reads them. The
+  // key property proven here is that SUCCESS costs nothing, which is what keeps
+  // the perf harness (~7 rps of good logins from one host) unaffected.
+  describe('throttle penalties', () => {
+    let redis: FakeThrottleRedis;
+    let throttle: AuthThrottleService;
+    beforeEach(() => {
+      redis = new FakeThrottleRedis();
+      throttle = new AuthThrottleService(redis);
+      service = new AuthService(
+        store,
+        store,
+        new PasswordHasher(),
+        new TokenService(),
+        undefined,
+        throttle,
+      );
+    });
+    it('records nothing for a successful login', async () => {
+      await service.login('acme', 'operator', 'correct horse battery staple', {
+        ipAddress: '203.0.113.7',
+      });
+      expect(redis.counters.size).toBe(0);
+    });
+    it('records a penalty on both the account and the IP bucket for a bad password', async () => {
+      await expect(
+        service.login('acme', 'operator', 'nope nope nope', { ipAddress: '203.0.113.7' }),
+      ).rejects.toThrow(UnauthorizedException);
+      const keys = [...redis.counters.keys()];
+      expect(keys).toEqual(
+        expect.arrayContaining([
+          'auth:login:u:acme:operator:203.0.113.7',
+          'auth:login:ip:203.0.113.7',
+        ]),
+      );
+      expect(redis.counters.get('auth:login:ip:203.0.113.7')).toBe(1);
+    });
+    it('reaches the ceiling and reports 429-worthy state, then clears with the window', async () => {
+      const buckets = throttle.loginBuckets('acme', 'operator', '203.0.113.7');
+      for (let i = 0; i < 10; i++)
+        await expect(
+          service.login('acme', 'operator', 'nope nope nope', { ipAddress: '203.0.113.7' }),
+        ).rejects.toThrow(UnauthorizedException);
+      const blocked = await throttle.inspect(buckets);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
+      redis.expireAll();
+      await expect(throttle.inspect(buckets)).resolves.toMatchObject({ allowed: true });
+    });
+    it('penalises a reset request even though the response is deliberately uniform', async () => {
+      await service.requestPasswordReset('acme', 'ghost', { ipAddress: '203.0.113.7' });
+      expect(redis.counters.get('auth:reset:ip:203.0.113.7')).toBe(1);
+    });
+    it('penalises an invalid refresh token', async () => {
+      await expect(service.refresh('not-a-token', { ipAddress: '203.0.113.7' })).rejects.toThrow();
+      expect(redis.counters.get('auth:token:refresh:ip:203.0.113.7')).toBe(1);
+    });
   });
 
   describe('refresh token reuse', () => {
@@ -420,6 +559,99 @@ describe('AuthService', () => {
       // The family is burned, so even the current refresh token is dead.
       await expect(service.refresh(next.refreshToken)).rejects.toThrow('Invalid refresh token');
       expect(store.events.map((event) => event.action)).toContain('token.reuse.detected');
+    });
+  });
+
+  // G12/1 — refresh() used to rebuild the principal from the incoming token's
+  // own claims, so a disabled or demoted user kept full access for the whole
+  // 7-day refresh lifetime. It must now re-read the user row.
+  describe('privilege re-resolution on refresh', () => {
+    const claimsOf = (token: string) =>
+      JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as {
+        roles: string[];
+        permissions: string[];
+        username: string;
+        sub: string;
+      };
+
+    it('rejects a refresh once the account has been disabled and kills the family', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      store.credential!.status = 'disabled';
+      await expect(service.refresh(first.refreshToken)).rejects.toThrow(
+        'Account is no longer active',
+      );
+      expect(store.session?.revokedAt).toBeInstanceOf(Date);
+      expect(store.events.at(-1)).toMatchObject({
+        action: 'token.refresh.rejected',
+        reason: 'user_status_disabled',
+      });
+      // The refresh token is dead even if the account is re-enabled.
+      store.credential!.status = 'active';
+      await expect(service.refresh(first.refreshToken)).rejects.toThrow('Invalid refresh token');
+    });
+
+    it.each(['archived', 'deleted', 'pending', 'expired'] as const)(
+      'rejects a refresh for a %s account',
+      async (status) => {
+        const first = await service.login('acme', 'operator', 'correct horse battery staple');
+        store.credential!.status = status;
+        await expect(service.refresh(first.refreshToken)).rejects.toThrow(
+          'Account is no longer active',
+        );
+      },
+    );
+
+    it('rejects a refresh when the user row has vanished', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      store.credential = undefined;
+      await expect(service.refresh(first.refreshToken)).rejects.toThrow(
+        'Account is no longer active',
+      );
+      expect(store.events.at(-1)?.reason).toBe('user_not_found');
+    });
+
+    it('still allows refresh while the account is merely locked out', async () => {
+      // Lockout is attacker-triggerable from an unauthenticated endpoint, so
+      // treating it as "no longer a user" would let anyone terminate a victim's
+      // sessions with five bad guesses.
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      store.credential!.status = 'locked';
+      await expect(service.refresh(first.refreshToken)).resolves.toMatchObject({
+        tokenType: 'Bearer',
+      });
+    });
+
+    it('picks up a revoked permission instead of replaying stale claims', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      expect(claimsOf(first.accessToken).permissions).toEqual(['dashboard.view']);
+      // An administrator strips the permission and removes the role.
+      store.credential!.permissions = [];
+      store.credential!.roles = [];
+      const next = await service.refresh(first.refreshToken);
+      const claims = claimsOf(next.accessToken);
+      expect(claims.permissions).toEqual([]);
+      expect(claims.roles).toEqual([]);
+      // The rotated refresh token carries the reduced set too.
+      expect(claimsOf(next.refreshToken).permissions).toEqual([]);
+    });
+
+    it('picks up a newly granted permission and a renamed username', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      store.credential!.permissions = ['dashboard.view', 'smsc.manage'];
+      store.credential!.roles = ['operator', 'admin'];
+      store.credential!.username = 'operator2';
+      const claims = claimsOf((await service.refresh(first.refreshToken)).accessToken);
+      expect(claims.permissions).toEqual(['dashboard.view', 'smsc.manage']);
+      expect(claims.roles).toEqual(['operator', 'admin']);
+      expect(claims.username).toBe('operator2');
+    });
+
+    it('rejects a refresh whose session belongs to another tenant', async () => {
+      const first = await service.login('acme', 'operator', 'correct horse battery staple');
+      store.credential!.tenantId = '999';
+      await expect(service.refresh(first.refreshToken)).rejects.toThrow(
+        'Account is no longer active',
+      );
     });
   });
 

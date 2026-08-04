@@ -18,6 +18,7 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Operations', path: '/dashboard/operations', root: 'refresh-dashboard' },
   { label: 'Monitoring', path: '/monitoring', root: 'module-workspace' },
   { label: 'Alerts', path: '/alerts', root: 'module-workspace' },
+  { label: 'Escalation & Maintenance', path: '/alert-response', root: 'alert-response-view' },
   { label: 'Notifications', path: '/notifications', root: 'module-workspace' },
   { label: 'Messages', path: '/messages', root: 'module-workspace' },
   { label: 'Live Queue', path: '/live-queue', root: 'live-queue-view' },
@@ -26,6 +27,7 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Bulk Send', path: '/bulk-send', root: 'bulk-send-view' },
   { label: 'SMSC Connections', path: '/smsc', root: 'module-workspace' },
   { label: 'Routing', path: '/routing', root: 'module-workspace' },
+  { label: 'Advanced Routing', path: '/routing-advanced', root: 'routing-depth-view' },
   { label: 'Configuration', path: '/configuration', root: 'module-workspace' },
   { label: 'Analytics & Reports', path: '/reports', root: 'analytics-view' },
   { label: 'Customers', path: '/customers', root: 'module-workspace' },
@@ -36,6 +38,7 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Plugins', path: '/plugins', root: 'module-workspace' },
   { label: 'Backup & Restore', path: '/backup', root: 'module-workspace' },
   { label: 'Users & Roles', path: '/users', root: 'module-workspace' },
+  { label: 'Roles & Permissions', path: '/roles', root: 'roles-view' },
   { label: 'Sessions', path: '/sessions', root: 'sessions-view' },
   { label: 'System Settings', path: '/system', root: 'module-workspace' },
 ];

@@ -678,11 +678,7 @@ async function openRuns(def: Definition) {
     const data = await apiRequest<{ items?: RecordValue[] } | RecordValue[]>(
       `/reports/definitions/${def.id}/runs`,
     );
-    runsRows.value = Array.isArray(data)
-      ? data
-      : Array.isArray(data.items)
-        ? data.items
-        : [];
+    runsRows.value = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : [];
   } catch (reason) {
     runsError.value = messageFrom(reason, 'The run history could not be loaded.');
   } finally {
@@ -1021,7 +1017,9 @@ onMounted(() => void refreshAll());
       <header class="panel-header">
         <div>
           <h2>Delivery latency (SLA)</h2>
-          <p>Submit-to-DLR latency percentiles{{ latency?.window ? ` · ${latency.window}` : '' }}</p>
+          <p>
+            Submit-to-DLR latency percentiles{{ latency?.window ? ` · ${latency.window}` : '' }}
+          </p>
         </div>
       </header>
       <p v-if="latencyState === 'loading'" class="chart-empty">Loading latency…</p>
@@ -1212,7 +1210,11 @@ onMounted(() => void refreshAll());
       >
         <label>
           Name
-          <input v-model="newDefName" data-testid="definition-name" placeholder="Daily volume CSV" />
+          <input
+            v-model="newDefName"
+            data-testid="definition-name"
+            placeholder="Daily volume CSV"
+          />
         </label>
         <label>
           Report type
@@ -1357,7 +1359,9 @@ onMounted(() => void refreshAll());
             <tr v-for="(run, index) in runsRows" :key="text(run.id, String(index))">
               <td>{{ text(run.status) }}</td>
               <td>{{ text(run.row_count ?? run.rowCount, '0') }}</td>
-              <td>{{ text(run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt) }}</td>
+              <td>
+                {{ text(run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt) }}
+              </td>
               <td>{{ text(run.completed_at ?? run.completedAt) }}</td>
               <td>{{ text(run.detail ?? run.error) }}</td>
             </tr>

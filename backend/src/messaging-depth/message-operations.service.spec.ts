@@ -22,6 +22,43 @@ function makeDatabase(audits: any[][], smscIds = ['carrier-a']) {
   return { tenantTransaction: (_t: string, work: any) => work(client) };
 }
 
+/**
+ * Stand-in for the real send path. Replay/clone/requeue now submit through
+ * {@link MessageSendService} instead of poking SQLBox directly, so the fake
+ * forwards to the same `sqlbox.submit` spy these tests already assert on and
+ * returns the shape the service consumes.
+ */
+function makeSend(sqlbox: any, overrides: Record<string, unknown> = {}) {
+  return {
+    send: jest.fn(async (_actor: any, request: any) => {
+      const queued = await sqlbox.submit({
+        sender: request.sender,
+        receiver: request.receiver,
+        text: request.text,
+        smscId: request.smscId,
+        dlrMask: request.dlrMask,
+        dlrUrl: request.dlrUrl,
+        foreignId: request.foreignId,
+      });
+      return {
+        ...queued,
+        smscId: request.smscId,
+        destination: request.receiver,
+        routeId: null,
+        routeName: null,
+        strategy: null,
+        fallbackUsed: false,
+        outcome: 'explicit',
+        reason: 'explicit smscId supplied by the caller (replay)',
+        decisionId: 'decision-1',
+        customerId: null,
+        charged: 0,
+        ...overrides,
+      };
+    }),
+  };
+}
+
 function traceOf(overrides: Record<string, unknown> = {}) {
   return {
     id: '42',
@@ -53,7 +90,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => traceOf()),
       submit: jest.fn(async () => ({ sqlId: '999', status: 'queued', source: 'kamex-sqlbox' })),
     };
-    const service = new MessageOperationsService(makeDatabase(audits) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase(audits) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     const result = await service.replay(actor, '42');
 
     expect(sqlbox.trace).toHaveBeenCalledWith('42', ['carrier-a']);
@@ -78,7 +119,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => traceOf()),
       submit: jest.fn(async () => ({ sqlId: '1000', status: 'queued', source: 'kamex-sqlbox' })),
     };
-    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase([]) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     const result = await service.clone(actor, '42', {
       receiver: '+256711111111',
       text: 'new body',
@@ -97,7 +142,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => traceOf()),
       submit: jest.fn(async () => ({ sqlId: '2', status: 'queued', source: 'kamex-sqlbox' })),
     };
-    const service = new MessageOperationsService(makeDatabase(audits) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase(audits) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     await service.requeue(actor, '42');
     expect(audits[0][2]).toBe('message.requeued');
   });
@@ -108,7 +157,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(),
       submit: jest.fn(),
     };
-    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase([]) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     await expect(service.replay(actor, '42')).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(sqlbox.submit).not.toHaveBeenCalled();
   });
@@ -120,7 +173,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => ({ id: '42', events: [], summary: {} })),
       submit: jest.fn(),
     };
-    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase([]) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     await expect(service.replay(actor, '42')).rejects.toBeInstanceOf(NotFoundException);
     expect(sqlbox.submit).not.toHaveBeenCalled();
   });
@@ -131,9 +188,36 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => traceOf({ smscId: 'carrier-x' })),
       submit: jest.fn(),
     };
-    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase([]) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     await expect(service.replay(actor, '42')).rejects.toBeInstanceOf(BadRequestException);
     expect(sqlbox.submit).not.toHaveBeenCalled();
+  });
+
+  it('lets the send path re-route a replay off a dead bind', async () => {
+    const sqlbox: any = {
+      probe: jest.fn(async () => ({ available: true, evidence: 'ok' })),
+      trace: jest.fn(async () => traceOf()),
+      submit: jest.fn(async () => ({ sqlId: '999', status: 'queued', source: 'kamex-sqlbox' })),
+    };
+    // The send path reports it moved the message to a healthy bind.
+    const send = makeSend(sqlbox, { smscId: 'carrier-b', outcome: 'rerouted' });
+    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox, send as any);
+    const result = await service.replay(actor, '42');
+
+    // The request asks for the reroute; the original bind is still offered.
+    expect(send.send).toHaveBeenCalledWith(
+      actor,
+      expect.objectContaining({
+        smscId: 'carrier-a',
+        rerouteIfUnavailable: true,
+        channel: 'replay',
+      }),
+    );
+    expect(result.submission.smscId).toBe('carrier-b');
   });
 
   it('rejects a message with no SMSC assigned', async () => {
@@ -142,7 +226,11 @@ describe('MessageOperationsService', () => {
       trace: jest.fn(async () => traceOf({ smscId: null })),
       submit: jest.fn(),
     };
-    const service = new MessageOperationsService(makeDatabase([]) as any, sqlbox);
+    const service = new MessageOperationsService(
+      makeDatabase([]) as any,
+      sqlbox,
+      makeSend(sqlbox) as any,
+    );
     await expect(service.replay(actor, '42')).rejects.toBeInstanceOf(BadRequestException);
   });
 });

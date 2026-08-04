@@ -28,9 +28,13 @@ import {
 import { ConfigurationDeploymentService } from '../configuration/configuration-deployment.service';
 import { EngineAdapterRegistry } from '../engine/engine-adapter.registry';
 import { ConfigurationDiffService } from '../configuration/configuration-diff.service';
+import { ConfigurationModelBuilder } from '../configuration/configuration-model.builder';
+import { MissingSecretError } from '../configuration/secret-resolver.service';
 import { SmscConnectivityService } from '../smsc/smsc-connectivity.service';
+import { SmscService, SmscType } from '../smsc/smsc.service';
 import { RoutingService } from '../routing/routing.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
+import { MessageSendService } from '../messaging-depth/message-send.service';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -130,6 +134,10 @@ export class SmscController {
     private readonly engines?: EngineAdapterRegistry,
     private readonly connectivity?: SmscConnectivityService,
     private readonly exporter?: ExportService,
+    // Domain validation for the SMSC attribute set. Defaulted so the many
+    // direct `new SmscController(repo)` constructions in tests keep the
+    // assertion active rather than silently skipping it.
+    private readonly domain: SmscService = new SmscService(),
   ) {}
   @Get() @RequirePermissions('smsc.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listSmscs(actor(r), q);
@@ -172,19 +180,45 @@ export class SmscController {
       'engineId',
     );
     if (!/^[a-z0-9][a-z0-9._-]*$/.test(engineId)) throw new BadRequestException('Invalid engineId');
-    return this.repository.createSmsc(actor(r), {
-      ...b,
-      engineId,
-      name: text(b.name, 'name'),
-      type,
+    const name = text(b.name, 'name');
+    const attributes = this.domain.attributesFrom(b);
+    // Domain assertion before persistence: this is what stops a plaintext
+    // password reaching credential_secret_ref, and it checks the full SMPP
+    // attribute set the generator will render.
+    const errors = this.domain.validate({
+      ...attributes,
+      id: engineId,
+      name,
+      type: type as SmscType,
+      host: b.host ?? undefined,
+      port: b.port ?? undefined,
+      credentialSecretRef: b.credentialSecretRef ?? undefined,
+      tps: b.tps,
+      enabled: b.enabled ?? true,
     });
+    if (errors.length) throw new BadRequestException({ message: 'SMSC validation failed', errors });
+    return this.repository.createSmsc(actor(r), { ...b, ...attributes, engineId, name, type });
   }
   @Patch(':id') @RequirePermissions('smsc.manage') update(
     @Req() r: Request,
     @Param('id') id: string,
     @Body() b: any,
   ) {
-    return this.repository.updateSmsc(actor(r), uuid(id, 'id'), b);
+    const attributes = this.domain.attributesFrom(b);
+    const errors = this.domain.validate({
+      ...attributes,
+      // Only the supplied fields are validated on a partial update; the
+      // identity/type/endpoint checks are satisfied from the stored row by the
+      // database constraints.
+      id: 'placeholder',
+      name: 'placeholder',
+      type: 'fake',
+      tps: Number.isInteger(b.tps) ? b.tps : 1,
+      enabled: true,
+      credentialSecretRef: b.credentialSecretRef ?? undefined,
+    });
+    if (errors.length) throw new BadRequestException({ message: 'SMSC validation failed', errors });
+    return this.repository.updateSmsc(actor(r), uuid(id, 'id'), { ...b, ...attributes });
   }
   @Get(':id/deployments') @RequirePermissions('smsc.view') deployments(
     @Req() r: Request,
@@ -712,6 +746,9 @@ export class ConfigurationsController {
     private readonly deployment?: ConfigurationDeploymentService,
     private readonly differences?: ConfigurationDiffService,
     private readonly exporter?: ExportService,
+    // Builds the EngineConfiguration from smsc_definitions. Optional so the
+    // controller can still be constructed with a body-supplied model in tests.
+    private readonly modelBuilder?: ConfigurationModelBuilder,
   ) {}
   @Get() @RequirePermissions('configuration.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listConfigurations(actor(r), q);
@@ -785,24 +822,47 @@ export class ConfigurationsController {
           host: 'smsc.example.com',
           port: 2775,
           usernameSecretRef: 'secret://kamex/example-smsc',
+          passwordSecretRef: 'secret://kamex/example-smsc-password',
+          systemType: 'VMA',
+          bindMode: 'transceiver',
+          interfaceVersion: 34,
+          sourceAddrTon: 5,
+          sourceAddrNpi: 0,
+          destAddrTon: 1,
+          destAddrNpi: 1,
+          windowSize: 10,
+          throughput: 10,
+          keepaliveSeconds: 30,
+          reconnectDelaySeconds: 10,
+          waitAckSeconds: 60,
           enabled: true,
         },
       ],
+      // Without these three groups the gateway starts but accepts no traffic,
+      // so the baseline includes them. Shapes match runtime/kamex/kamex.conf.
+      smsbox: { bearerboxHost: 'kamex-bearerbox', sendsmsPort: 13013, logLevel: 1 },
+      sendsmsUsers: [{ username: 'jkannel', passwordSecretRef: 'secret://kamex/sendsms-password' }],
+      smsServices: [{ keyword: 'default', text: 'No service specified' }],
+      dlrStorage: { type: 'internal' },
     };
     return {
       scope: 'gateway',
       content,
       description:
-        'A baseline Kamex gateway configuration: one admin port, one SMSBox port, ' +
-        'SQLBox persistence enabled, and one example SMPP SMSC. Edit it, then POST ' +
-        'to /configurations to create the first version, or to /configurations/generate ' +
-        'to render and natively validate it first.',
+        'A baseline Kamex gateway configuration: admin and SMSBox ports, SQLBox ' +
+        'persistence, one example authenticated SMPP SMSC, and the smsbox, ' +
+        'sendsms-user and sms-service groups a working gateway needs. Edit it, then ' +
+        'POST to /configurations to create the first version, or to ' +
+        '/configurations/generate to render and natively validate it first.',
       notes: [
-        'Replace example-smsc with your real SMSC id, host, port and credential reference.',
+        'This is a starter template. POST /configurations/generate with no body renders ' +
+          'your tenant’s real SMSC definitions from the database instead.',
+        'Replace example-smsc with your real SMSC id, host, port, system type and ' +
+          'credential references.',
         'The scope ("gateway") groups a versioned configuration; creating from an edited ' +
           'baseline appends a new version rather than mutating an existing one.',
-        'adminSecretRef and each SMSC usernameSecretRef must be secret:// references, ' +
-          'never inline credentials.',
+        'adminSecretRef and each SMSC username/password reference must be secret:// ' +
+          'references, never inline credentials; they render as ${ENV} placeholders.',
         'SQLBox usernameEnv/passwordEnv are environment variable names resolved at runtime.',
       ],
     };
@@ -828,15 +888,74 @@ export class ConfigurationsController {
   ) {
     return this.repository.getConfiguration(actor(r), uuid(id, 'id'));
   }
+  /**
+   * Renders and natively validates an engine configuration.
+   *
+   * The database is the source of truth (CONFIGURATION_GENERATOR spec §5): with
+   * no body — how the console calls it — the model is composed from the
+   * tenant's own `smsc_definitions` by {@link ConfigurationModelBuilder}, so an
+   * SMSC created in the SMSC workspace appears in the generated file.
+   *
+   * A caller that posts an explicit model still gets it rendered (preview /
+   * what-if / existing API clients); the response says which source was used.
+   * `?source=database` forces the database even when a body is present, and
+   * `?source=body` is the explicit escape hatch.
+   */
   @Post('generate') @RequirePermissions('configuration.manage') async generate(
-    @Body() b: EngineConfiguration,
+    @Req() r: Request,
+    @Body() b: EngineConfiguration | undefined,
+    @Query() q: any = {},
   ) {
-    const errors = this.generator!.validate(b);
+    const hasBodyModel = Boolean(b && typeof b === 'object' && Object.keys(b).length);
+    const requested = q?.source;
+    if (requested && !['database', 'body'].includes(requested))
+      throw new BadRequestException('source must be "database" or "body"');
+    const source = requested ?? (hasBodyModel ? 'body' : 'database');
+    if (source === 'body' && !hasBodyModel)
+      throw new BadRequestException('source=body requires a configuration model in the body');
+
+    let model: EngineConfiguration;
+    let built: Awaited<ReturnType<ConfigurationModelBuilder['build']>> | undefined;
+    if (source === 'database') {
+      if (!this.modelBuilder)
+        throw new BadRequestException('Database-sourced generation is not available');
+      built = await this.modelBuilder.build(actor(r));
+      model = built.model;
+    } else {
+      model = b as EngineConfiguration;
+    }
+
+    const errors = this.generator!.validate(model);
     if (errors.length)
-      throw new BadRequestException({ message: 'Configuration validation failed', errors });
-    const generated = this.generator!.generate(b);
+      throw new BadRequestException({ message: 'Configuration validation failed', errors, source });
+    let generated;
+    try {
+      generated = this.generator!.generate(model);
+    } catch (error) {
+      // MissingSecretError names the reference and the environment variable
+      // it needs — never the secret value.
+      if (error instanceof MissingSecretError)
+        throw new BadRequestException({
+          message: 'Configuration references secrets that are not available',
+          references: error.references,
+          envNames: error.envNames,
+        });
+      throw error;
+    }
     const nativeValidation = await this.deployment!.validateNative(generated.content);
-    return { ...generated, nativeValidation };
+    return {
+      ...generated,
+      nativeValidation,
+      source,
+      model: source === 'database' ? model : undefined,
+      sources: built?.sources,
+      warning:
+        source === 'body'
+          ? 'Rendered from the supplied model. The database is the source of truth; ' +
+            'call this endpoint without a body (or with ?source=database) to render the ' +
+            'tenant’s actual SMSC definitions.'
+          : undefined,
+    };
   }
   @Post() @RequirePermissions('configuration.manage') create(@Req() r: Request, @Body() b: any) {
     if (!b.content || typeof b.content !== 'object')
@@ -929,6 +1048,10 @@ export class ReadModelsController {
     private readonly engines?: EngineAdapterRegistry,
     private readonly repository?: ConsoleRepository,
     private readonly exporter?: ExportService,
+    // THE send path (messaging-depth): routing, blocklist, customer
+    // entitlements and the recorded decision. Optional only so the existing
+    // controller unit tests can construct it with the collaborators they need.
+    private readonly send?: MessageSendService,
   ) {}
   /**
    * SQLBox tables are engine-owned and have no tenant column; every read is
@@ -1056,15 +1179,32 @@ export class ReadModelsController {
       };
     return this.sqlbox.ensureIndexes();
   }
+  /**
+   * Submit one message.
+   *
+   * `smscId` is now OPTIONAL. Omit it and the routing engine chooses the bind
+   * from the tenant's DEPLOYED routes and live bind health, records the decision
+   * in message_route_decisions, and refuses the send outright when nothing
+   * matches — it never falls back to an arbitrary carrier. Supplying it pins the
+   * bind exactly as before (and is still validated against the tenant's own
+   * SMSCs before anything else happens).
+   *
+   * `customerId` attributes the message so the customer's blocklist, approved
+   * sender IDs, route bindings, quota and credit are enforced inside the same
+   * transaction as the send.
+   */
   @Post('messages') @RequirePermissions('configuration.manage') async submit(
     @Req() r: Request,
     @Body() b: any,
   ) {
     const allowed = await this.tenantSmscScope(r);
-    const smscId = text(b.smscId, 'smscId');
-    if (!allowed.includes(smscId))
+    const smscId =
+      b?.smscId === undefined || b?.smscId === null || b?.smscId === ''
+        ? null
+        : text(b.smscId, 'smscId');
+    if (smscId && !allowed.includes(smscId))
       throw new BadRequestException('smscId must reference one of your tenant’s SMSCs');
-    return this.sqlbox.submit({
+    return this.send!.send(actor(r), {
       sender: text(b.sender, 'sender'),
       receiver: text(b.receiver, 'receiver'),
       text: text(b.text, 'text'),
@@ -1072,6 +1212,9 @@ export class ReadModelsController {
       dlrMask: b.dlrMask,
       dlrUrl: b.dlrUrl,
       foreignId: b.foreignId,
+      customerId: optionalUuid(b.customerId, 'customerId') ?? null,
+      channel: 'console',
+      operator: typeof b.operator === 'string' ? b.operator : null,
     });
   }
   @Get('queues') @RequirePermissions('messages.view') async queues(

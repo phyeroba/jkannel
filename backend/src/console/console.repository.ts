@@ -239,9 +239,23 @@ export class ConsoleRepository {
   }
   async createSmsc(actor: Actor, value: any) {
     return this.inTenant(actor, async (c) => {
+      // The SMPP attribute columns (migration 029) are written with COALESCE-by
+      // -default semantics: passing NULL keeps the column default, so a caller
+      // that supplies only host/port still gets a bindable SMSC.
       const row = (
         await c.query(
-          'INSERT INTO smsc_definitions(tenant_id,engine_id,name,description,type,host,port,credential_secret_ref,tps,priority,tags,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *',
+          `INSERT INTO smsc_definitions(
+             tenant_id,engine_id,name,description,type,host,port,credential_secret_ref,tps,
+             priority,tags,enabled,created_by,notes,
+             system_id,username_secret_ref,system_type,receive_port,address_range,alt_charset,send_url,
+             bind_mode,interface_version,source_addr_ton,source_addr_npi,dest_addr_ton,dest_addr_npi,
+             window_size,keepalive_seconds,reconnect_delay_seconds,wait_ack_seconds,max_error_count,use_tls)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+                  $15,$16,$17,$18,$19,$20,$21,
+                  COALESCE($22,'transceiver'),COALESCE($23,34),COALESCE($24,0),COALESCE($25,1),
+                  COALESCE($26,1),COALESCE($27,1),COALESCE($28,10),COALESCE($29,30),
+                  COALESCE($30,10),COALESCE($31,60),COALESCE($32,10),COALESCE($33,false))
+           RETURNING *`,
           [
             actor.tenantId,
             value.engineId,
@@ -256,6 +270,26 @@ export class ConsoleRepository {
             value.tags ?? [],
             value.enabled ?? true,
             actor.userId,
+            value.notes ?? null,
+            value.systemId ?? null,
+            value.usernameSecretRef ?? null,
+            value.systemType ?? null,
+            value.receivePort ?? null,
+            value.addressRange ?? null,
+            value.altCharset ?? null,
+            value.sendUrl ?? null,
+            value.bindMode ?? null,
+            value.interfaceVersion ?? null,
+            value.sourceAddrTon ?? null,
+            value.sourceAddrNpi ?? null,
+            value.destAddrTon ?? null,
+            value.destAddrNpi ?? null,
+            value.windowSize ?? null,
+            value.keepaliveSeconds ?? null,
+            value.reconnectDelaySeconds ?? null,
+            value.waitAckSeconds ?? null,
+            value.maxErrorCount ?? null,
+            value.useTls ?? null,
           ],
         )
       ).rows[0];
@@ -269,7 +303,31 @@ export class ConsoleRepository {
       if (!old) throw new NotFoundException('SMSC not found');
       const row = (
         await c.query(
-          'UPDATE smsc_definitions SET name=COALESCE($2,name),host=COALESCE($3,host),port=COALESCE($4,port),tps=COALESCE($5,tps),enabled=COALESCE($6,enabled),updated_at=now() WHERE id=$1 RETURNING *',
+          // Every column is COALESCE(new, existing), so a partial PATCH only
+          // touches the fields the operator supplied.
+          `UPDATE smsc_definitions SET
+             name=COALESCE($2,name),host=COALESCE($3,host),port=COALESCE($4,port),
+             tps=COALESCE($5,tps),enabled=COALESCE($6,enabled),
+             description=COALESCE($7,description),notes=COALESCE($8,notes),
+             credential_secret_ref=COALESCE($9,credential_secret_ref),
+             system_id=COALESCE($10,system_id),
+             username_secret_ref=COALESCE($11,username_secret_ref),
+             system_type=COALESCE($12,system_type),receive_port=COALESCE($13,receive_port),
+             address_range=COALESCE($14,address_range),alt_charset=COALESCE($15,alt_charset),
+             send_url=COALESCE($16,send_url),bind_mode=COALESCE($17,bind_mode),
+             interface_version=COALESCE($18,interface_version),
+             source_addr_ton=COALESCE($19,source_addr_ton),
+             source_addr_npi=COALESCE($20,source_addr_npi),
+             dest_addr_ton=COALESCE($21,dest_addr_ton),
+             dest_addr_npi=COALESCE($22,dest_addr_npi),
+             window_size=COALESCE($23,window_size),
+             keepalive_seconds=COALESCE($24,keepalive_seconds),
+             reconnect_delay_seconds=COALESCE($25,reconnect_delay_seconds),
+             wait_ack_seconds=COALESCE($26,wait_ack_seconds),
+             max_error_count=COALESCE($27,max_error_count),
+             use_tls=COALESCE($28,use_tls),
+             updated_at=now()
+           WHERE id=$1 RETURNING *`,
           [
             id,
             value.name ?? null,
@@ -277,6 +335,28 @@ export class ConsoleRepository {
             value.port ?? null,
             value.tps ?? null,
             value.enabled ?? null,
+            value.description ?? null,
+            value.notes ?? null,
+            value.credentialSecretRef ?? null,
+            value.systemId ?? null,
+            value.usernameSecretRef ?? null,
+            value.systemType ?? null,
+            value.receivePort ?? null,
+            value.addressRange ?? null,
+            value.altCharset ?? null,
+            value.sendUrl ?? null,
+            value.bindMode ?? null,
+            value.interfaceVersion ?? null,
+            value.sourceAddrTon ?? null,
+            value.sourceAddrNpi ?? null,
+            value.destAddrTon ?? null,
+            value.destAddrNpi ?? null,
+            value.windowSize ?? null,
+            value.keepaliveSeconds ?? null,
+            value.reconnectDelaySeconds ?? null,
+            value.waitAckSeconds ?? null,
+            value.maxErrorCount ?? null,
+            value.useTls ?? null,
           ],
         )
       ).rows[0];
@@ -966,6 +1046,23 @@ export class ConsoleRepository {
       const updated = (
         await c.query('SELECT id,username,status,updated_at FROM users WHERE id=$1', [id])
       ).rows[0];
+      // Privilege changes must not survive in an already-issued session.
+      // AuthService.refresh now re-resolves status/roles from the database, so a
+      // demoted user loses their extra permissions within one access-token
+      // lifetime (15 min) even without this; revoking here makes it immediate
+      // and matches archiveUser, which already did it. Triggers on:
+      //   - a status change away from 'active' (disable/expire/lock/archive),
+      //   - any role reassignment,
+      //   - an admin-set password (the token-based reset path already revokes;
+      //     this path previously did not).
+      const deactivated = Boolean(value.status) && value.status !== 'active';
+      const rolesChanged = Array.isArray(value.roleIds);
+      if (deactivated || rolesChanged || value.passwordHash) {
+        await c.query(
+          'UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+          [id],
+        );
+      }
       await this.audit(c, actor, 'user.updated', 'user', id, old, updated, value.reason);
       return updated;
     });

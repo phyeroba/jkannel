@@ -12,10 +12,14 @@ import {
 } from './console.controllers';
 import { ConsoleRepository } from './console.repository';
 import { EngineModule } from '../engine/engine.module';
+import { MessagingDepthModule } from '../messaging-depth/messaging-depth.module';
 import { ConfigurationGeneratorService } from '../configuration/configuration-generator.service';
 import { ConfigurationDeploymentService } from '../configuration/configuration-deployment.service';
 import { ConfigurationDiffService } from '../configuration/configuration-diff.service';
+import { ConfigurationModelBuilder } from '../configuration/configuration-model.builder';
+import { SecretResolver } from '../configuration/secret-resolver.service';
 import { SmscConnectivityService } from '../smsc/smsc-connectivity.service';
+import { SmscService } from '../smsc/smsc.service';
 import { RoutingService } from '../routing/routing.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
 import { AnomalyDetectionService } from '../monitoring/anomaly-detection.service';
@@ -25,7 +29,10 @@ import { ReportingAnalyticsService } from '../reporting/reporting-analytics.serv
 import { ReportingAnalyticsController } from '../reporting/reporting-analytics.controller';
 import { NotificationsController, VolumeReportsController } from './notifications.controllers';
 @Module({
-  imports: [AuthModule, EngineModule],
+  // MessagingDepthModule supplies MessageSendService so the console's
+  // POST /messages goes through the same routing / entitlement / decision
+  // pipeline as every other send path instead of spooling to SQLBox directly.
+  imports: [AuthModule, EngineModule, MessagingDepthModule],
   controllers: [
     SmscController,
     RoutesController,
@@ -44,7 +51,12 @@ import { NotificationsController, VolumeReportsController } from './notification
     ConfigurationGeneratorService,
     ConfigurationDeploymentService,
     ConfigurationDiffService,
+    // Builds EngineConfiguration from smsc_definitions so /configurations/generate
+    // renders the tenant's real SMSCs instead of a caller-supplied model.
+    SecretResolver,
+    ConfigurationModelBuilder,
     SmscConnectivityService,
+    SmscService,
     RoutingService,
     NotificationDeliveryService,
     AnomalyDetectionService,

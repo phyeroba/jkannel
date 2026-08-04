@@ -161,6 +161,73 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Resolves which notification channel a step actually addresses.
+   *
+   * `recordEscalation` used to run `WHERE enabled AND type=$1 LIMIT 1` and
+   * ignore `step.target` entirely, so every level of an escalation chain paged
+   * the same first channel: a policy reading "email L1 at 5 min, email the duty
+   * manager at 15 min" delivered to L1 twice and the manager never heard.
+   *
+   * Resolution order, most specific first:
+   *   1. a channel whose id, name or transport address equals the target;
+   *   2. when nothing matches but exactly one channel of the type exists, that
+   *      channel with its address overridden by the target — an operator
+   *      naming an address that has no channel of its own means "send there";
+   *   3. otherwise the first channel of the type, recorded as `type-default`
+   *      so `alert_escalations.detail` shows the target was not honoured.
+   *
+   * The chosen resolution is always written to the escalation row, so who was
+   * paged (and why) is auditable rather than implied.
+   */
+  routeToTarget(
+    candidates: Array<NotificationChannel & { config: Record<string, unknown> }>,
+    step: EscalationStep,
+  ): {
+    channel?: NotificationChannel & { config: Record<string, unknown> };
+    resolution: 'target-match' | 'target-override' | 'type-default' | 'none';
+  } {
+    if (!candidates.length) return { resolution: 'none' };
+    const target = (step.target ?? '').trim();
+    if (!target) return { channel: candidates[0], resolution: 'type-default' };
+
+    const lowered = target.toLowerCase();
+    const addressOf = (channel: NotificationChannel): string[] =>
+      [
+        channel.id,
+        channel.name,
+        channel.config?.to,
+        channel.config?.url,
+        channel.config?.msisdn,
+        channel.config?.recipient,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => value.toLowerCase());
+
+    const matched = candidates.find((channel) => addressOf(channel).includes(lowered));
+    if (matched) return { channel: matched, resolution: 'target-match' };
+
+    if (candidates.length === 1) {
+      const addressKey =
+        step.channelType === 'email'
+          ? 'to'
+          : step.channelType === 'webhook'
+            ? 'url'
+            : step.channelType === 'sms'
+              ? 'msisdn'
+              : null;
+      if (addressKey)
+        return {
+          channel: {
+            ...candidates[0],
+            config: { ...candidates[0].config, [addressKey]: target },
+          },
+          resolution: 'target-override',
+        };
+    }
+    return { channel: candidates[0], resolution: 'type-default' };
+  }
+
   private async lastStepIndex(
     client: PoolClient,
     tenantId: string,
@@ -199,12 +266,15 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
     };
 
     if (!suppressed && this.notifications) {
-      const channel = (
+      const candidates = (
         await client.query<NotificationChannel & { config: Record<string, unknown> }>(
-          'SELECT id,name,type,enabled,severities,config FROM notification_channels WHERE enabled=true AND type=$1 LIMIT 1',
+          'SELECT id,name,type,enabled,severities,config FROM notification_channels WHERE enabled=true AND type=$1 ORDER BY created_at ASC',
           [due.step.channelType],
         )
-      ).rows[0];
+      ).rows;
+      const routed = this.routeToTarget(candidates, due.step);
+      const channel = routed.channel;
+      detail.targetResolution = routed.resolution;
       if (channel) {
         const alert = (
           await client.query<{ summary: string; status: string; severity: string }>(
@@ -229,7 +299,11 @@ export class AlertEscalationService implements OnModuleInit, OnModuleDestroy {
         detail.delivery = attempt;
         status = attempt.status === 'succeeded' ? 'notified' : 'failed';
       } else {
-        detail.delivery = { reason: `no enabled ${due.step.channelType} channel` };
+        detail.delivery = {
+          reason: due.step.target
+            ? `no enabled ${due.step.channelType} channel for target '${due.step.target}'`
+            : `no enabled ${due.step.channelType} channel`,
+        };
       }
     }
 

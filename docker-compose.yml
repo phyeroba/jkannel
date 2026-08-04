@@ -202,9 +202,22 @@ services:
     profiles: ["engine-kamex"]
     image: ghcr.io/vaska94/kamex:1.8.3@sha256:c13f0e390bf0cbadef55440a6dc584670851faf41e42a027644e984502a21d7d
     command: ["/etc/kamex/kamex.conf"]
+    # Kamex expands ${VAR} from its OWN environment when it parses the config, so
+    # every placeholder a generated config references must be present HERE, not
+    # just in the backend. An unset variable expands to an empty string, which for
+    # an smsc-password means the bind fails authentication with no obvious cause.
+    # `POST /configurations/generate` returns `requiredSecrets` listing exactly the
+    # variables the rendered file needs — add each one to this block (and to .env)
+    # before deploying a carrier configuration.
     environment:
       KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
       KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
+      # Referenced by the sendsms-user group in the shipped config.
+      KAMEX_SENDSMS_PASSWORD: ${KAMEX_SENDSMS_PASSWORD}
+      # Carrier bind credential for a generated SMPP smsc group. The name must
+      # match the secret:// reference on the SMSC record — secret://kamex/foo
+      # renders as ${KAMEX_FOO}. Empty by default so the stack starts without one.
+      KAMEX_CARRIER_PASSWORD: ${KAMEX_CARRIER_PASSWORD:-}
     volumes:
       - ./runtime/kamex/kamex.conf:/etc/kamex/kamex.conf:ro
       - kamex-spool:/var/spool/kamex

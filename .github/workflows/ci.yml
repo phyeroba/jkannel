@@ -1,0 +1,281 @@
+# JKANNEL continuous integration.
+#
+# Design notes for whoever edits this next:
+#
+#  * `backend`, `frontend`, `compose`, `migrations` and `security` are five
+#    independent jobs with no `needs:` between them, so they run in parallel and
+#    a slow docker job never delays the unit-test feedback.
+#  * Node is pinned to 22 to match `node:22-alpine` in backend/Dockerfile and
+#    frontend/Dockerfile and the `"engines": { "node": ">=22" }` in both
+#    package.json files. Bump all four together.
+#  * Action versions are pinned to exact release tags, not floating majors.
+#  * Every step that is currently NON-BLOCKING carries a `continue-on-error`
+#    together with a comment stating exactly what must be done to make it
+#    blocking. Nothing is non-blocking "just in case" — a red pipeline nobody
+#    trusts is worse than no pipeline, and a permanently-yellow step is a TODO
+#    with an owner.
+#  * Nothing here starts a container, applies a migration, or touches a real
+#    environment. `docker compose config` only parses and renders YAML.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A newer push to the same branch/PR cancels the in-flight run; the default
+# branch is exempted so main always gets a complete recorded result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend: NestJS + TypeScript. Types, formatting, lint, and the Jest unit
+  # suite with coverage thresholds enforced (see "jest.coverageThreshold" in
+  # backend/package.json). The integration suite (`npm run test:integration`) is
+  # deliberately NOT run here: it needs a live Postgres with RLS configured.
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend (typecheck, format, lint, tests + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Prettier format check
+        run: npm run format:check
+
+      # Blocking. The ruleset in backend/eslint.config.mjs is tuned so that the
+      # current tree has zero ESLint *errors*; warnings are the known follow-up
+      # backlog and do not fail the build.
+      - name: ESLint
+        run: npm run lint
+
+      # Blocking, including the coverage floor. Thresholds were set from the
+      # measured baseline, floored to whole percents, so this holds the line
+      # rather than demanding new work on day one.
+      - name: Unit tests with coverage
+        run: npm run test:cov
+
+      - name: Upload backend coverage
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: backend-coverage
+          path: backend/coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Frontend: Vue 3 + Vite. `npm run build` runs `vue-tsc -b` first, so the build
+  # IS the typecheck — there is no separate tsc step.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (build/vue-tsc, format, lint, tests + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Prettier format check
+        run: npm run format:check
+
+      - name: Build (vue-tsc typecheck + vite build)
+        run: npm run build
+
+      # Blocking. frontend/eslint.config.js is tuned to zero errors on the
+      # current tree; warnings are the visible follow-up backlog.
+      - name: ESLint
+        run: npm run lint
+
+      # Blocking, including the coverage floor (thresholds are passed on the
+      # command line in the "test:cov" script so vite.config.ts stays untouched).
+      - name: Unit tests with coverage
+        run: npm run test:cov
+
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Compose topology. `docker compose config` interpolates the env file, merges
+  # the overlays and validates the schema WITHOUT pulling images or starting
+  # anything, so it is cheap and completely non-destructive. It catches the
+  # mistakes that otherwise only surface on a deploy: an undefined service
+  # reference, a bad depends_on condition, a typo'd variable, invalid YAML.
+  # ---------------------------------------------------------------------------
+  compose:
+    name: Docker Compose topology
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Validate base topology
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Validate HA overlay
+        run: |
+          if [ -f docker-compose.ha.yml ]; then
+            docker compose --env-file .env.example \
+              -f docker-compose.yml -f docker-compose.ha.yml config --quiet
+          else
+            echo "docker-compose.ha.yml not present — skipping HA overlay validation."
+          fi
+
+      # Cross-checks that every service the base topology declares actually has
+      # either an image or a build context; `config` alone tolerates neither in
+      # some Compose versions.
+      - name: Assert every service is buildable or pullable
+        run: |
+          docker compose --env-file .env.example config --format json > /tmp/compose.json
+          node -e '
+            const c = JSON.parse(require("fs").readFileSync("/tmp/compose.json", "utf8"));
+            const bad = Object.entries(c.services || {})
+              .filter(([, s]) => !s.image && !s.build)
+              .map(([n]) => n);
+            if (bad.length) {
+              console.error("Services with neither image nor build: " + bad.join(", "));
+              process.exit(1);
+            }
+            console.log("Compose OK: " + Object.keys(c.services || {}).length + " services, all resolvable.");
+          '
+
+  # ---------------------------------------------------------------------------
+  # Migration hygiene. Pure filesystem check — no database is contacted.
+  # ---------------------------------------------------------------------------
+  migrations:
+    name: Migration up/down pairing and numbering
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Blocking for the failure modes that actually break the migration runner:
+      # a missing .up/.down counterpart, a duplicated migration number, or a
+      # malformed filename.
+      #
+      # Numbering GAPS are reported as GitHub annotations but do not fail the
+      # build, because the tree currently has one: 030 is missing between
+      # 029_smsc_attributes and 031_engine_observability. To make gaps blocking,
+      # add the missing 030 migration (or renumber 031 to 030) and then append
+      # `--strict` to the command below.
+      - name: Check migrations
+        run: node .github/scripts/check-migrations.mjs
+
+  # ---------------------------------------------------------------------------
+  # Dependency audit. NON-BLOCKING BY DESIGN, for now.
+  #
+  # `npm audit` is advisory-database driven, which means a brand-new advisory
+  # against a transitive dependency can turn every PR red overnight through no
+  # fault of the author. Adopting a red-on-day-two pipeline is how teams learn to
+  # ignore CI. So this job reports and annotates but never fails the build.
+  #
+  # TO MAKE IT BLOCKING: (1) run `npm audit --audit-level=high` in backend/ and
+  # frontend/ and drive the count to zero (via `npm audit fix`, dependency bumps,
+  # or documented `overrides` in package.json — the repo already uses one for
+  # multer); (2) delete the `continue-on-error: true` lines below. Consider
+  # pairing that with Dependabot so upgrades arrive as PRs rather than as a
+  # surprise red build.
+  # ---------------------------------------------------------------------------
+  security:
+    name: Dependency audit (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Audit backend dependencies
+        id: audit_backend
+        continue-on-error: true # see "TO MAKE IT BLOCKING" above
+        working-directory: backend
+        run: npm audit --audit-level=high
+
+      - name: Audit frontend dependencies
+        id: audit_frontend
+        continue-on-error: true # see "TO MAKE IT BLOCKING" above
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      - name: Audit e2e dependencies
+        id: audit_e2e
+        continue-on-error: true # see "TO MAKE IT BLOCKING" above
+        working-directory: e2e
+        run: npm audit --audit-level=high
+
+      # Surfaces the result in the run summary so a failing audit is visible even
+      # though it is not fatal. Without this the yellow marker is easy to miss.
+      - name: Summarise audit results
+        if: always()
+        run: |
+          {
+            echo "### Dependency audit (advisory — does not fail CI)"
+            echo ""
+            echo "| package | \`npm audit --audit-level=high\` |"
+            echo "| --- | --- |"
+            echo "| backend | ${{ steps.audit_backend.outcome }} |"
+            echo "| frontend | ${{ steps.audit_frontend.outcome }} |"
+            echo "| e2e | ${{ steps.audit_e2e.outcome }} |"
+            echo ""
+            echo "A \`failure\` outcome means at least one high or critical advisory is open."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -24,6 +24,8 @@ const text = (value: unknown, name: string): string => {
     throw new BadRequestException(`${name} is required`);
   return value.trim();
 };
+const optionalText = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
 const uuid = (value: unknown, name: string): string => {
   const x = text(value, name);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(x))
@@ -59,12 +61,23 @@ function parseRecipients(value: unknown): string[] {
 export class BulkSendController {
   constructor(private readonly service: BulkSendService) {}
 
+  /**
+   * `smscId` is now OPTIONAL: omit it and the routing engine picks the bind for
+   * each recipient at dispatch time, honouring route configuration, deployment
+   * state and live bind health. `customerId` attributes the campaign so its
+   * quota, credit, sender IDs and route bindings are enforced per message.
+   */
   @Post() @RequirePermissions('configuration.manage') create(@Req() r: Request, @Body() b: any) {
     return this.service.createJob(actor(r), {
       name: text(b?.name, 'name'),
-      smscId: text(b?.smscId, 'smscId'),
+      smscId: optionalText(b?.smscId),
       message: text(b?.message, 'message'),
       recipients: parseRecipients(b?.recipients),
+      sender: optionalText(b?.sender),
+      customerId:
+        b?.customerId === undefined || b?.customerId === null || b?.customerId === ''
+          ? undefined
+          : uuid(b.customerId, 'customerId'),
     });
   }
 

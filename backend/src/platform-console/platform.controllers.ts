@@ -17,6 +17,7 @@ import { PermissionsGuard, RequirePermissions } from '../security/permissions.gu
 import { Actor, PlatformConsoleRepository } from './platform-console.repository';
 import { RuntimeContainersService } from './runtime-containers.service';
 import { ExportColumn, ExportService } from '../platform/export.service';
+import { PluginManifestValidator } from '../plugins/plugin-manifest.validator';
 
 type Request = AuthenticatedRequest;
 const actor = (r: Request): Actor => ({
@@ -170,6 +171,16 @@ export class ApiGatewayController {
 @Controller('plugins')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class PluginsController {
+  /**
+   * PluginManifestValidator was thorough, tested and had ZERO callers: the
+   * install path below inserted posted JSON verbatim after checking only
+   * `if (!b.id)`, so an unsigned manifest with wildcard permissions, a
+   * traversing entrypoint or a mismatched checksum installed cleanly. It is
+   * instantiated directly (rather than injected) because it is stateless and
+   * because a DI misconfiguration must not be able to silently skip it.
+   */
+  private readonly manifests = new PluginManifestValidator();
+
   constructor(private readonly repository: PlatformConsoleRepository) {}
 
   @Get() @RequirePermissions('system.view') list(@Req() r: Request, @Query() q: any = {}) {
@@ -184,10 +195,28 @@ export class PluginsController {
   @Get(':id') @RequirePermissions('system.view') get(@Req() r: Request, @Param('id') id: string) {
     return this.repository.getPlugin(actor(r), uuid(id, 'id'));
   }
+  /**
+   * Installs a plugin AFTER validating its manifest. A manifest that fails
+   * validation is rejected with the full, path-annotated issue list so the
+   * author can fix it — nothing is written to plugin_registrations.
+   *
+   * In production an approved publisher key (PLUGIN_PUBLISHER_PUBLIC_KEY) is
+   * required, so an unsigned or foreign-signed plugin cannot be installed on a
+   * production deployment.
+   */
   @Post('install') @RequirePermissions('system.manage') install(@Req() r: Request, @Body() b: any) {
     if (!b || typeof b !== 'object' || !b.id)
       throw new BadRequestException('A plugin manifest with an id is required');
-    return this.repository.installPlugin(actor(r), b);
+    const result = this.manifests.validate(b, {
+      production: process.env.NODE_ENV === 'production',
+      publisherPublicKeyPem: process.env.PLUGIN_PUBLISHER_PUBLIC_KEY,
+    });
+    if (!result.valid)
+      throw new BadRequestException({
+        message: 'Plugin manifest is invalid; the plugin was not installed',
+        issues: result.issues,
+      });
+    return this.repository.installPlugin(actor(r), result.manifest ?? b);
   }
   @Post(':id/enable') @RequirePermissions('system.manage') enable(
     @Req() r: Request,

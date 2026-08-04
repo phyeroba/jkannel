@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
+import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
 import './workspace-extras.css';
 
@@ -34,6 +35,12 @@ interface ColumnDefinition {
   header: string;
   value: (raw: RecordValue) => string;
   mono?: boolean;
+  /** Render the value as a status badge; the string is also used as the tone class. */
+  badge?: (raw: RecordValue) => string;
+  /** Leading state dot, e.g. the SMSC reachability indicator. */
+  dot?: (raw: RecordValue) => string;
+  /** Small muted line under the value (health samples, secondary identifiers). */
+  hint?: (raw: RecordValue) => string;
 }
 
 interface Workspace {
@@ -74,12 +81,91 @@ function formatBytes(value: unknown, fallback = '—') {
   return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
 }
 
+/** Status string → the badge tone classes the stylesheet already defines. */
+function badgeTone(value: unknown) {
+  const status = String(value ?? '').toLowerCase();
+  if (
+    [
+      'delivered',
+      'active',
+      'enabled',
+      'resolved',
+      'complete',
+      'completed',
+      'ok',
+      'verified',
+    ].includes(status)
+  )
+    return 'good';
+  if (['pending', 'buffered', 'accepted', 'acknowledged', 'warning', 'degraded'].includes(status))
+    return 'warn';
+  if (['failed', 'rejected', 'critical', 'open', 'disabled', 'archived', 'error'].includes(status))
+    return 'bad';
+  return '';
+}
+
+/** Kannel DLR event mask → the outcome it reports (see DLR_EVENT_STATUS). */
+const DLR_EVENTS: Record<string, string> = {
+  '1': 'delivered',
+  '2': 'failed',
+  '4': 'buffered',
+  '8': 'accepted by SMSC',
+  '16': 'rejected by SMSC',
+};
+function dlrEventLabel(raw: RecordValue) {
+  const event = raw.dlrEvent ?? raw.dlr_event;
+  if (event === null || event === undefined || event === '') return 'no report yet';
+  return DLR_EVENTS[String(event)] ?? `mask ${event}`;
+}
+
+/** "host:port", collapsing to a single dash when neither is configured. */
+function hostPort(raw: RecordValue) {
+  const host = text(raw.host, '');
+  const port = text(raw.port, '');
+  if (!host && !port) return '—';
+  return port ? `${host || '—'}:${port}` : host;
+}
+
+/** Trims long message bodies so one row stays one row. */
+function truncate(value: unknown, limit = 80) {
+  const body = text(value, '');
+  if (!body) return '—';
+  return body.length > limit ? `${body.slice(0, limit)}…` : body;
+}
+
 const definitions: Record<string, Workspace> = {
   messages: {
     noun: 'message',
     search: 'Message ID, sender, recipient, or status',
     endpoint: '/messages',
     action: 'Refresh',
+    columns: [
+      { header: 'When', value: (raw) => text(raw.timestamp ?? raw.time) },
+      { header: 'Dir', value: (raw) => text(raw.direction ?? raw.momt) },
+      {
+        header: 'Delivery',
+        value: (raw) => text(raw.deliveryStatus ?? raw.delivery_status ?? raw.status),
+        badge: (raw) => badgeTone(raw.deliveryStatus ?? raw.delivery_status ?? raw.status),
+        hint: (raw) => text(raw.status, ''),
+      },
+      { header: 'Sender', value: (raw) => text(raw.sender), mono: true },
+      { header: 'Receiver', value: (raw) => text(raw.receiver), mono: true },
+      { header: 'Message', value: (raw) => truncate(raw.text ?? raw.msgdata) },
+      { header: 'SMSC', value: (raw) => text(raw.smscId ?? raw.smsc_id), mono: true },
+      {
+        header: 'DLR',
+        value: (raw) => dlrEventLabel(raw),
+        hint: (raw) => text(raw.dlrAt ?? raw.dlr_at, ''),
+      },
+      { header: 'Service', value: (raw) => text(raw.service) },
+      { header: 'Account', value: (raw) => text(raw.account) },
+      {
+        header: 'Reference',
+        value: (raw) => text(raw.externalRef ?? raw.foreign_id),
+        mono: true,
+        hint: (raw) => text(raw.id, ''),
+      },
+    ],
   },
   queues: {
     noun: 'queue',
@@ -133,6 +219,36 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/smscs/export',
     },
+    columns: [
+      {
+        header: 'SMSC',
+        value: (raw) => text(raw.name),
+        dot: (raw) => smscDotClass(raw),
+        hint: (raw) => text(raw.engine_id ?? raw.engineId, ''),
+      },
+      { header: 'Type', value: (raw) => text(raw.type) },
+      { header: 'Host:port', value: (raw) => hostPort(raw), mono: true },
+      {
+        header: 'System ID',
+        value: (raw) => text(raw.credential_secret_ref ?? raw.credentialSecretRef),
+        mono: true,
+      },
+      { header: 'TPS', value: (raw) => text(raw.tps) },
+      { header: 'Priority', value: (raw) => text(raw.priority) },
+      {
+        header: 'Lifecycle',
+        value: (raw) => text(raw.lifecycle_state ?? raw.lifecycleState),
+        badge: (raw) => badgeTone(raw.lifecycle_state ?? raw.lifecycleState),
+      },
+      {
+        header: 'Enabled',
+        value: (raw) => (raw.enabled === true || raw.enabled === 'true' ? 'yes' : 'no'),
+      },
+      { header: 'Health', value: (raw) => smscHealthText(raw) || '—' },
+      { header: 'Tags', value: (raw) => list(raw.tags) },
+      { header: 'Last error', value: (raw) => truncate(raw.last_error ?? raw.lastError, 48) },
+      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
+    ],
   },
   routing: {
     noun: 'route',
@@ -156,6 +272,61 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/routes/export',
     },
+    columns: [
+      { header: 'Priority', value: (raw) => text(raw.priority), mono: true },
+      {
+        header: 'Route',
+        value: (raw) => text(raw.name),
+        hint: (raw) => text(raw.route_type ?? raw.routeType, ''),
+      },
+      { header: 'Strategy', value: (raw) => text(raw.strategy) },
+      {
+        header: 'Matches',
+        value: (raw) =>
+          [
+            (raw.match_prefix ?? raw.matchPrefix)
+              ? `prefix ${text(raw.match_prefix ?? raw.matchPrefix)}`
+              : '',
+            (raw.country_code ?? raw.countryCode)
+              ? `country +${text(raw.country_code ?? raw.countryCode)}`
+              : '',
+            raw.operator ? `operator ${text(raw.operator)}` : '',
+            (raw.destination_prefix ?? raw.destinationPrefix)
+              ? `destination ${text(raw.destination_prefix ?? raw.destinationPrefix)}`
+              : '',
+            raw.sender ? `sender ${text(raw.sender)}` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'any destination',
+      },
+      {
+        header: 'Target SMSC',
+        value: (raw) => text(raw.target_smsc_name ?? raw.targetSmscName ?? raw.target_smsc_id),
+      },
+      {
+        header: 'Fallback',
+        value: (raw) =>
+          text(raw.fallback_smsc_name ?? raw.fallbackSmscName ?? raw.fallback_smsc_id),
+      },
+      { header: 'Cost', value: (raw) => text(raw.cost), mono: true },
+      {
+        header: 'Window',
+        value: (raw) =>
+          raw.window_start && raw.window_end
+            ? `${text(raw.window_start)}–${text(raw.window_end)}`
+            : 'always',
+      },
+      {
+        header: 'Deployment',
+        value: (raw) => text(raw.deployment_state ?? raw.deploymentState),
+        badge: (raw) => badgeTone(raw.deployment_state ?? raw.deploymentState),
+      },
+      {
+        header: 'Enabled',
+        value: (raw) => (raw.enabled === false || raw.enabled === 'false' ? 'no' : 'yes'),
+      },
+      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
+    ],
   },
   configuration: {
     noun: 'configuration',
@@ -192,6 +363,20 @@ const definitions: Record<string, Workspace> = {
     search: 'Metric, service, label, or state',
     endpoint: '/monitoring',
     action: 'Refresh',
+    columns: [
+      {
+        header: 'Component',
+        value: (raw) => text(raw.name),
+        hint: (raw) => text(raw.id, ''),
+      },
+      {
+        header: 'State',
+        value: (raw) => text(raw.status ?? raw.state),
+        badge: (raw) => badgeTone(raw.status ?? raw.state),
+      },
+      { header: 'Detail', value: (raw) => text(raw.detail) },
+      { header: 'Observed', value: (raw) => text(raw.updatedAt ?? raw.updated_at) },
+    ],
   },
   alerts: {
     noun: 'alert',
@@ -208,6 +393,38 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/alerts/export',
     },
+    columns: [
+      {
+        header: 'Severity',
+        value: (raw) => text(raw.severity ?? raw.rule_severity),
+        badge: (raw) => badgeTone(raw.severity ?? raw.rule_severity),
+      },
+      {
+        header: 'Condition',
+        value: (raw) => text(raw.summary ?? raw.rule_name),
+        hint: (raw) => text(raw.id, ''),
+      },
+      {
+        header: 'Status',
+        value: (raw) => text(raw.status),
+        badge: (raw) => badgeTone(raw.status),
+      },
+      { header: 'Source', value: (raw) => text(raw.source) },
+      { header: 'Rule', value: (raw) => text(raw.rule_name ?? raw.ruleName) },
+      { header: 'Occurrences', value: (raw) => text(raw.dedup_count ?? raw.dedupCount, '1') },
+      {
+        header: 'Correlation',
+        value: (raw) => text(raw.correlation_group ?? raw.correlationGroup),
+        mono: true,
+      },
+      { header: 'Opened', value: (raw) => text(raw.opened_at ?? raw.openedAt) },
+      {
+        header: 'Acknowledged',
+        value: (raw) => text(raw.acknowledged_by ?? raw.acknowledgedBy),
+        hint: (raw) => text(raw.acknowledged_at ?? raw.acknowledgedAt, ''),
+      },
+      { header: 'Resolved', value: (raw) => text(raw.resolved_at ?? raw.resolvedAt) },
+    ],
   },
   reports: {
     noun: 'volume report',
@@ -366,11 +583,23 @@ const definitions: Record<string, Workspace> = {
       { header: 'Label', value: (raw) => text(raw.label) },
       { header: 'Scope', value: (raw) => text(raw.scope) },
       { header: 'Kind', value: (raw) => text(raw.kind) },
-      { header: 'Status', value: (raw) => text(raw.status) },
+      {
+        header: 'Status',
+        value: (raw) => text(raw.status),
+        badge: (raw) => badgeTone(raw.status),
+      },
+      { header: 'Retention', value: (raw) => text(raw.retention_class ?? raw.retentionClass) },
+      { header: 'Verified', value: (raw) => text(raw.verified_at ?? raw.verifiedAt, 'never') },
       { header: 'Size', value: (raw) => formatBytes(raw.size_bytes ?? raw.sizeBytes) },
+      {
+        header: 'Offsite',
+        value: (raw) => text(raw.offsite_synced_at ?? raw.offsiteSyncedAt, 'not synced offsite'),
+        hint: (raw) => text(raw.offsite_location ?? raw.offsiteLocation, ''),
+      },
       { header: 'Checksum', value: (raw) => text(raw.checksum), mono: true },
       { header: 'Started', value: (raw) => text(raw.started_at ?? raw.startedAt) },
       { header: 'Completed', value: (raw) => text(raw.completed_at ?? raw.completedAt) },
+      { header: 'Warning', value: (raw) => truncate(raw.warning, 48) },
     ],
   },
   users: {
@@ -393,6 +622,21 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/users/export',
     },
+    columns: [
+      {
+        header: 'User',
+        value: (raw) => text(raw.username),
+        hint: (raw) => text(raw.id, ''),
+      },
+      {
+        header: 'Status',
+        value: (raw) => text(raw.status),
+        badge: (raw) => badgeTone(raw.status),
+      },
+      { header: 'Roles', value: (raw) => list(raw.roles) },
+      { header: 'Created', value: (raw) => text(raw.created_at ?? raw.createdAt) },
+      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
+    ],
   },
   system: {
     noun: 'setting',
@@ -433,6 +677,29 @@ const smscPort = ref(2775);
 const smscTps = ref(10);
 
 /* Server-side grid state (search is shared with the legacy client filter). */
+/* Message search (G13): the SQLBox read model filters on delivery status,
+   direction and SMSC server-side; the date range is applied here as well —
+   see messageParams()/messageDateFiltered for exactly what is server-side. */
+const msgStatus = ref('');
+const msgDirection = ref('');
+const msgSmscId = ref('');
+const msgFrom = ref('');
+const msgTo = ref('');
+const msgLimit = ref(100);
+const MESSAGE_STATUS_CHOICES = [
+  { value: '', label: 'Any delivery status' },
+  { value: 'resendable', label: 'Resendable failures (failed + rejected)' },
+  { value: 'in-flight', label: 'In flight (pending + buffered)' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'accepted', label: 'Accepted by SMSC' },
+  { value: 'buffered', label: 'Buffered at SMSC' },
+  { value: 'pending', label: 'Pending (no report yet)' },
+  { value: 'unknown', label: 'Unknown' },
+  { value: 'delivery_report', label: 'Delivery receipts only' },
+];
+
 const sortField = ref('');
 const sortDirection = ref<'asc' | 'desc'>('asc');
 const gridFilters = ref<Record<string, string>>({});
@@ -515,6 +782,24 @@ const restoreReason = ref('');
 const showBackupModal = ref(false);
 const backupLabel = ref('');
 const backupScope = ref<'full' | 'database' | 'configurations'>('full');
+/** Mirrors backup-dr.controller.ts: kind full|schema|incremental, six retention classes. */
+const BACKUP_KINDS = ['full', 'schema', 'incremental'];
+const RETENTION_CLASSES = ['hourly', 'daily', 'weekly', 'monthly', 'yearly', 'manual'];
+const backupKind = ref('full');
+const backupRetention = ref('manual');
+const backupSchedules = ref<RecordValue[]>([]);
+const backupSchedulesError = ref('');
+const backupSchedulesMissing = ref(false);
+const showScheduleForm = ref(false);
+const scheduleName = ref('');
+const scheduleMode = ref<'interval' | 'cron'>('interval');
+const scheduleCron = ref('0 2 * * *');
+const scheduleIntervalMinutes = ref(1440);
+const scheduleKind = ref('full');
+const scheduleRetention = ref('daily');
+const scheduleEnabled = ref(true);
+const scheduleError = ref('');
+const retentionSweep = ref<Array<RecordValue> | null>(null);
 
 /* Message trace drawer. */
 const messageOpen = ref(false);
@@ -590,6 +875,7 @@ const visibleRows = computed(() => {
   if (grid.value) return rows.value;
   return rows.value
     .filter((row) => state.value === 'All' || row.status === state.value)
+    .filter((row) => key.value !== 'messages' || withinMessageDates(row))
     .filter((row) =>
       `${row.id} ${row.name} ${row.detail} ${row.status}`
         .toLowerCase()
@@ -604,6 +890,7 @@ const hasRowActions = computed(
     key.value === 'notifications' ||
     key.value === 'plugins' ||
     key.value === 'backup' ||
+    key.value === 'alerts' ||
     key.value === 'api-gateway',
 );
 const columnCount = computed(
@@ -619,6 +906,7 @@ const canGenerateReports = computed(() => canAccess(session.value, 'system.manag
 const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
 const canManageSystem = computed(() => canAccess(session.value, 'system.manage'));
 const canManageConfig = computed(() => canAccess(session.value, 'configuration.manage'));
+const canAcknowledgeAlerts = computed(() => canAccess(session.value, 'alerts.acknowledge'));
 
 const isQueue = computed(() => key.value === 'queues');
 const isDlr = computed(() => key.value === 'delivery-reports');
@@ -699,6 +987,40 @@ function buildGridQuery(overrides: { limit?: number; offset?: number } = {}) {
   return params;
 }
 
+/**
+ * Query string for the SQLBox message read model. `status`, `direction`,
+ * `smscId`, `query` and `limit` are honoured server-side. `from`/`to` are sent
+ * too — the console applies them to the loaded page regardless, because the
+ * message API does not filter on a date range yet (see messageDateFiltered).
+ */
+function messageParams(limitOverride?: number) {
+  const params = new URLSearchParams();
+  if (query.value.trim()) params.set('query', query.value.trim());
+  if (msgStatus.value) params.set('status', msgStatus.value);
+  if (msgDirection.value) params.set('direction', msgDirection.value);
+  if (msgSmscId.value.trim()) params.set('smscId', msgSmscId.value.trim());
+  const from = msgFrom.value ? Date.parse(msgFrom.value) : NaN;
+  const to = msgTo.value ? Date.parse(msgTo.value) : NaN;
+  if (Number.isFinite(from)) params.set('from', new Date(from).toISOString());
+  if (Number.isFinite(to)) params.set('to', new Date(to).toISOString());
+  params.set('limit', String(limitOverride ?? msgLimit.value));
+  return params;
+}
+const messageDateFiltered = computed(() => Boolean(msgFrom.value || msgTo.value));
+function withinMessageDates(row: Row) {
+  if (!messageDateFiltered.value) return true;
+  const stamp = Date.parse(text(row.raw.timestamp ?? row.raw.time ?? row.updated, ''));
+  if (!Number.isFinite(stamp)) return false;
+  const from = msgFrom.value ? Date.parse(msgFrom.value) : NaN;
+  const to = msgTo.value ? Date.parse(msgTo.value) : NaN;
+  if (Number.isFinite(from) && stamp < from) return false;
+  if (Number.isFinite(to) && stamp > to) return false;
+  return true;
+}
+function applyMessageFilters() {
+  void load();
+}
+
 function detectUnavailableSource(payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
   const source = (payload as RecordValue).source;
@@ -729,9 +1051,12 @@ async function load(preserveNotice = false) {
     } else if (isSystem.value) {
       await loadSettings();
     } else {
-      const path = grid.value
-        ? `${workspace.value.endpoint}?${buildGridQuery().toString()}`
-        : workspace.value.endpoint;
+      const path =
+        key.value === 'messages'
+          ? `/messages?${messageParams().toString()}`
+          : grid.value
+            ? `${workspace.value.endpoint}?${buildGridQuery().toString()}`
+            : workspace.value.endpoint;
       const payload = await apiRequest<unknown>(path);
       const page = normalize(payload);
       rows.value = page.items;
@@ -752,6 +1077,7 @@ async function load(preserveNotice = false) {
   }
   if (key.value === 'reports') void loadDeliverySummary();
   if (key.value === 'configuration') void loadConfigDepth();
+  if (key.value === 'backup') void loadBackupSchedules();
 }
 
 async function loadCursorPage() {
@@ -1195,7 +1521,8 @@ async function instantiateTemplate(row: RecordValue) {
     );
     notice.value = `Template “${text(row.name)}” instantiated.`;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The template could not be instantiated.';
+    error.value =
+      reason instanceof Error ? reason.message : 'The template could not be instantiated.';
   } finally {
     loading.value = false;
   }
@@ -1492,6 +1819,8 @@ function openBackupModal() {
   showBackupModal.value = true;
   backupLabel.value = '';
   backupScope.value = 'full';
+  backupKind.value = 'full';
+  backupRetention.value = 'manual';
 }
 async function submitBackup() {
   loading.value = true;
@@ -1501,8 +1830,8 @@ async function submitBackup() {
     await apiRequest('/backup-dr', {
       method: 'POST',
       body: JSON.stringify({
-        kind: 'full',
-        retentionClass: 'manual',
+        kind: backupKind.value,
+        retentionClass: backupRetention.value,
         scope: backupScope.value,
         ...(backupLabel.value.trim() ? { label: backupLabel.value.trim() } : {}),
       }),
@@ -1902,6 +2231,57 @@ async function markNotificationRead(row: Row) {
   }
 }
 
+/**
+ * Alert lifecycle. The API exposes exactly two mutations on an alert instance —
+ * POST :id/acknowledgements and POST :id/notifications — both gated on
+ * alerts.acknowledge. There is no resolve/assign/suppress endpoint and the
+ * alert_instances CHECK only permits open/acknowledged/resolved, so no button
+ * is offered for actions the backend cannot perform. Planned suppression is
+ * done with a maintenance window (Escalation & Maintenance).
+ */
+async function acknowledgeAlert(row: Row) {
+  if (!canAcknowledgeAlerts.value) return;
+  const note = window.prompt(
+    `Acknowledge “${row.raw.summary ?? row.name}”?\n\nOptional note recorded with the acknowledgement (it stops escalation):`,
+    '',
+  );
+  if (note === null) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    await apiRequest(`/alerts/${row.id}/acknowledgements`, {
+      method: 'POST',
+      body: JSON.stringify(note.trim() ? { note: note.trim() } : {}),
+    });
+    notice.value = 'Alert acknowledged; escalation for it stops here.';
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The alert could not be acknowledged.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function notifyAlert(row: Row) {
+  if (!canAcknowledgeAlerts.value) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const result = await apiRequest<{ attempts?: unknown[] }>(`/alerts/${row.id}/notifications`, {
+      method: 'POST',
+      body: '{}',
+    });
+    const attempts = Array.isArray(result.attempts) ? result.attempts.length : 0;
+    notice.value = attempts
+      ? `Alert re-sent to ${attempts} notification channel(s).`
+      : 'No notification channels are configured, so nothing was sent.';
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'The notification could not be sent.';
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function primaryAction() {
   const value = workspace.value;
   if (!value) return;
@@ -2113,10 +2493,8 @@ async function exportMessages(format: 'csv' | 'pdf' = 'csv') {
   error.value = '';
   notice.value = '';
   try {
-    const params = new URLSearchParams();
-    if (query.value.trim()) params.set('query', query.value.trim());
-    if (state.value !== 'All') params.set('status', state.value);
-    params.set('limit', '5000');
+    // The export carries the same filter set the grid is showing.
+    const params = messageParams(5000);
     const exported = await apiDownloadFile(`/messages/export.${format}?${params.toString()}`);
     saveDownloadedFile(exported.blob, exported.filename);
     notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'} SQLBox rows.`;
@@ -2154,6 +2532,142 @@ async function checkRetention(apply = false) {
     loading.value = false;
   }
 }
+
+// --- Backup schedules & retention (GET/POST /backup-dr/schedules) -----------
+async function loadBackupSchedules() {
+  backupSchedulesError.value = '';
+  backupSchedulesMissing.value = false;
+  try {
+    const payload = await apiRequest<RecordValue>('/backup-dr/schedules?limit=100&offset=0');
+    backupSchedules.value = Array.isArray(payload.items)
+      ? (payload.items as RecordValue[])
+      : Array.isArray(payload)
+        ? (payload as unknown as RecordValue[])
+        : [];
+  } catch (reason) {
+    backupSchedules.value = [];
+    backupSchedulesMissing.value =
+      reason instanceof ApiError && (reason.status === 404 || reason.status === 501);
+    backupSchedulesError.value =
+      reason instanceof Error ? reason.message : 'Backup schedules could not be loaded.';
+  }
+}
+
+function openScheduleForm() {
+  showScheduleForm.value = true;
+  scheduleError.value = '';
+  scheduleName.value = '';
+  scheduleMode.value = 'interval';
+  scheduleCron.value = '0 2 * * *';
+  scheduleIntervalMinutes.value = 1440;
+  scheduleKind.value = 'full';
+  scheduleRetention.value = 'daily';
+  scheduleEnabled.value = true;
+}
+
+async function submitSchedule() {
+  scheduleError.value = '';
+  const name = scheduleName.value.trim();
+  if (!name) {
+    scheduleError.value = 'A schedule name is required.';
+    return;
+  }
+  if (scheduleMode.value === 'cron' && !scheduleCron.value.trim()) {
+    scheduleError.value = 'A cron expression is required.';
+    return;
+  }
+  if (
+    scheduleMode.value === 'interval' &&
+    (!Number.isInteger(scheduleIntervalMinutes.value) || scheduleIntervalMinutes.value <= 0)
+  ) {
+    scheduleError.value = 'The interval must be a positive whole number of minutes.';
+    return;
+  }
+  loading.value = true;
+  notice.value = '';
+  error.value = '';
+  try {
+    await apiRequest('/backup-dr/schedules', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        kind: scheduleKind.value,
+        retentionClass: scheduleRetention.value,
+        enabled: scheduleEnabled.value,
+        ...(scheduleMode.value === 'cron'
+          ? { cron: scheduleCron.value.trim() }
+          : { intervalMinutes: scheduleIntervalMinutes.value }),
+      }),
+    });
+    showScheduleForm.value = false;
+    notice.value = `Backup schedule “${name}” created.`;
+    await loadBackupSchedules();
+  } catch (reason) {
+    scheduleError.value =
+      reason instanceof Error ? reason.message : 'The backup schedule could not be created.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function applyBackupRetention() {
+  if (
+    !confirm(
+      'Apply retention now?\n\nEvery backup older than its retention class window is expired and its artifact removed. This cannot be undone.',
+    )
+  )
+    return;
+  loading.value = true;
+  error.value = '';
+  notice.value = '';
+  retentionSweep.value = null;
+  try {
+    const result = await apiRequest<unknown>('/backup-dr/retention/apply', {
+      method: 'POST',
+      body: '{}',
+    });
+    const summary = Array.isArray(result) ? (result as RecordValue[]) : [];
+    retentionSweep.value = summary;
+    const removed = summary.reduce((total, entry) => total + Number(entry.removed ?? 0), 0);
+    notice.value = `Retention applied; ${removed} backup(s) expired.`;
+    await load(true);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'Retention could not be applied.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+/**
+ * Live refresh for the surfaces where a stale number actively misleads: the
+ * alert list, SMSC connection health, and the engine monitoring row. Everything
+ * else stays manual — polling a grid an operator is editing is worse than
+ * stale. The composable owns the timer, overlap and hidden-tab guards; the
+ * pause guard here keeps a poll from reloading rows underneath an open drawer
+ * or dialog.
+ */
+const LIVE_MODULES = ['alerts', 'smsc', 'monitoring'];
+const isLiveModule = computed(() => LIVE_MODULES.includes(key.value));
+const liveChoices = [10, 30, 60, 300];
+const {
+  autoRefresh: liveAuto,
+  intervalSeconds: liveInterval,
+  refreshing: liveRefreshing,
+  lastRefreshedAt: liveLastRefreshed,
+  refreshNow: liveRefreshNow,
+} = useLiveResource(() => load(true), {
+  intervalSeconds: 30,
+  enabled: false,
+  immediate: false,
+  pauseWhen: () =>
+    loading.value ||
+    detailOpen.value ||
+    messageOpen.value ||
+    snapshotOpen.value ||
+    showComposer.value ||
+    showBackupModal.value ||
+    restoreRow.value !== null,
+});
 
 watch(query, (value) => {
   if (!grid.value && !isCursor.value) return;
@@ -2217,6 +2731,17 @@ watch(
     limit.value = 50;
     offset.value = 0;
     total.value = 0;
+    msgStatus.value = '';
+    msgDirection.value = '';
+    msgSmscId.value = '';
+    msgFrom.value = '';
+    msgTo.value = '';
+    backupSchedules.value = [];
+    backupSchedulesError.value = '';
+    showScheduleForm.value = false;
+    retentionSweep.value = null;
+    // Only the live modules poll; everything else stays on manual refresh.
+    liveAuto.value = isLiveModule.value;
     void load();
   },
   { immediate: true },
@@ -2408,6 +2933,123 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <!-- Live refresh (alerts / SMSC / monitoring) ------------------------------ -->
+    <section
+      v-if="isLiveModule"
+      class="toolbar panel grid-toolbar"
+      aria-label="Live refresh controls"
+      data-testid="live-controls"
+    >
+      <label class="filter-select">
+        <span>Auto refresh</span>
+        <select v-model="liveAuto" data-testid="live-auto-toggle">
+          <option :value="true">On</option>
+          <option :value="false">Off</option>
+        </select>
+      </label>
+      <label class="filter-select">
+        <span>Every</span>
+        <select v-model.number="liveInterval" data-testid="live-interval">
+          <option v-for="choice in liveChoices" :key="choice" :value="choice">{{ choice }}s</option>
+        </select>
+      </label>
+      <button
+        class="secondary-button"
+        data-testid="live-refresh"
+        :disabled="liveRefreshing || loading"
+        @click="liveRefreshNow(true)"
+      >
+        {{ liveRefreshing ? 'Refreshing…' : 'Refresh now' }}
+      </button>
+      <span class="source-note" data-testid="live-last-refreshed">
+        {{
+          liveLastRefreshed
+            ? `Last updated ${liveLastRefreshed}`
+            : 'Showing the snapshot loaded when this workspace opened.'
+        }}{{ liveAuto ? '' : ' — auto refresh is off' }}
+      </span>
+    </section>
+
+    <!-- Message search (G13) ---------------------------------------------------- -->
+    <section
+      v-if="key === 'messages'"
+      class="toolbar panel grid-toolbar"
+      aria-label="Message search filters"
+      data-testid="message-filters"
+    >
+      <label class="filter-select">
+        <span>Delivery status</span>
+        <select v-model="msgStatus" data-testid="message-status" @change="applyMessageFilters">
+          <option
+            v-for="choice in MESSAGE_STATUS_CHOICES"
+            :key="choice.value"
+            :value="choice.value"
+          >
+            {{ choice.label }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-select">
+        <span>Direction</span>
+        <select
+          v-model="msgDirection"
+          data-testid="message-direction"
+          @change="applyMessageFilters"
+        >
+          <option value="">Any</option>
+          <option value="MT">MT (outbound)</option>
+          <option value="MO">MO (inbound)</option>
+          <option value="DLR">DLR (receipt)</option>
+        </select>
+      </label>
+      <label class="filter-select">
+        <span>SMSC</span>
+        <input
+          v-model="msgSmscId"
+          data-testid="message-smsc"
+          type="text"
+          placeholder="Engine SMSC id"
+          @keyup.enter="applyMessageFilters"
+        />
+      </label>
+      <label class="filter-select">
+        <span>From</span>
+        <input v-model="msgFrom" data-testid="message-from" type="datetime-local" />
+      </label>
+      <label class="filter-select">
+        <span>To</span>
+        <input v-model="msgTo" data-testid="message-to" type="datetime-local" />
+      </label>
+      <label class="filter-select">
+        <span>Rows</span>
+        <select v-model.number="msgLimit" data-testid="message-limit" @change="applyMessageFilters">
+          <option :value="50">50</option>
+          <option :value="100">100</option>
+          <option :value="250">250</option>
+          <option :value="500">500</option>
+        </select>
+      </label>
+      <button class="secondary-button" data-testid="message-apply" @click="applyMessageFilters">
+        Apply filters
+      </button>
+      <span class="source-note">
+        Delivery status, direction, SMSC and the free-text search are applied by the message store.
+      </span>
+      <p v-if="messageDateFiltered" class="warn-notice" data-testid="message-date-note">
+        The message API does not accept a date range yet, so the date filter is applied by the
+        console to the {{ rows.length }} row(s) loaded above — it is not a search of the whole
+        store. Narrow the other filters, or raise the row count, before trusting a date-bounded
+        result. The same range is sent to the export, and will start filtering server-side as soon
+        as the API supports it.
+      </p>
+      <p v-if="msgStatus" class="warn-notice" data-testid="message-export-status-note">
+        The CSV/PDF export endpoint does not currently apply the delivery-status filter, so an
+        export taken now will contain the wider direction/search/SMSC scope rather than only the “{{
+          msgStatus
+        }}” rows on screen.
+      </p>
+    </section>
+
     <p v-if="notice" class="notice" role="status" data-testid="operation-success">{{ notice }}</p>
 
     <section v-if="error" class="panel empty-state" role="alert" data-testid="api-state">
@@ -2513,6 +3155,187 @@ onUnmounted(() => {
           never the live system inline.
         </li>
       </ul>
+    </section>
+
+    <!-- Backup schedules & retention ------------------------------------------ -->
+    <section
+      v-if="key === 'backup' && !error"
+      class="panel"
+      data-testid="backup-schedules"
+      aria-label="Backup schedules and retention"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Schedules &amp; retention</h2>
+          <p aria-live="polite">{{ backupSchedules.length }} schedule(s) defined</p>
+        </div>
+        <div class="detail-actions">
+          <button
+            v-if="canManageSystem"
+            class="secondary-button"
+            data-testid="schedule-new"
+            :disabled="loading"
+            @click="openScheduleForm"
+          >
+            New schedule
+          </button>
+          <button
+            v-if="canManageSystem"
+            class="secondary-button danger-button"
+            data-testid="retention-apply"
+            :disabled="loading"
+            @click="applyBackupRetention"
+          >
+            Apply retention now
+          </button>
+        </div>
+      </header>
+      <p v-if="!canManageSystem" class="source-note">
+        Creating schedules and running the retention sweep requires the system.manage permission.
+      </p>
+
+      <div v-if="showScheduleForm" class="composer" data-testid="schedule-form">
+        <h3>New backup schedule</h3>
+        <label class="filter-select filter-search">
+          <span>Name</span>
+          <input v-model="scheduleName" data-testid="schedule-name" placeholder="Nightly full" />
+        </label>
+        <label class="filter-select">
+          <span>Trigger</span>
+          <select v-model="scheduleMode" data-testid="schedule-mode">
+            <option value="interval">Every N minutes</option>
+            <option value="cron">Cron expression</option>
+          </select>
+        </label>
+        <label v-if="scheduleMode === 'interval'" class="filter-select">
+          <span>Interval (minutes)</span>
+          <input
+            v-model.number="scheduleIntervalMinutes"
+            data-testid="schedule-interval"
+            type="number"
+            min="1"
+          />
+        </label>
+        <label v-else class="filter-select">
+          <span>Cron</span>
+          <input v-model="scheduleCron" data-testid="schedule-cron" placeholder="0 2 * * *" />
+        </label>
+        <label class="filter-select">
+          <span>Kind</span>
+          <select v-model="scheduleKind" data-testid="schedule-kind">
+            <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Retention class</span>
+          <select v-model="scheduleRetention" data-testid="schedule-retention">
+            <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Enabled</span>
+          <select v-model="scheduleEnabled" data-testid="schedule-enabled">
+            <option :value="true">Yes</option>
+            <option :value="false">No</option>
+          </select>
+        </label>
+        <p v-if="scheduleError" class="form-error" role="alert" data-testid="schedule-error">
+          {{ scheduleError }}
+        </p>
+        <div class="detail-actions">
+          <button
+            class="primary-button"
+            data-testid="schedule-submit"
+            :disabled="loading"
+            @click="submitSchedule"
+          >
+            Create schedule
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="schedule-cancel"
+            @click="showScheduleForm = false"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      <p
+        v-if="backupSchedulesError"
+        class="chart-empty"
+        role="alert"
+        data-testid="schedule-load-error"
+      >
+        {{
+          backupSchedulesMissing
+            ? 'The backup schedule API is not available in this deployment.'
+            : backupSchedulesError
+        }}
+      </p>
+      <div v-else class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Schedule</th>
+              <th scope="col">Trigger</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Retention</th>
+              <th scope="col">Enabled</th>
+              <th scope="col">Last run</th>
+              <th scope="col">Next run</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in backupSchedules"
+              :key="text(row.id)"
+              :data-testid="`schedule-row-${text(row.id)}`"
+            >
+              <td>
+                <strong>{{ text(row.name) }}</strong>
+                <small class="row-id mono">{{ text(row.id) }}</small>
+              </td>
+              <td class="mono">
+                {{
+                  row.cron
+                    ? String(row.cron)
+                    : (row.interval_minutes ?? row.intervalMinutes)
+                      ? `every ${text(row.interval_minutes ?? row.intervalMinutes)} min`
+                      : '—'
+                }}
+              </td>
+              <td>{{ text(row.kind) }}</td>
+              <td>{{ text(row.retention_class ?? row.retentionClass) }}</td>
+              <td>
+                <span class="status-badge" :class="row.enabled === false ? '' : 'good'">
+                  {{ row.enabled === false ? 'disabled' : 'enabled' }}
+                </span>
+              </td>
+              <td>{{ text(row.last_run_at ?? row.lastRunAt) }}</td>
+              <td>{{ text(row.next_run_at ?? row.nextRunAt) }}</td>
+            </tr>
+            <tr v-if="!backupSchedules.length">
+              <td colspan="7" class="empty-cell" data-testid="schedule-empty">
+                No backup schedules are defined — backups only happen when somebody clicks Create
+                backup.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul v-if="retentionSweep" class="sample-list" data-testid="retention-sweep">
+        <li v-for="entry in retentionSweep" :key="text(entry.retentionClass)">
+          <span class="mono">{{ text(entry.retentionClass) }}</span>
+          <span>{{ text(entry.removed, '0') }} expired</span>
+        </li>
+      </ul>
+      <p class="source-note">
+        Retention windows are fixed per class in the backup service (hourly through yearly);
+        <code>manual</code> backups are never expired. Verified backups show a “Verified” timestamp
+        in the grid above once <strong>Verify</strong> has re-checked their checksum.
+      </p>
     </section>
 
     <section
@@ -2731,6 +3554,22 @@ onUnmounted(() => {
           placeholder="e.g. pre-upgrade snapshot"
         />
       </label>
+      <label class="filter-select">
+        <span>Kind</span>
+        <select v-model="backupKind" data-testid="backup-kind">
+          <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
+        </select>
+      </label>
+      <label class="filter-select">
+        <span>Retention class</span>
+        <select v-model="backupRetention" data-testid="backup-retention">
+          <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
+        </select>
+      </label>
+      <p class="form-hint">
+        The retention class decides how long the backup survives the retention sweep;
+        <code>manual</code> is never expired automatically.
+      </p>
       <fieldset class="scope-fieldset">
         <legend>Scope</legend>
         <label class="checkbox-row">
@@ -2923,7 +3762,11 @@ onUnmounted(() => {
             <p class="form-hint">Leave a field blank to keep the original value.</p>
             <label>
               Sender override
-              <input v-model="cloneSender" data-testid="clone-sender" placeholder="Original sender" />
+              <input
+                v-model="cloneSender"
+                data-testid="clone-sender"
+                placeholder="Original sender"
+              />
             </label>
             <label>
               Recipient override
@@ -3630,9 +4473,7 @@ onUnmounted(() => {
           <dt>Config path</dt>
           <dd class="mono">{{ text(driftResult.configPath) }}</dd>
         </dl>
-        <template
-          v-if="Array.isArray(driftResult.differences) && driftResult.differences.length"
-        >
+        <template v-if="Array.isArray(driftResult.differences) && driftResult.differences.length">
           <h3>Differences</h3>
           <pre class="json-block" data-testid="drift-differences">{{
             JSON.stringify(driftResult.differences, null, 2)
@@ -3720,7 +4561,11 @@ onUnmounted(() => {
           <div>
             <h3>{{ text(templateView.name) }} — content</h3>
           </div>
-          <button class="secondary-button" data-testid="template-view-close" @click="closeTemplateView">
+          <button
+            class="secondary-button"
+            data-testid="template-view-close"
+            @click="closeTemplateView"
+          >
             Close
           </button>
         </header>
@@ -3744,7 +4589,11 @@ onUnmounted(() => {
           <div>
             <h3>Instantiated: {{ text(instantiateResult.name) }}</h3>
           </div>
-          <button class="secondary-button" data-testid="instantiate-close" @click="closeInstantiate">
+          <button
+            class="secondary-button"
+            data-testid="instantiate-close"
+            @click="closeInstantiate"
+          >
             Close
           </button>
         </header>
@@ -3796,6 +4645,13 @@ onUnmounted(() => {
           </p>
         </div>
       </header>
+      <p v-if="key === 'alerts'" class="source-note" data-testid="alert-actions-note">
+        Acknowledging an alert records who took it and stops its escalation; “Re-notify” resends it
+        to the configured notification channels. Resolution is performed by the rule evaluator when
+        the condition clears — there is no manual resolve, assign or per-alert suppress endpoint. To
+        suppress alerting for planned work, schedule a
+        <RouterLink class="text-link" to="/alert-response">maintenance window</RouterLink>.
+      </p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -3824,7 +4680,21 @@ onUnmounted(() => {
             >
               <template v-if="columns">
                 <td v-for="column in columns" :key="column.header" :class="{ mono: column.mono }">
-                  {{ column.value(row.raw) }}
+                  <div class="cell-status">
+                    <span
+                      v-if="column.dot"
+                      class="dot"
+                      :class="column.dot(row.raw)"
+                      :data-testid="key === 'smsc' ? `smsc-dot-${row.id}` : undefined"
+                    ></span>
+                    <span v-if="column.badge" class="status-badge" :class="column.badge(row.raw)">
+                      {{ column.value(row.raw) }}
+                    </span>
+                    <span v-else>{{ column.value(row.raw) }}</span>
+                  </div>
+                  <small v-if="column.hint && column.hint(row.raw)" class="row-id">
+                    {{ column.hint(row.raw) }}
+                  </small>
                 </td>
               </template>
               <template v-else>
@@ -3896,6 +4766,32 @@ onUnmounted(() => {
                 >
                   Mark read
                 </button>
+              </td>
+              <td v-else-if="key === 'alerts'" class="row-actions" @click.stop>
+                <template v-if="canAcknowledgeAlerts">
+                  <button
+                    v-if="row.raw.status === 'open'"
+                    class="secondary-button"
+                    :data-testid="`alert-ack-${row.id}`"
+                    :disabled="loading"
+                    @click="acknowledgeAlert(row)"
+                  >
+                    Acknowledge
+                  </button>
+                  <span v-else-if="row.raw.status === 'acknowledged'" class="cell-health">
+                    acknowledged
+                  </span>
+                  <button
+                    v-if="row.raw.status !== 'resolved'"
+                    class="secondary-button"
+                    :data-testid="`alert-notify-${row.id}`"
+                    :disabled="loading"
+                    @click="notifyAlert(row)"
+                  >
+                    Re-notify
+                  </button>
+                </template>
+                <span v-else class="cell-health">Requires alerts.acknowledge</span>
               </td>
               <td v-else-if="key === 'plugins'" class="row-actions">
                 <template v-if="canManageSystem">

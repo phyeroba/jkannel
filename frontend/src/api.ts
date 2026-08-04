@@ -58,7 +58,7 @@ export async function apiRequest<T>(
   const headers = new Headers(options.headers);
   headers.set('content-type', 'application/json');
   if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
-  let response = await fetch(`${base}${path}`, { ...options, headers });
+  const response = await fetch(`${base}${path}`, { ...options, headers });
   if (response.status === 401 && retry && refreshToken) {
     await renew();
     return apiRequest<T>(path, options, false);

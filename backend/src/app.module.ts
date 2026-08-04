@@ -17,8 +17,7 @@ import { IdempotencyService } from './platform/idempotency.service';
 import { IdempotencyInterceptor } from './platform/idempotency.interceptor';
 import { AuditTrailInterceptor } from './platform/audit-trail.interceptor';
 import { APP_INTERCEPTOR, DiscoveryModule } from '@nestjs/core';
-import { JobsController } from './platform/jobs.controller';
-import { JobsService } from './platform/jobs.service';
+import { JobsModule } from './platform/jobs.module';
 import { OpenApiController } from './platform/openapi.controller';
 import { MetricsRegistry } from './monitoring/metrics.registry';
 import { MetricsInterceptor } from './monitoring/metrics.interceptor';
@@ -38,6 +37,10 @@ import { QueueConsoleModule } from './queue-console/queue-console.module';
     // Provides DiscoveryService so OpenApiController can reflect the live route table.
     DiscoveryModule,
     AuthModule,
+    // @Global: owns /jobs, the JobWorker executor and the JobHandlerRegistry
+    // that domain modules register their job types with. Imported before the
+    // domain modules so the registry exists when they initialise.
+    JobsModule,
     EngineModule,
     DomainModule,
     // Registered before ConsoleModule so /configurations/templates* and
@@ -59,12 +62,11 @@ import { QueueConsoleModule } from './queue-console/queue-console.module';
     DataModelModule,
     QueueConsoleModule,
   ],
-  controllers: [HealthController, MetricsController, JobsController, OpenApiController],
+  controllers: [HealthController, MetricsController, OpenApiController],
   providers: [
     HealthService,
     DatabaseService,
     IdempotencyService,
-    JobsService,
     MetricsRegistry,
     // Metrics first so it times the full downstream handler chain.
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },

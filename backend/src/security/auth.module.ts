@@ -18,6 +18,9 @@ import { ApiKeysService } from './api-keys.service';
 import { ApiKeysController } from './api-keys.controller';
 import { LoginHistoryService } from './identity-login-history.service';
 import { LoginHistoryController } from './identity-login-history.controller';
+import { AuthThrottleService } from './auth-throttle.service';
+import { authThrottleRedisProvider } from './auth-throttle.redis';
+import { AuthThrottleGuard } from './auth-throttle.guard';
 
 @Module({
   controllers: [
@@ -44,7 +47,18 @@ import { LoginHistoryController } from './identity-login-history.controller';
     IdentityMfaService,
     ApiKeysService,
     LoginHistoryService,
+    // Brute-force throttling for /auth/* (login, refresh, reset, MFA codes).
+    authThrottleRedisProvider,
+    AuthThrottleService,
+    AuthThrottleGuard,
   ],
-  exports: [PasswordHasher, TokenService, AuthService, AuthGuard, PermissionsGuard],
+  exports: [
+    PasswordHasher,
+    TokenService,
+    AuthService,
+    AuthGuard,
+    PermissionsGuard,
+    AuthThrottleService,
+  ],
 })
 export class AuthModule {}

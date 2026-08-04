@@ -4,10 +4,12 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
@@ -29,14 +31,35 @@ const uuid = (value: string) => {
 export class JobsController {
   constructor(private readonly jobs: JobsService) {}
 
+  /**
+   * Grid read. Supports the shared list contract (search/sort/filter.<f>/limit/
+   * offset), opt-in keyset pagination (?cursor / ?paginate=cursor) and
+   * ?fields= projection. The legacy ?status / ?type shorthands are mapped onto
+   * the grid's filters so existing callers keep working.
+   */
   @Get()
   @RequirePermissions('system.view')
   list(
     @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown> = {},
     @Query('status') status?: string,
     @Query('type') type?: string,
   ) {
-    return this.jobs.list(actor(request), status, type);
+    const merged: Record<string, unknown> = { ...query };
+    if (status) merged['filter.status'] = status;
+    if (type) merged['filter.type'] = type;
+    return this.jobs.list(actor(request), merged);
+  }
+
+  /**
+   * The types this deployment can actually execute. Declared before ':id' so
+   * the literal path matches first. A caller should consult this rather than
+   * guessing: POST /jobs rejects any type with no registered executor.
+   */
+  @Get('types')
+  @RequirePermissions('system.view')
+  types() {
+    return this.jobs.types();
   }
 
   @Get(':id')
@@ -45,20 +68,38 @@ export class JobsController {
     return this.jobs.get(actor(request), uuid(id));
   }
 
+  /**
+   * Submits asynchronous work.
+   *
+   * This route previously returned 501: `api_jobs` rows were written and read
+   * by nothing, so a submitted job reported `queued` forever and a caller
+   * polling for completion waited indefinitely. It is honest again because
+   * JobWorker now claims, executes, retries and dead-letters these rows, and
+   * because JobHandlerRegistry rejects — at submission time, with a 400 naming
+   * the supported types — any type that has no executor. There is no longer a
+   * path by which an accepted job silently never runs.
+   *
+   * Responds 202 Accepted with a Location header pointing at the job resource,
+   * per the async REST pattern.
+   */
   @Post()
+  @HttpCode(202)
   @RequirePermissions('system.manage')
-  create(
+  async create(
     @Req() request: AuthenticatedRequest,
     @Body() body: any,
     @Headers('idempotency-key') key?: string,
+    @Res({ passthrough: true }) response?: any,
   ) {
     if (!body || typeof body !== 'object')
       throw new BadRequestException('Request body is required');
-    return this.jobs.create(actor(request), {
-      type: String(body.type ?? ''),
-      input: body.input ?? {},
-      idempotencyKey: key?.trim(),
+    const job = await this.jobs.create(actor(request), {
+      type: body.type,
+      input: body.input,
+      idempotencyKey: body.idempotencyKey ?? key,
     });
+    response?.setHeader?.('location', `/jobs/${job.id}`);
+    return job;
   }
 
   @Post(':id/cancel')

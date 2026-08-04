@@ -14,7 +14,15 @@ import {
 @Injectable()
 export class PostgresAuthRepository implements AuthRepository, AuditSink {
   constructor(private readonly database: DatabaseService) {}
-  async findCredential(tenantSlug: string, username: string): Promise<UserCredential | undefined> {
+
+  /**
+   * Column list + role/permission aggregation shared by the two credential
+   * lookups; only the WHERE clause differs. Kept as one string so the two paths
+   * can never drift on which privileges they resolve.
+   */
+  private static readonly CREDENTIAL_SELECT = `SELECT u.id,u.tenant_id,u.username,u.password_hash,u.status,u.failed_login_count,u.locked_until,COALESCE(array_agg(DISTINCT r.name) FILTER(WHERE r.name IS NOT NULL),'{}') roles,COALESCE(array_agg(DISTINCT p.code) FILTER(WHERE p.code IS NOT NULL),'{}') permissions FROM users u JOIN tenants t ON t.id=u.tenant_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id LEFT JOIN role_permissions rp ON rp.role_id=r.id LEFT JOIN permissions p ON p.id=rp.permission_id`;
+
+  private async credential(where: string, values: unknown[]): Promise<UserCredential | undefined> {
     const result = await this.database.authQuery<{
       id: string;
       tenant_id: string;
@@ -25,10 +33,7 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
       locked_until: Date | null;
       roles: string[];
       permissions: string[];
-    }>(
-      `SELECT u.id,u.tenant_id,u.username,u.password_hash,u.status,u.failed_login_count,u.locked_until,COALESCE(array_agg(DISTINCT r.name) FILTER(WHERE r.name IS NOT NULL),'{}') roles,COALESCE(array_agg(DISTINCT p.code) FILTER(WHERE p.code IS NOT NULL),'{}') permissions FROM users u JOIN tenants t ON t.id=u.tenant_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id LEFT JOIN role_permissions rp ON rp.role_id=r.id LEFT JOIN permissions p ON p.id=rp.permission_id WHERE t.slug=$1 AND lower(u.username)=lower($2) GROUP BY u.id`,
-      [tenantSlug, username],
-    );
+    }>(`${PostgresAuthRepository.CREDENTIAL_SELECT} WHERE ${where} GROUP BY u.id`, values);
     const row = result.rows[0];
     if (!row) return undefined;
     return {
@@ -42,6 +47,15 @@ export class PostgresAuthRepository implements AuthRepository, AuditSink {
       roles: row.roles,
       permissions: row.permissions,
     };
+  }
+
+  findCredential(tenantSlug: string, username: string): Promise<UserCredential | undefined> {
+    return this.credential('t.slug=$1 AND lower(u.username)=lower($2)', [tenantSlug, username]);
+  }
+
+  /** Current status/roles/permissions by user id — see AuthRepository docs. */
+  findCredentialById(userId: string): Promise<UserCredential | undefined> {
+    return this.credential('u.id=$1', [userId]);
   }
   async recordFailedLogin(userId: string, failedCount: number, lockedUntil?: Date): Promise<void> {
     await this.database.authQuery(

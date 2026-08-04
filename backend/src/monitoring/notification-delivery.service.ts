@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { createTransport, Transporter } from 'nodemailer';
+import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
 
 export interface NotificationChannel {
   id: string;
@@ -38,9 +39,19 @@ export interface DeliverablePayload {
   data: Record<string, unknown>;
 }
 
+/** Loosely validates an MSISDN: optional +, 6–15 digits (E.164 upper bound). */
+const MSISDN_PATTERN = /^\+?[0-9]{6,15}$/;
+
 @Injectable()
 export class NotificationDeliveryService {
   private transporter?: Transporter | null;
+
+  /**
+   * Optional so the three modules that provide this service without importing
+   * EngineModule keep constructing. Where it is absent, `sms` delivery reports
+   * `failed` with the reason — never a silent success.
+   */
+  constructor(@Optional() private readonly sqlbox?: KamexSqlboxRepository) {}
 
   /** Backward-compatible alert delivery; delegates to the generic path. */
   deliver(alert: AlertNotification, channel: NotificationChannel): Promise<NotificationAttempt> {
@@ -89,12 +100,85 @@ export class NotificationDeliveryService {
       };
     if (channel.type === 'webhook') return this.deliverWebhook(payload, channel, base);
     if (channel.type === 'email') return this.deliverEmail(payload, channel, base);
+    if (channel.type === 'sms') return this.deliverSms(payload, channel, base);
+    // Unknown transports fail loudly rather than reporting a quiet 'skipped':
+    // a channel that accepts alerts and drops them is worse than no channel.
     return {
       ...base,
-      status: 'skipped',
+      status: 'failed',
       target: channel.type,
-      response: { reason: `channel transport '${channel.type}' not implemented` },
+      response: { error: `channel transport '${channel.type}' is not implemented` },
     };
+  }
+
+  /**
+   * Delivers an alert as an SMS through the platform's own send path.
+   *
+   * `notification_channels` has accepted `type='sms'` since migration 008 and
+   * this service used to answer `status:'skipped'` for it — on an SMS gateway.
+   * An operator could configure the one channel type the product is actually
+   * built to deliver, and every alert would be silently discarded. It now goes
+   * out through `KamexSqlboxRepository.submit`, the same SQLBox spool the rest
+   * of the platform submits MT traffic to.
+   *
+   * Every failure mode is explicit: no SQLBox wiring, no recipient, a malformed
+   * recipient and a rejected insert all return `failed` with a reason. Nothing
+   * here can report success without a `sql_id` coming back.
+   */
+  private async deliverSms(
+    payload: DeliverablePayload,
+    channel: NotificationChannel,
+    base: { channelId: string; channelType: string },
+  ): Promise<NotificationAttempt> {
+    const recipient = String(
+      channel.config?.msisdn ?? channel.config?.to ?? channel.config?.recipient ?? '',
+    ).trim();
+    if (!this.sqlbox)
+      return {
+        ...base,
+        status: 'failed',
+        target: recipient || channel.name,
+        response: {
+          error:
+            'SMS delivery path is unavailable in this process (SQLBox repository not injected)',
+        },
+      };
+    if (!MSISDN_PATTERN.test(recipient))
+      return {
+        ...base,
+        status: 'failed',
+        target: recipient || channel.name,
+        response: { error: 'channel config.msisdn must be an MSISDN (6-15 digits, optional +)' },
+      };
+    const sender = String(
+      channel.config?.sender ?? process.env.ALERT_SMS_SENDER ?? 'JKANNEL',
+    ).slice(0, 20);
+    const smscId = channel.config?.smscId ? String(channel.config.smscId) : undefined;
+    // Alert SMS are operational, not billable traffic: no DLR is requested, and
+    // the text is capped so a long alert body cannot become a 10-part message.
+    const text = `${payload.subject} - ${payload.body}`.replace(/\s+/g, ' ').slice(0, 320);
+    try {
+      const submission = await this.sqlbox.submit({
+        sender,
+        receiver: recipient,
+        text,
+        smscId,
+        dlrMask: 0,
+      });
+      return {
+        ...base,
+        status: 'succeeded',
+        target: recipient,
+        response: { sqlId: submission.sqlId, via: submission.source },
+      };
+    } catch (error) {
+      return {
+        ...base,
+        status: 'failed',
+        target: recipient,
+        response: { error: (error as Error).message },
+      };
+    }
   }
 
   private async deliverWebhook(

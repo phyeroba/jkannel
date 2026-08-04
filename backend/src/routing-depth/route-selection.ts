@@ -20,6 +20,8 @@
  * is down" and "least-cost among available" testable without a live engine.
  */
 
+import { digitsOnly } from './msisdn';
+
 export type RouteType = 'static' | 'prefix' | 'country' | 'operator' | 'weighted';
 
 export type SelectionStrategy =
@@ -113,10 +115,12 @@ export interface SelectionResult {
   trace: string[];
 }
 
-/** Digits-only view of an address (drops '+', spaces, dashes). */
-function normalizeMsisdn(msisdn: string): string {
-  return (msisdn ?? '').replace(/[^0-9]/g, '');
-}
+/**
+ * Digits-only view of an address (drops '+', spaces, dashes). Delegates to the
+ * shared normaliser in ./msisdn so route prefixes and destinations are compared
+ * on exactly the same footing everywhere in the platform.
+ */
+const normalizeMsisdn = digitsOnly;
 
 /** "HH:MM" -> minutes since midnight, or null when malformed. */
 function minutesOfDay(time: string): number | null {

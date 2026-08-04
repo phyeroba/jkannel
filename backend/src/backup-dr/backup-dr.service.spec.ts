@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackupDrService, retentionCutoff, RETENTION_WINDOWS_MS } from './backup-dr.service';
 import { BackupRecord } from './backup-dr.repository';
+import { BackupDestination } from './backup-destination';
+import { ConfigCaptureResult } from './config-capture';
+
+/** A key strong enough to satisfy the mandatory-key check. */
+const TEST_ENCRYPTION_KEY = 'unit-test-backup-encryption-key-0123456789';
 
 interface ExecResult {
   code: number | null;
@@ -21,6 +26,18 @@ class TestService extends BackupDrService {
     missing: false,
   });
   public decryptedPath = '/tmp/fake-decrypted.dump';
+  /** Deterministic configuration capture: the host's real /etc is never read. */
+  public capture: ConfigCaptureResult = {
+    bundle: null,
+    files: 0,
+    bytes: 0,
+    checksum: null,
+    missingRoots: ['/etc/kannel'],
+    capturedRoots: [],
+    notes: [],
+  };
+  public destination: BackupDestination | null = null;
+  public destinationError: Error | null = null;
 
   protected execTool(tool: string, args: string[]): Promise<ExecResult> {
     return this.exec(tool, args);
@@ -30,6 +47,13 @@ class TestService extends BackupDrService {
   }
   protected async withVerifyDatabase<T>(fn: (targetUrl: string) => Promise<T>): Promise<T> {
     return fn('postgresql://verify/target');
+  }
+  protected async captureConfig(): Promise<ConfigCaptureResult> {
+    return this.capture;
+  }
+  protected resolveDestination(): BackupDestination | null {
+    if (this.destinationError) throw this.destinationError;
+    return this.destination;
   }
 }
 
@@ -52,6 +76,13 @@ const baseRecord = (over: Partial<BackupRecord> = {}): BackupRecord => ({
   started_at: new Date().toISOString(),
   completed_at: null,
   created_by: 'op',
+  config_artifact_path: null,
+  config_artifact_checksum: null,
+  config_file_count: 0,
+  config_bytes: 0,
+  offsite_location: null,
+  offsite_synced_at: null,
+  warning: null,
   ...over,
 });
 
@@ -72,17 +103,21 @@ describe('retention math', () => {
 describe('BackupDrService.createBackup', () => {
   const originalDir = process.env.BACKUP_DIR;
   const originalUrl = process.env.DATABASE_URL;
+  const originalKey = process.env.BACKUP_ENCRYPTION_KEY;
   let dir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'jk-backup-'));
     process.env.BACKUP_DIR = dir;
     process.env.DATABASE_URL = 'postgresql://user:pw@localhost:5432/jkannel';
+    process.env.BACKUP_ENCRYPTION_KEY = TEST_ENCRYPTION_KEY;
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     process.env.BACKUP_DIR = originalDir;
     process.env.DATABASE_URL = originalUrl;
+    if (originalKey === undefined) delete process.env.BACKUP_ENCRYPTION_KEY;
+    else process.env.BACKUP_ENCRYPTION_KEY = originalKey;
   });
 
   it('records an honest failure when pg_dump is not installed', async () => {
@@ -170,6 +205,181 @@ describe('BackupDrService.createBackup', () => {
         '--table=system_settings',
       ]),
     );
+  });
+
+  // ---- G17 hardening ------------------------------------------------------
+  it('refuses to back up when BACKUP_ENCRYPTION_KEY is missing, instead of falling back', async () => {
+    delete process.env.BACKUP_ENCRYPTION_KEY;
+    process.env.AUTH_SIGNING_KEY = 'the-jwt-key-that-must-not-be-reused-as-a-backup-kek';
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'failed' })),
+      completeBackup: jest.fn(),
+    };
+    const service = new TestService(repository);
+    const pgDump = jest.fn();
+    service.exec = pgDump as any;
+
+    const result = await service.createBackup(actor, { retentionClass: 'daily' });
+    expect(result.status).toBe('failed');
+    // No dump was even attempted: the key is checked before doing any work.
+    expect(pgDump).not.toHaveBeenCalled();
+    expect(repository.completeBackup).not.toHaveBeenCalled();
+    expect(repository.failBackup.mock.calls[0][2]).toMatch(
+      /BACKUP_ENCRYPTION_KEY is not configured/,
+    );
+    delete process.env.AUTH_SIGNING_KEY;
+  });
+
+  it('refuses a known placeholder encryption key', async () => {
+    process.env.BACKUP_ENCRYPTION_KEY = 'jkannel-development-backup-encryption-key-change-me';
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'failed' })),
+      completeBackup: jest.fn(),
+    };
+    const service = new TestService(repository);
+    const result = await service.createBackup(actor, {});
+    expect(result.status).toBe('failed');
+    expect(repository.failBackup.mock.calls[0][2]).toMatch(/known placeholder/);
+  });
+
+  it("records kind='incremental' as 'full' and says so, rather than mislabelling a full dump", async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.exec = async (_tool, args) => {
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP-full-not-incremental'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, { kind: 'incremental', retentionClass: 'daily' });
+    // The catalog row is honest about what the artifact actually is.
+    expect(repository.insertRunning.mock.calls[0][1].kind).toBe('full');
+    expect(repository.completeBackup.mock.calls[0][2].detail).toMatch(
+      /Requested kind 'incremental' was recorded as 'full'/,
+    );
+    expect(repository.completeBackup.mock.calls[0][2].detail).toMatch(/WAL archiving/);
+  });
+
+  it('warns loudly when no configuration was captured and no offsite destination exists', async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.exec = async (_tool, args) => {
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, {});
+    const call = repository.completeBackup.mock.calls[0][2];
+    expect(call.warning).toMatch(/No configuration or certificate files were captured/);
+    expect(call.warning).toMatch(/No offsite destination is configured/);
+    expect(call.offsiteLocation).toBeNull();
+    expect(call.offsiteSynced).toBe(false);
+  });
+
+  it('captures configuration alongside the dump and replicates both offsite', async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.capture = {
+      bundle: Buffer.from('gzipped-config-bundle'),
+      files: 3,
+      bytes: 900,
+      checksum: 'c'.repeat(64),
+      missingRoots: [],
+      capturedRoots: ['/etc/kannel'],
+      notes: [],
+    };
+    const stored: string[] = [];
+    service.destination = {
+      id: 'local',
+      describe: () => 'file:///mnt/offsite',
+      put: async (localPath) => {
+        stored.push(localPath);
+        return { uri: `file:///mnt/offsite/${stored.length}`, bytes: 10 };
+      },
+      remove: async () => undefined,
+    };
+    service.exec = async (_tool, args) => {
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, {});
+    const call = repository.completeBackup.mock.calls[0][2];
+    expect(call.configFileCount).toBe(3);
+    expect(call.configArtifactPath).toMatch(/\.config\.json\.gz\.enc$/);
+    expect(call.configArtifactChecksum).toBe('c'.repeat(64));
+    expect(call.offsiteSynced).toBe(true);
+    expect(call.offsiteLocation).toMatch(/^file:\/\/\/mnt\/offsite\//);
+    expect(call.warning).toBeNull();
+    // Both the database dump and the configuration bundle went offsite.
+    expect(stored).toHaveLength(2);
+  });
+
+  it('records a warning (never a silent success) when offsite replication fails', async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn(),
+      completeBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'completed' })),
+    };
+    const service = new TestService(repository);
+    service.destination = {
+      id: 'local',
+      describe: () => 'file:///mnt/offsite',
+      put: async () => {
+        throw new Error('mount is read-only');
+      },
+      remove: async () => undefined,
+    };
+    service.exec = async (_tool, args) => {
+      const fileArg = args.find((a) => a.startsWith('--file='))!.slice('--file='.length);
+      writeFileSync(fileArg, Buffer.from('PGDMP'));
+      return { code: 0, stdout: '', stderr: '', missing: false };
+    };
+
+    await service.createBackup(actor, {});
+    const call = repository.completeBackup.mock.calls[0][2];
+    expect(call.offsiteSynced).toBe(false);
+    expect(call.warning).toMatch(/Offsite replication to file:\/\/\/mnt\/offsite failed/);
+  });
+
+  it('fails the backup when the configured destination is not implemented', async () => {
+    const repository: any = {
+      databaseVersion: jest.fn().mockResolvedValue('PostgreSQL 17'),
+      insertRunning: jest.fn().mockResolvedValue(baseRecord()),
+      failBackup: jest.fn().mockResolvedValue(baseRecord({ status: 'failed' })),
+      completeBackup: jest.fn(),
+    };
+    const service = new TestService(repository);
+    service.destinationError = new Error(
+      "BACKUP_DESTINATION='s3' is not implemented in this build.",
+    );
+
+    const result = await service.createBackup(actor, {});
+    expect(result.status).toBe('failed');
+    expect(repository.completeBackup).not.toHaveBeenCalled();
+    expect(repository.failBackup.mock.calls[0][2]).toMatch(/not implemented/);
   });
 
   it("treats scope='app' as a full database backup", async () => {

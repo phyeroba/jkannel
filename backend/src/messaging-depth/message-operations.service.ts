@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { MessageSendService } from './message-send.service';
 
 export interface Actor {
   tenantId: string;
@@ -46,6 +47,7 @@ export class MessageOperationsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly sqlbox: KamexSqlboxRepository,
+    private readonly send: MessageSendService,
   ) {}
 
   /** Engine-level SMSC ids owned by the tenant (RLS-scoped smsc_definitions). */
@@ -130,13 +132,26 @@ export class MessageOperationsService {
       // its delivery reports do not collide with the original message.
       foreignId: randomUUID(),
     };
-    const queued = await this.sqlbox.submit(submission);
+    // Re-submitting a message keeps its original bind, EXCEPT when that bind is
+    // no longer healthy: a replay after an SMSC failure used to be re-spooled
+    // straight back onto the dead SMSC. `rerouteIfUnavailable` hands those to
+    // the routing engine instead, and the choice is recorded either way.
+    const queued = await this.send.send(actor, {
+      ...submission,
+      channel: 'replay',
+      reference: id,
+      rerouteIfUnavailable: true,
+    });
     await this.database.tenantTransaction(actor.tenantId, async (client) => {
       await this.audit(client, actor, action, id, {
         replayOf: id,
         newSqlId: queued.sqlId,
         foreignId: submission.foreignId,
-        smscId: submission.smscId,
+        smscId: queued.smscId,
+        originalSmscId: submission.smscId,
+        rerouted: queued.smscId !== submission.smscId,
+        routeId: queued.routeId,
+        reason: queued.reason,
         overrides,
       });
     });
@@ -148,7 +163,7 @@ export class MessageOperationsService {
       submission: {
         sender: submission.sender,
         receiver: submission.receiver,
-        smscId: submission.smscId,
+        smscId: queued.smscId,
       },
     };
   }

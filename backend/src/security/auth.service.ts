@@ -15,10 +15,17 @@ import { PasswordHasher } from './password-hasher';
 import { accessTokenKey, refreshTokenKey } from './signing-keys';
 import { TokenService } from './token.service';
 import { UserCredential } from './auth.types';
+import { AuthThrottleService, ThrottleBucket } from './auth-throttle.service';
 
 export interface MfaChallenge {
   totp?: string;
   recoveryCode?: string;
+}
+
+/** Request-derived context carried into the auth paths for audit + throttling. */
+export interface AuthContext {
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 @Injectable()
@@ -29,16 +36,32 @@ export class AuthService {
     private readonly passwords: PasswordHasher,
     private readonly tokens: TokenService,
     @Optional() @Inject(IDENTITY_STORE) private readonly identity?: IdentityStore,
+    // Optional so isolated unit tests can construct the service without Redis.
+    // Absent throttle == no penalties recorded; the AuthThrottleGuard is what
+    // rejects, and it independently fails open. See auth-throttle.service.ts.
+    @Optional() private readonly throttle?: AuthThrottleService,
   ) {}
+
+  /** Record a throttle penalty; never allowed to affect the caller's outcome. */
+  private async penalize(buckets: ThrottleBucket[]): Promise<void> {
+    if (!this.throttle) return;
+    await this.throttle.penalize(buckets);
+  }
+
   async login(
     tenant: string,
     username: string,
     password: string,
-    context: { ipAddress?: string; userAgent?: string } = {},
+    context: AuthContext = {},
     mfa: MfaChallenge = {},
   ) {
     const user = await this.repository.findCredential(tenant, username);
     const now = new Date();
+    // Penalty buckets are read (not consumed) by AuthThrottleGuard before this
+    // method runs; here we only record failures. Successful logins cost nothing,
+    // so honest traffic — including the perf harness — is never throttled.
+    const loginBuckets =
+      this.throttle?.loginBuckets(tenant, username, context.ipAddress) ?? ([] as ThrottleBucket[]);
     // Account currently locked: reject WITHOUT re-incrementing the failed counter
     // or extending the window. Folding this into the credential-failure branch
     // (as it was) meant every attempt during the lockout — including one with the
@@ -57,6 +80,7 @@ export class AuthService {
         ...context,
       });
       await this.recordLogin(user, username, 'failure', false, context);
+      await this.penalize(loginBuckets);
       throw new UnauthorizedException('Invalid credentials');
     }
     if (
@@ -85,6 +109,7 @@ export class AuthService {
         ...context,
       });
       if (user) await this.recordLogin(user, username, 'failure', false, context);
+      await this.penalize(loginBuckets);
       throw new UnauthorizedException('Invalid credentials');
     }
     // A 'locked' status outlives its window. recordFailedLogin sets
@@ -105,13 +130,32 @@ export class AuthService {
       const device = await this.identity.findConfirmedMfaDevice(user.tenantId, user.id);
       if (device) {
         if (!(await this.verifyMfaChallenge(user, device, mfa, now))) {
+          // A presented-but-wrong second factor is a failed authentication and
+          // must count towards lockout. Previously this branch bypassed
+          // recordFailedLogin entirely, so a 6-digit TOTP could be guessed an
+          // unlimited number of times against a known-good password. An absent
+          // code is the browser's first leg of a normal MFA login, so it is not
+          // penalised — only an actual wrong code or recovery code is.
+          const attempted = Boolean(mfa.totp || mfa.recoveryCode);
+          if (attempted) {
+            const count = user.failedLoginCount + 1;
+            await this.repository.recordFailedLogin(
+              user.id,
+              count,
+              count >= 5 ? new Date(now.getTime() + 15 * 60_000) : undefined,
+            );
+            await this.penalize([
+              ...loginBuckets,
+              ...(this.throttle?.mfaBuckets(user.tenantId, user.id, context.ipAddress) ?? []),
+            ]);
+          }
           await this.audit.append({
             tenantId: user.tenantId,
             action: 'mfa.required',
             outcome: 'failure',
             actorId: user.id,
             username,
-            reason: 'mfa_required',
+            reason: attempted ? 'mfa_invalid' : 'mfa_required',
             occurredAt: now,
             ...context,
           });
@@ -204,12 +248,32 @@ export class AuthService {
       ...context,
     });
   }
-  async refresh(refreshToken: string) {
-    const claims = this.tokens.verify(refreshToken, 'refresh', refreshTokenKey());
+  /**
+   * Rotate a refresh token and mint a new access token.
+   *
+   * The access token is rebuilt from the user's CURRENT database state, not
+   * from the claims carried by the incoming refresh token. Replaying the old
+   * claims meant a user who had been disabled, archived, demoted or stripped of
+   * a permission kept their original privilege set for the whole 7-day refresh
+   * lifetime — the refresh token was effectively an un-revocable capability.
+   *
+   * The family/replay revocation below is unchanged and still runs first.
+   */
+  async refresh(refreshToken: string, context: AuthContext = {}) {
+    const tokenBuckets = this.throttle?.tokenBuckets('refresh', context.ipAddress) ?? [];
+    let claims: ReturnType<TokenService['verify']>;
+    try {
+      claims = this.tokens.verify(refreshToken, 'refresh', refreshTokenKey());
+    } catch (error) {
+      await this.penalize(tokenBuckets);
+      throw error;
+    }
     const session = await this.repository.findSession(claims.sid);
     const now = new Date();
-    if (!session || session.revokedAt || session.expiresAt <= now)
+    if (!session || session.revokedAt || session.expiresAt <= now) {
+      await this.penalize(tokenBuckets);
       throw new UnauthorizedException('Invalid refresh token');
+    }
     if (session.refreshTokenHash !== this.digest(refreshToken)) {
       // The signature is valid but the hash no longer matches: this is a
       // previously-rotated (superseded) refresh token being replayed. Burn the
@@ -227,15 +291,41 @@ export class AuthService {
         reason: 'refresh_token_reuse',
         occurredAt: now,
       });
+      await this.penalize(tokenBuckets);
       throw new UnauthorizedException('Refresh token reuse detected');
     }
+    // Re-resolve the user. Anything other than a live, still-usable account
+    // kills the session and the whole token family so the refresh token cannot
+    // be used again. 'locked' is accepted alongside 'active' for exactly the
+    // reason the login path accepts it: lockout is an unauthenticated,
+    // attacker-triggerable state, so treating it as "no longer a user" would
+    // let anyone terminate a victim's sessions with five bad password guesses.
+    const user = await this.repository.findCredentialById(session.userId);
+    const usable = user && (user.status === 'active' || user.status === 'locked');
+    if (!usable || user.tenantId !== session.tenantId) {
+      session.revokedAt = now;
+      await this.repository.saveSession(session);
+      if (session.familyId) await this.repository.revokeSessionFamily(session.familyId, now);
+      await this.repository.revokeUserSessions(session.userId, now);
+      await this.audit.append({
+        tenantId: session.tenantId,
+        action: 'token.refresh.rejected',
+        outcome: 'failure',
+        actorId: session.userId,
+        sessionId: session.id,
+        reason: user ? `user_status_${user.status}` : 'user_not_found',
+        occurredAt: now,
+      });
+      throw new UnauthorizedException('Account is no longer active');
+    }
+    // Current roles/permissions/username — NOT the incoming token's claims.
     const principal = {
-      sub: claims.sub,
-      tid: claims.tid,
+      sub: user.id,
+      tid: user.tenantId,
       sid: claims.sid,
-      username: claims.username,
-      roles: claims.roles,
-      permissions: claims.permissions,
+      username: user.username,
+      roles: user.roles,
+      permissions: user.permissions,
     };
     const accessToken = this.tokens.issue('access', principal, accessTokenKey(), 900);
     const nextRefresh = this.tokens.issue('refresh', principal, refreshTokenKey(), 604800);
@@ -277,7 +367,12 @@ export class AuthService {
   async requestPasswordReset(
     tenant: string,
     username: string,
+    context: AuthContext = {},
   ): Promise<{ requested: true; devToken?: string }> {
+    // Unlike the login buckets this one counts EVERY call, successful or not:
+    // the endpoint is an unauthenticated token-minting / enumeration-probing
+    // vector whose "success" is indistinguishable from failure by design.
+    await this.penalize(this.throttle?.resetBuckets(tenant, username, context.ipAddress) ?? []);
     const target = await this.repository.findResetTarget(tenant, username);
     if (!target) return { requested: true };
     const now = new Date();
@@ -302,15 +397,22 @@ export class AuthService {
     };
   }
 
-  async confirmPasswordReset(token: string, newPassword: string): Promise<{ reset: true }> {
+  async confirmPasswordReset(
+    token: string,
+    newPassword: string,
+    context: AuthContext = {},
+  ): Promise<{ reset: true }> {
     if (typeof newPassword !== 'string' || newPassword.length < 12)
       throw new BadRequestException('newPassword must contain at least 12 characters');
     if (typeof token !== 'string' || !token)
       throw new BadRequestException('Invalid or expired token');
     const record = await this.repository.findPasswordResetToken(this.digest(token));
     const now = new Date();
-    if (!record || record.usedAt || record.expiresAt <= now)
+    if (!record || record.usedAt || record.expiresAt <= now) {
+      // Reset-token guessing: penalise the bad token, not the good one.
+      await this.penalize(this.throttle?.tokenBuckets('reset', context.ipAddress) ?? []);
       throw new BadRequestException('Invalid or expired token');
+    }
     await this.enforcePasswordHistory(record.tenantId, record.userId, newPassword);
     const passwordHash = await this.passwords.hash(newPassword);
     await this.repository.applyNewPassword(record.userId, passwordHash);
@@ -330,6 +432,7 @@ export class AuthService {
     token: string,
     username: string,
     password: string,
+    context: AuthContext = {},
   ): Promise<{ accepted: true }> {
     if (typeof username !== 'string' || !username.trim())
       throw new BadRequestException('username is required');
@@ -338,7 +441,11 @@ export class AuthService {
     if (typeof token !== 'string' || !token)
       throw new BadRequestException('Invalid or expired invitation');
     const invitation = await this.repository.findPendingInvitation(this.digest(token));
-    if (!invitation) throw new BadRequestException('Invalid or expired invitation');
+    if (!invitation) {
+      // Invitation-token guessing.
+      await this.penalize(this.throttle?.tokenBuckets('invitation', context.ipAddress) ?? []);
+      throw new BadRequestException('Invalid or expired invitation');
+    }
     const passwordHash = await this.passwords.hash(password);
     const now = new Date();
     let created: { userId: string };

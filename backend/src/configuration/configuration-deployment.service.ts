@@ -33,8 +33,14 @@ export class ConfigurationDeploymentService {
     if (!response.ok) throw new Error(`Kamex rejected reload (${response.status})`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const health = await fetch(new URL('/health', base), { signal: AbortSignal.timeout(5000) });
-    if (!health.ok && health.status !== 503)
-      throw new Error(`Kamex health verification failed (${health.status})`);
+    // Any non-2xx is UNHEALTHY. 503 in particular means bearerbox came back but
+    // is not serving — exactly the state a bad configuration produces — so it
+    // must trigger the rollback in deploy(), not be waved through.
+    if (!health.ok)
+      throw new Error(
+        `Kamex health verification failed (${health.status}); the engine is not healthy ` +
+          'after the reload',
+      );
     return true;
   }
   async deploy(content: string) {

@@ -2,6 +2,7 @@ import { Controller, Get, Optional, Res } from '@nestjs/common';
 import { HealthService } from '../health/health.service';
 import { MetricsRegistry } from './metrics.registry';
 import { PlatformMetricsService } from '../monitoring-depth/platform-metrics.service';
+import { EngineMetricsService } from '../monitoring-depth/engine-metrics.service';
 
 @Controller('metrics')
 export class MetricsController {
@@ -11,6 +12,9 @@ export class MetricsController {
     // Optional so /metrics keeps working before MonitoringDepthModule is wired.
     // When present, platform/DB/Redis gauges are appended to the scrape output.
     @Optional() private readonly platform?: PlatformMetricsService,
+    // SMS/SMSC telemetry, served from the poller's cached snapshot so the
+    // scrape never calls the engine synchronously.
+    @Optional() private readonly engine?: EngineMetricsService,
   ) {}
 
   @Get()
@@ -47,6 +51,15 @@ export class MetricsController {
         lines.push(await this.platform.render());
       } catch {
         /* platform metrics are best-effort */
+      }
+    }
+    if (this.engine) {
+      try {
+        // Pure in-memory render; kept in a try so a future change here can
+        // never take the scrape down.
+        lines.push(this.engine.render());
+      } catch {
+        /* engine metrics are best-effort */
       }
     }
     response.setHeader('content-type', 'text/plain; version=0.0.4; charset=utf-8');

@@ -12,6 +12,15 @@ export const AUDIT_SINK = Symbol('AUDIT_SINK');
 
 export interface AuthRepository {
   findCredential(tenantSlug: string, username: string): Promise<UserCredential | undefined>;
+  /**
+   * Re-resolve a user's *current* status, roles and permissions by id.
+   *
+   * Used by {@link AuthService.refresh} so a refreshed access token reflects the
+   * database rather than the claims embedded in the incoming refresh token.
+   * Without it a disabled or demoted user kept their original privileges for the
+   * full 7-day refresh lifetime.
+   */
+  findCredentialById(userId: string): Promise<UserCredential | undefined>;
   recordFailedLogin(userId: string, failedCount: number, lockedUntil?: Date): Promise<void>;
   recordSuccessfulLogin(userId: string): Promise<void>;
   saveSession(session: AuthSession): Promise<void>;

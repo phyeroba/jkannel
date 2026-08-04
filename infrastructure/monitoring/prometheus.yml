@@ -3,15 +3,20 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # The backend is the only source of SMS/SMSC telemetry. It serves engine
+  # metrics (bind state, per-bind queue depth, throughput, failures, DLR queue)
+  # from the SmscStatusPoller's cached bearerbox snapshot, so this scrape never
+  # blocks on the engine.
+  #
+  # There is deliberately NO kamex-bearerbox job. Kannel/Kamex's :13000 is the
+  # admin interface: it serves /status, /status.json and the control commands,
+  # and has no /metrics endpoint at all. The job that used to point at it
+  # scraped a 404 forever, which is why no engine metric ever reached Prometheus
+  # while the target looked correctly configured.
   - job_name: jkannel-backend
     metrics_path: /api/v1/metrics
     static_configs:
       - targets: ["backend:3000"]
-
-  - job_name: kamex-bearerbox
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["kamex-bearerbox:13000"]
 
   - job_name: prometheus
     static_configs:
