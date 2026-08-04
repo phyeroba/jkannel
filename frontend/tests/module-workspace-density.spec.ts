@@ -149,7 +149,7 @@ describe('module workspace operational density', () => {
     wrapper.unmount();
   });
 
-  it('acknowledges an alert and states honestly that resolve/suppress have no endpoint', async () => {
+  it('acknowledges an alert and points at Alert Lifecycle for the rest of the actions', async () => {
     vi.stubGlobal('prompt', vi.fn().mockReturnValue('taking it'));
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/acknowledgements') && init?.method === 'POST')
@@ -161,9 +161,14 @@ describe('module workspace operational density', () => {
     await vi.waitFor(() =>
       expect(wrapper.find('[data-testid="alert-ack-al-1"]').exists()).toBe(true),
     );
-    expect(wrapper.get('[data-testid="alert-actions-note"]').text()).toContain(
-      'no manual resolve, assign or per-alert suppress endpoint',
-    );
+    // The note must describe what the console can actually do. It previously
+    // asserted "no manual resolve, assign or per-alert suppress endpoint", which
+    // stopped being true when those endpoints and the Alert Lifecycle screen
+    // shipped — so the test was pinning a false claim in place. Assert the
+    // capability is advertised, and that the old denial is gone for good.
+    const note = wrapper.get('[data-testid="alert-actions-note"]').text();
+    expect(note).toContain('Alert Lifecycle');
+    expect(note).not.toContain('no manual resolve');
 
     await wrapper.get('[data-testid="alert-ack-al-1"]').trigger('click');
     await vi.waitFor(() => {
