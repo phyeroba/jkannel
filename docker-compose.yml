@@ -144,7 +144,12 @@ services:
       # To route the SPA through the reverse proxy instead of the direct backend
       # port, set VITE_API_BASE_URL=http://localhost:${PROXY_HTTP_PORT}/api and
       # add that origin to FRONTEND_ORIGIN (see .env.example).
-      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-3000}/api
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:${BACKEND_PORT:-3000}/api}
+      # Hostnames the Vite dev server will serve. Behind a reverse proxy it
+      # receives the PUBLIC hostname and returns 403 unless that name is listed
+      # here (localhost/127.0.0.1 are always allowed). Comma-separated; a leading
+      # dot allows a whole suffix.
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     networks:
