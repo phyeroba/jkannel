@@ -252,6 +252,16 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/help',
+    name: 'help',
+    component: () => import('../views/HelpView.vue'),
+    meta: {
+      title: 'Documentation & Help',
+      description: 'The operator guides, and the order to read them in.',
+      breadcrumb: ['Help'],
+    },
+  },
+  {
     path: '/forbidden',
     name: 'forbidden',
     component: ModuleWorkspace,

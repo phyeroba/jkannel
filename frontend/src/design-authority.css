@@ -28,9 +28,14 @@
   color: #7d819e;
   font-size: 11.5px;
 }
+/* The gap (not a header margin) carries the space between a group header and
+   its items, so a collapsed group — one grid track, no gap — is exactly as tall
+   as its header. align-content:start stops the surplus height of the scrolling
+   nav from being distributed into the group's rows. */
 .nav-group {
   display: grid;
-  gap: 2px;
+  gap: 5px;
+  align-content: start;
 }
 /* Group headers are interactive (they collapse their section) and sit above the
    nav items, so they read brighter and slightly larger than the 13px links
@@ -41,7 +46,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  margin: 14px 0 5px;
+  margin: 0;
   padding: 5px 11px;
   border: 0;
   border-radius: 7px;
@@ -78,8 +83,10 @@
   display: grid;
   gap: 2px;
 }
+/* Between-group rhythm; the header used to supply this with a 14px top margin,
+   which survived collapsing. */
 .sidebar nav {
-  gap: 2px;
+  gap: 16px;
 }
 .sidebar nav a {
   grid-template-columns: 26px 1fr auto;
@@ -312,6 +319,9 @@ th {
 .sidebar > nav {
   flex: 1;
   min-height: 0;
+  /* flex:1 makes this grid taller than its rows; without this the surplus is
+     shared out among the groups and a collapsed group stays tall. */
+  align-content: start;
   overflow-y: auto;
   padding: 4px 0 20px;
   scrollbar-width: thin;

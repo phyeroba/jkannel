@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { navigation } from '../navigation';
+import { navigation, type NavigationItem } from '../navigation';
 import AppIcon from '../components/AppIcon.vue';
 import { canAccess, logout, session } from '../stores/session';
 import { apiRequest } from '../api';
@@ -40,26 +40,78 @@ const navigationGroups = computed(() =>
 
 /**
  * Collapsed navigation groups, persisted so the sidebar keeps its shape across
- * reloads (same convention as the theme preference above). Only collapsed groups
- * are stored, so a newly added group defaults to expanded rather than hidden.
+ * reloads (same convention as the theme preference above).
+ *
+ * A first visit starts with only Operations open — 28 links expanded at once is
+ * a wall. The catch is that the old representation (a bare array of collapsed
+ * group names) cannot tell "never chose anything" apart from "deliberately
+ * expanded everything": both are `[]`. The stored value is therefore now an
+ * object, `{ version: 2, collapsed: [...] }`, so:
+ *
+ *   - no key at all      -> no preference -> DEFAULT_COLLAPSED applies;
+ *   - a bare array       -> a pre-v2 user's deliberate state -> honoured as-is
+ *                           (including an empty one, i.e. "everything open");
+ *   - a v2 object        -> honoured as-is.
+ *
+ * Writes always use the v2 shape, so a legacy value migrates on first toggle.
  */
-const collapsedGroups = ref<string[]>(
-  (() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem('jkannel-console-nav-collapsed') ?? '[]');
-      return Array.isArray(raw) ? raw.filter((g): g is string => typeof g === 'string') : [];
-    } catch {
-      return [];
-    }
-  })(),
-);
+const NAV_STORAGE_KEY = 'jkannel-console-nav-collapsed';
+const DEFAULT_COLLAPSED = ['Messaging', 'Insights', 'Platform'];
+
+function readCollapsedPreference(): string[] {
+  const raw = localStorage.getItem(NAV_STORAGE_KEY);
+  if (raw === null) return [...DEFAULT_COLLAPSED];
+  const strings = (value: unknown) =>
+    Array.isArray(value) ? value.filter((g): g is string => typeof g === 'string') : [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return strings(parsed);
+    if (parsed && typeof parsed === 'object')
+      return strings((parsed as { collapsed?: unknown }).collapsed);
+    return [...DEFAULT_COLLAPSED];
+  } catch {
+    // A corrupt value is not a preference.
+    return [...DEFAULT_COLLAPSED];
+  }
+}
+
+const collapsedGroups = ref<string[]>(readCollapsedPreference());
+function persistCollapsed() {
+  localStorage.setItem(
+    NAV_STORAGE_KEY,
+    JSON.stringify({ version: 2, collapsed: collapsedGroups.value }),
+  );
+}
 const isCollapsed = (group: string) => collapsedGroups.value.includes(group);
 function toggleGroup(group: string) {
   collapsedGroups.value = isCollapsed(group)
     ? collapsedGroups.value.filter((g) => g !== group)
     : [...collapsedGroups.value, group];
-  localStorage.setItem('jkannel-console-nav-collapsed', JSON.stringify(collapsedGroups.value));
+  persistCollapsed();
 }
+
+/** The group owning the current route, by longest matching workspace path. */
+const activeGroup = computed(() => {
+  let best: NavigationItem | undefined;
+  for (const item of navigation) {
+    if (route.path === item.to || route.path.startsWith(`${item.to}/`)) {
+      if (!best || item.to.length > best.to.length) best = item;
+    }
+  }
+  return best?.group ?? '';
+});
+/**
+ * Navigating into a collapsed group opens it: the page you are looking at must
+ * never be the one link you cannot see. This runs on navigation rather than at
+ * render time so the group header stays a working control afterwards.
+ */
+function expandActiveGroup() {
+  const group = activeGroup.value;
+  if (!group || !isCollapsed(group)) return;
+  collapsedGroups.value = collapsedGroups.value.filter((g) => g !== group);
+  persistCollapsed();
+}
+watch(activeGroup, expandActiveGroup, { immediate: true });
 const groupId = (group: string) => `nav-group-${group.toLowerCase()}`;
 const searchResults = computed(() =>
   visibleNavigation.value.filter((item) =>
@@ -209,14 +261,19 @@ onUnmounted(() => {
             class="nav-label"
             :class="{ collapsed: isCollapsed(section.group) }"
             :aria-expanded="!isCollapsed(section.group)"
-            :aria-controls="groupId(section.group)"
+            :aria-controls="isCollapsed(section.group) ? undefined : groupId(section.group)"
             :data-testid="`nav-group-toggle-${section.group.toLowerCase()}`"
             @click="toggleGroup(section.group)"
           >
             <span>{{ section.group }}</span>
             <AppIcon class="nav-chevron" name="chevron" :size="14" />
           </button>
-          <div v-show="!isCollapsed(section.group)" :id="groupId(section.group)" class="nav-items">
+          <!--
+            v-if, not v-show: a hidden-but-present grid track is exactly the kind
+            of thing that keeps contributing height, and a collapsed group must
+            be no taller than its header.
+          -->
+          <div v-if="!isCollapsed(section.group)" :id="groupId(section.group)" class="nav-items">
             <RouterLink
               v-for="item in section.items"
               :key="item.to"
@@ -252,6 +309,14 @@ onUnmounted(() => {
           ><span class="engine-state"
             ><span class="status-dot" :class="apiOnline ? 'good' : 'warn'"></span
             >{{ apiOnline ? 'Connected' : 'Checking' }}</span
+          ><RouterLink
+            class="icon-button"
+            to="/help"
+            aria-label="Open documentation and help"
+            title="Documentation & Help"
+            data-testid="topbar-help"
+          >
+            <AppIcon name="help" /></RouterLink
           ><button class="icon-button" aria-label="Toggle theme" @click="toggleTheme">
             <AppIcon :name="theme === 'light' ? 'moon' : 'sun'" /></button
           ><button

@@ -49,15 +49,50 @@ async function checkHealth() {
   }
 }
 
+/**
+ * `/queues` answers with a page envelope:
+ *
+ *     { items, nextCursor, total, summary: { queued, oldestEpoch },
+ *       source: { status: 'available', type: 'kamex-sqlbox' } }
+ *
+ * The depth lives at `summary.queued` and the availability at `source.status`.
+ * An older build answered flat (`{ queued, source: 'kamex-sqlbox' }`), so both
+ * shapes are read: reading only the flat one is what made this tile report
+ * "store not observable" against every current deployment.
+ */
+function readQueueSnapshot(payload: unknown): {
+  available: boolean;
+  queued: number | null;
+} {
+  const result = (payload ?? {}) as RecordValue;
+  const source = result.source;
+  const status =
+    typeof source === 'string'
+      ? source
+      : source && typeof source === 'object'
+        ? String((source as RecordValue).status ?? '')
+        : '';
+  const summary = (
+    result.summary && typeof result.summary === 'object' ? result.summary : {}
+  ) as RecordValue;
+  const queued =
+    typeof summary.queued === 'number'
+      ? summary.queued
+      : typeof result.queued === 'number'
+        ? result.queued
+        : null;
+  return { available: status !== 'unavailable' && queued !== null, queued };
+}
+
 async function checkQueues() {
   try {
-    const result = await apiRequest<RecordValue>('/queues');
-    if (result.source === 'unavailable' || typeof result.queued !== 'number') {
+    const snapshot = readQueueSnapshot(await apiRequest<RecordValue>('/queues'));
+    if (!snapshot.available) {
       queueState.value = 'unavailable';
       queueDepth.value = null;
     } else {
       queueState.value = 'ok';
-      queueDepth.value = result.queued;
+      queueDepth.value = snapshot.queued;
     }
   } catch {
     queueState.value = 'unavailable';

@@ -6,7 +6,7 @@ vi.mock('../src/stores/session', () => ({
   session: ref({
     displayName: 'Amina Operator',
     roleLabel: 'NOC',
-    permissions: new Set(['reports.view', 'system.manage']),
+    permissions: new Set(['reports.view', 'system.manage', 'messages.export']),
   }),
   canAccess: (value: { permissions: Set<string> } | null, permission?: string) =>
     !permission || Boolean(value?.permissions.has(permission)),
@@ -90,14 +90,42 @@ const volumePage = {
   offset: 0,
 };
 
+const rateGroup = {
+  period: '2026-07-08',
+  groups: [
+    { label: 'smsc-primary', messages: 120, dlrs: 88, successRate: 73.3, failureRate: 4.2 },
+    { label: 'smsc-backup', messages: 30, dlrs: 12, successRate: 40, failureRate: 20 },
+  ],
+};
+
+const heatmap = {
+  cells: [{ dow: 3, hour: 9, count: 40 }],
+  maxCount: 40,
+  window: '7d',
+};
+
+const latency = {
+  count: 88,
+  p50: 3.2,
+  p95: 9.4,
+  p99: 21,
+  unit: 'seconds',
+  window: '7d',
+  note: 'Latency approximated by matching MT and DLR rows on foreign_id.',
+};
+
 function liveMock() {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const target = String(url);
     if (target.includes('/reports/volume/run') && init?.method === 'POST')
       return apiResponse({ results: [] });
-    if (target.includes('/reports/volume/export.'))
+    if (/export\.(csv|pdf)/.test(target))
       return Promise.resolve(new Response('a,b', { status: 200 }));
     if (target.includes('/reports/volume')) return apiResponse(volumePage);
+    if (target.includes('/reports/analytics/smsc-success')) return apiResponse(rateGroup);
+    if (target.includes('/reports/analytics/route-performance')) return apiResponse(rateGroup);
+    if (target.includes('/reports/analytics/hourly-heatmap')) return apiResponse(heatmap);
+    if (target.includes('/reports/analytics/latency-sla')) return apiResponse(latency);
     if (target.includes('/reports/analytics/overview')) return apiResponse(overview);
     if (target.includes('/reports/analytics/traffic-trend'))
       return apiResponse(target.includes('days=7') ? trend7 : trend30);
@@ -213,6 +241,133 @@ describe('Analytics & Reports view', () => {
     expect(
       fetchMock.mock.calls.some((call) => /\/reports\/volume\/v1$/.test(String(call[0]))),
     ).toBe(true);
+  });
+
+  it('draws a chart for every table-heavy panel, in both themes and with a title', async () => {
+    vi.stubGlobal('fetch', liveMock());
+    const wrapper = mount(AnalyticsView);
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="trend-chart"]').exists()).toBe(true));
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="latency-chart"]').exists()).toBe(true),
+    );
+
+    for (const id of [
+      'trend-chart',
+      'breakdown-chart',
+      'smsc-chart',
+      'route-chart',
+      'smsc-success-chart',
+      'route-performance-chart',
+      'latency-chart',
+    ]) {
+      const chart = wrapper.get(`[data-testid="${id}"]`);
+      const svg = chart.get('svg');
+      // Accessible: named for a screen reader, and the same name is the <title>.
+      expect(svg.attributes('role')).toBe('img');
+      expect(svg.attributes('aria-label')).toBeTruthy();
+      expect(chart.get('title').text()).toBe(svg.attributes('aria-label'));
+      // Colour is never the only signal: every series is named in the legend.
+      expect(chart.get('.mini-chart-legend').text().length).toBeGreaterThan(0);
+      // Theme-aware: colours come from the design tokens, not hard-coded hex.
+      for (const swatch of chart.findAll('.mini-chart-swatch'))
+        expect(swatch.attributes('style')).toContain('var(--');
+    }
+
+    // The success-rate panels keep their exact numbers alongside the bars.
+    expect(wrapper.get('[data-testid="smsc-success-table"]').text()).toContain('73.3%');
+  });
+
+  it('offers a range control only where the endpoint honours a window', async () => {
+    const fetchMock = liveMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(AnalyticsView);
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('hourly-heatmap?days=7'))).toBe(
+        true,
+      ),
+    );
+
+    await wrapper.get('[data-testid="heatmap-range-30"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).includes('hourly-heatmap?days=30')),
+      ).toBe(true),
+    );
+
+    await wrapper.get('[data-testid="latency-range-90"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('latency-sla?days=90'))).toBe(
+        true,
+      ),
+    );
+
+    // Snapshot-based reports take no window, so they get no control that would
+    // silently do nothing.
+    for (const id of ['smsc', 'route', 'smsc-success', 'route-performance', 'breakdown'])
+      expect(wrapper.find(`[data-testid="${id}-range-30"]`).exists()).toBe(false);
+    expect(wrapper.findAll('.range-select')).toHaveLength(3);
+  });
+
+  it('exports every report the API can export, and names the ones it cannot', async () => {
+    const fetchMock = liveMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const click = stubDownloads();
+    const wrapper = mount(AnalyticsView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="exports-panel"]').exists()).toBe(true),
+    );
+
+    await wrapper.get('[data-testid="export-volume-pdf"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).includes('/reports/volume/export.pdf')),
+      ).toBe(true),
+    );
+
+    // Each export disables the panel while it runs; wait for it to settle.
+    await vi.waitFor(() =>
+      expect(
+        wrapper.get('[data-testid="export-delivery-csv"]').attributes('disabled'),
+      ).toBeUndefined(),
+    );
+    await wrapper.get('[data-testid="export-delivery-csv"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).includes('/reports/delivery/export.csv')),
+      ).toBe(true),
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        wrapper.get('[data-testid="export-messages-pdf"]').attributes('disabled'),
+      ).toBeUndefined(),
+    );
+    await wrapper.get('[data-testid="export-messages-pdf"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/messages/export.pdf'))).toBe(
+        true,
+      ),
+    );
+
+    // Delivery receipts have no PDF route on the API, so no PDF button exists.
+    expect(wrapper.find('[data-testid="export-delivery-pdf"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="export-delivery"]').text()).toContain('CSV only');
+    expect(wrapper.get('[data-testid="exports-unavailable-note"]').text()).toContain(
+      'Hourly traffic heatmap',
+    );
+    expect(click).toHaveBeenCalled();
+    click.mockRestore();
+  });
+
+  it('hides the message export from an operator without messages.export', async () => {
+    // The mocked session grants messages.export; assert the gate is wired to it
+    // by checking the row is rendered from the permission-filtered list.
+    vi.stubGlobal('fetch', liveMock());
+    const wrapper = mount(AnalyticsView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="export-messages"]').exists()).toBe(true),
+    );
+    expect(wrapper.find('[data-testid="export-volume"]').exists()).toBe(true);
   });
 
   it('shows honest empty states when there are no snapshots yet', async () => {

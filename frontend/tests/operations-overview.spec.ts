@@ -115,6 +115,73 @@ describe('operations overview remote state', () => {
     expect(wrapper.text()).not.toContain('network details');
   });
 
+  /**
+   * The exact body the deployed API returns for GET /queues. The tile used to
+   * look for a top-level `queued` and a string `source`, neither of which this
+   * payload has, so a perfectly healthy SQLBox reported "store not observable".
+   * Every other test used the older flat shape, which is why nothing caught it.
+   */
+  it('reads the live /queues envelope: summary.queued and source.status', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/queues'))
+        return envelope({
+          items: [],
+          nextCursor: null,
+          total: 0,
+          summary: { queued: 0, oldestEpoch: null },
+          source: { status: 'available', type: 'kamex-sqlbox' },
+        });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    });
+    const wrapper = await mountOverview(fetchMock);
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="health-list"]').text()).toContain(
+        'PostgreSQL SQLBox reachable',
+      ),
+    );
+    const health = wrapper.get('[data-testid="health-list"]').text();
+    expect(health).not.toContain('store not observable');
+    expect(health).toContain('available');
+    // Zero queued is a number, not "unavailable".
+    expect(wrapper.text()).toContain('Messages waiting in SQLBox');
+    expect(wrapper.text()).not.toContain('SQLBox queue not observable');
+  });
+
+  it('reports a non-zero live queue depth from summary.queued', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/queues'))
+        return envelope({
+          items: [{ id: '1' }],
+          nextCursor: null,
+          total: 1,
+          summary: { queued: 42, oldestEpoch: 1754300000 },
+          source: { status: 'available', type: 'kamex-sqlbox' },
+        });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    });
+    const wrapper = await mountOverview(fetchMock);
+    await vi.waitFor(() => expect(wrapper.text()).toContain('42'));
+  });
+
+  it('still reports the store unavailable when source.status says so', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/queues'))
+        return envelope({
+          items: [],
+          nextCursor: null,
+          summary: null,
+          source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: 'no pool' },
+        });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    });
+    const wrapper = await mountOverview(fetchMock);
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="health-list"]').text()).toContain('store not observable'),
+    );
+    expect(wrapper.text()).toContain('SQLBox queue not observable');
+    expect(wrapper.text()).not.toContain('no pool');
+  });
+
   it('never fabricates health rows for unobserved dependencies', async () => {
     const wrapper = await mountOverview(liveFetchMock());
     await vi.waitFor(() => expect(wrapper.text()).toContain('healthy'));

@@ -885,6 +885,25 @@ const messageError = ref('');
 const messageRow = ref<RecordValue | null>(null);
 const messageTrace = ref<RecordValue | null>(null);
 
+/**
+ * Delivery report detail drawer (delivery-reports workspace).
+ *
+ * `GET /reports/delivery` returns the SQLBox read model's full normalised row
+ * per receipt — there is no per-receipt endpoint, and none is needed: the list
+ * row already carries every field the drawer shows. The five columns in the
+ * grid are a summary of it, not the whole record.
+ */
+const dlrOpen = ref(false);
+const dlrRecord = ref<RecordValue | null>(null);
+function openDlrDetail(record: RecordValue) {
+  dlrRecord.value = record;
+  dlrOpen.value = true;
+}
+function closeDlrDetail() {
+  dlrOpen.value = false;
+  dlrRecord.value = null;
+}
+
 /* Message operations (replay / clone / requeue) on the traced message. */
 const traceId = ref('');
 const opBusy = ref(false);
@@ -2808,6 +2827,8 @@ watch(
     showCloneForm.value = false;
     snapshotOpen.value = false;
     snapshotDetail.value = null;
+    dlrOpen.value = false;
+    dlrRecord.value = null;
     configBaseline.value = null;
     configPrefillContent.value = null;
     configTemplates.value = [];
@@ -5161,7 +5182,9 @@ onUnmounted(() => {
             <tr
               v-for="(item, index) in cursorItems"
               :key="String(item.id ?? index)"
+              class="clickable-row"
               :data-testid="`dlr-row-${index}`"
+              @click="openDlrDetail(item)"
             >
               <td v-for="column in dlrColumns" :key="column.label">{{ column.value(item) }}</td>
             </tr>
@@ -5171,6 +5194,9 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+      <p v-if="cursorItems.length" class="source-note">
+        Select a delivery report to view the full receipt.
+      </p>
       <footer class="cursor-pager">
         <button
           class="secondary-button"
@@ -5189,6 +5215,85 @@ onUnmounted(() => {
           Load more
         </button>
       </footer>
+    </section>
+
+    <section
+      v-if="dlrOpen && dlrRecord"
+      class="panel detail-panel"
+      data-testid="dlr-detail-panel"
+      aria-label="Delivery report detail"
+    >
+      <header>
+        <h2>Delivery report detail</h2>
+        <button class="secondary-button" data-testid="dlr-detail-close" @click="closeDlrDetail">
+          Close
+        </button>
+      </header>
+      <dl class="detail-grid">
+        <dt>Record ID</dt>
+        <dd class="mono">
+          {{ text(dlrRecord.id ?? dlrRecord.message_id ?? dlrRecord.messageId) }}
+        </dd>
+        <dt>External reference</dt>
+        <dd class="mono">{{ text(dlrRecord.externalRef ?? dlrRecord.foreign_id) }}</dd>
+        <dt>Direction</dt>
+        <dd>{{ text(dlrRecord.direction ?? dlrRecord.momt) }}</dd>
+        <dt>Delivery status</dt>
+        <dd>
+          <span
+            class="status-badge"
+            :class="badgeTone(dlrRecord.deliveryStatus ?? dlrRecord.delivery_status)"
+            data-testid="dlr-detail-delivery-status"
+            >{{
+              text(dlrRecord.deliveryStatus ?? dlrRecord.delivery_status ?? dlrRecord.dlr_status)
+            }}</span
+          >
+        </dd>
+        <dt>DLR event</dt>
+        <dd data-testid="dlr-detail-event">{{ dlrEventLabel(dlrRecord) }}</dd>
+        <dt>DLR mask</dt>
+        <dd>{{ text(dlrRecord.dlrMask ?? dlrRecord.dlr_mask) }}</dd>
+        <dt>DLR callback URL</dt>
+        <dd class="mono">{{ text(dlrRecord.dlrUrl ?? dlrRecord.dlr_url) }}</dd>
+        <dt>Record status</dt>
+        <dd>{{ text(dlrRecord.status ?? dlrRecord.state) }}</dd>
+        <dt>Sender</dt>
+        <dd class="mono">{{ text(dlrRecord.sender ?? dlrRecord.from) }}</dd>
+        <dt>Receiver</dt>
+        <dd class="mono">
+          {{ text(dlrRecord.receiver ?? dlrRecord.recipient ?? dlrRecord.to) }}
+        </dd>
+        <dt>SMSC</dt>
+        <dd class="mono">{{ text(dlrRecord.smscId ?? dlrRecord.smsc_id ?? dlrRecord.smsc) }}</dd>
+        <dt>Service</dt>
+        <dd>{{ text(dlrRecord.service) }}</dd>
+        <dt>Account</dt>
+        <dd>{{ text(dlrRecord.account) }}</dd>
+        <dt>Box connection</dt>
+        <dd class="mono">{{ text(dlrRecord.boxcId ?? dlrRecord.boxc_id) }}</dd>
+        <dt>Received</dt>
+        <dd>{{ text(dlrRecord.timestamp ?? dlrRecord.created_at ?? dlrRecord.time) }}</dd>
+        <dt>Reported at</dt>
+        <dd>{{ text(dlrRecord.dlrAt ?? dlrRecord.dlr_at) }}</dd>
+        <dt>Report text</dt>
+        <dd>{{ text(dlrRecord.text ?? dlrRecord.msgdata) }}</dd>
+        <dt>Segments</dt>
+        <dd>{{ segmentCount(dlrRecord) }}</dd>
+        <dt>Encoding</dt>
+        <dd>{{ codingLabel(dlrRecord) }}</dd>
+        <dt>UDH</dt>
+        <dd class="mono">{{ text(dlrRecord.udhData ?? dlrRecord.udhdata) }}</dd>
+        <dt>Store</dt>
+        <dd>{{ text(dlrRecord.source) }}</dd>
+        <dt>Billing info</dt>
+        <dd class="mono">{{ text(dlrRecord.binfo) }}</dd>
+        <dt>Metadata</dt>
+        <dd class="mono">{{ text(dlrRecord.metaData ?? dlrRecord.meta_data) }}</dd>
+      </dl>
+      <p class="source-note">
+        Fields the SQLBox message store did not supply for this receipt read “—”; nothing here is
+        inferred. There is no per-receipt endpoint — this is the complete row the report returned.
+      </p>
     </section>
 
     <section v-if="isDocker && !error" class="panel" data-testid="docker-panel">

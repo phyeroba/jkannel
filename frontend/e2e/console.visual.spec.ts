@@ -4,9 +4,24 @@ const tenant = process.env.JKANNEL_E2E_TENANT ?? 'default';
 const username = process.env.JKANNEL_E2E_USERNAME ?? 'operator';
 const password = process.env.JKANNEL_E2E_PASSWORD;
 
-async function login(page: Page) {
+/**
+ * A first visit now starts with only Operations expanded. These tests are about
+ * the links and the screens behind them, so they seed the stored "nothing
+ * collapsed" preference; the default itself is asserted separately below.
+ */
+async function expandAllNavigationGroups(page: Page) {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      'jkannel-console-nav-collapsed',
+      JSON.stringify({ version: 2, collapsed: [] }),
+    ),
+  );
+}
+
+async function login(page: Page, options: { expandNav?: boolean } = {}) {
   if (!password)
     throw new Error('JKANNEL_E2E_PASSWORD is required; keep it outside source control.');
+  if (options.expandNav !== false) await expandAllNavigationGroups(page);
   await page.goto('/login');
   await page.getByTestId('tenant').fill(tenant);
   await page.getByTestId('username').fill(username);
@@ -58,6 +73,58 @@ test('@visual authenticated console uses grouped SVG navigation', async ({ page 
   expect(scrolling).toEqual({ sidebar: 'hidden', nav: 'auto' });
   await expect(page.getByRole('heading', { name: 'Operations Dashboard' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('operations-console.png'), fullPage: true });
+});
+
+test('navigation defaults to Operations only, and a collapsed group is header-height', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name === 'mobile-chrome', 'The sidebar is off-canvas on mobile.');
+  // No seeded preference: this is a genuine first visit.
+  await page.addInitScript(() => localStorage.removeItem('jkannel-console-nav-collapsed'));
+  await login(page, { expandNav: false });
+
+  const sidebar = page.getByRole('complementary', { name: 'Primary navigation' });
+  await expect(sidebar.getByRole('button', { name: 'Operations' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  for (const group of ['Messaging', 'Insights', 'Platform'])
+    await expect(sidebar.getByRole('button', { name: group })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+
+  // A collapsed group is exactly as tall as its header — no residual slab.
+  const collapsed = await sidebar.evaluate((element) => {
+    const groups = Array.from(element.querySelectorAll('.nav-group'));
+    const messaging = groups.find((group) => group.textContent?.trim().startsWith('Messaging'))!;
+    const header = messaging.querySelector('.nav-label')!;
+    return {
+      group: messaging.getBoundingClientRect().height,
+      header: header.getBoundingClientRect().height,
+    };
+  });
+  expect(collapsed.header).toBeGreaterThan(0);
+  expect(Math.round(collapsed.group)).toBe(Math.round(collapsed.header));
+
+  // Opening a workspace inside a collapsed group reveals that group.
+  await page.goto('/messages');
+  await expect(sidebar.getByRole('button', { name: 'Messaging' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+});
+
+test('documentation is reachable from inside the console', async ({ page }, testInfo) => {
+  await login(page);
+  if (testInfo.project.name === 'mobile-chrome')
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('link', { name: 'Documentation & Help' }).click();
+  await expect(page).toHaveURL(/\/help$/);
+  const guides = page.getByTestId('help-open-guides');
+  await expect(guides).toHaveAttribute('target', '_blank');
+  await expect(guides).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(page.getByTestId('help-steps')).toBeVisible();
 });
 
 test('core navigation remains interactive', async ({ page }, testInfo) => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { navigation } from '../src/navigation';
+import { documentationUrl, navigation, userGuides } from '../src/navigation';
+
+const documentationRoot = 'https://github.com/phyeroba/jkannel';
 
 describe('primary navigation contract', () => {
   it('covers every operations workspace with unique routes and permissions', () => {
@@ -33,9 +35,10 @@ describe('primary navigation contract', () => {
         '/log-explorer',
         '/routing-advanced',
         '/roles',
+        '/help',
       ]),
     );
-    expect(navigation).toHaveLength(28);
+    expect(navigation).toHaveLength(29);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -48,5 +51,23 @@ describe('primary navigation contract', () => {
     const notifications = navigation.find((item) => item.to === '/notifications');
     expect(notifications).toBeDefined();
     expect(notifications?.permission).toBeUndefined();
+  });
+
+  it('offers documentation to every role and links guides that exist in the repository', () => {
+    const help = navigation.find((item) => item.to === '/help');
+    expect(help).toBeDefined();
+    expect(help?.group).toBe('Platform');
+    // Help is for whoever is lost, whatever their role.
+    expect(help?.permission).toBeUndefined();
+
+    expect(userGuides).toHaveLength(11);
+    expect(userGuides.map((guide) => guide.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    for (const guide of userGuides) {
+      expect(guide.url.startsWith(`${documentationRoot}/blob/main/docs/user-guides/`)).toBe(true);
+      expect(guide.url).toMatch(/\/\d{2}-[a-z0-9-]+\.md$/);
+      // Every deep-link names a real console route.
+      if (guide.route) expect(navigation.some((item) => item.to === guide.route)).toBe(true);
+    }
+    expect(documentationUrl).toBe(`${documentationRoot}/tree/main/docs/user-guides`);
   });
 });

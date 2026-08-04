@@ -74,6 +74,14 @@ const trendMissing = ref(false);
 const trendError = ref('');
 const trendPoints = ref<TrendPoint[]>([]);
 const trendDays = ref(30);
+/**
+ * The only reports that can honour a window are the three whose endpoint takes
+ * `days`: traffic-trend (clamped 1–180 server-side) and hourly-heatmap /
+ * latency-sla (clamped 1–90). The per-SMSC, per-route, success-rate and
+ * delivery-breakdown endpoints read the latest report snapshot period and take
+ * no parameter, so they deliberately have no range control — one that silently
+ * did nothing would be worse than none.
+ */
 const rangeOptions = [7, 14, 30, 90];
 
 const trendSeries = computed<ChartSeries[]>(() => [
@@ -125,6 +133,21 @@ const breakdownSegments = ref<BreakdownSegment[]>([]);
 const breakdownTotal = ref(0);
 
 const hasBreakdownData = computed(() => breakdownTotal.value > 0);
+
+/**
+ * One bar per outcome. Each segment gets its own series so the legend names it:
+ * the colour is a second signal, never the only one — the label and the count
+ * are printed beside every bar in the list below the chart too.
+ */
+const BREAKDOWN_COLORS = ['var(--good)', 'var(--warn)', 'var(--info)', 'var(--brand)'];
+const breakdownSeries = computed<ChartSeries[]>(() =>
+  breakdownSegments.value.map((segment, index) => ({
+    label: segment.label,
+    color: BREAKDOWN_COLORS[index % BREAKDOWN_COLORS.length],
+    values: breakdownSegments.value.map((_, position) => (position === index ? segment.value : 0)),
+  })),
+);
+const breakdownLabels = computed(() => breakdownSegments.value.map((segment) => segment.label));
 
 function segmentPercent(value: number) {
   if (breakdownTotal.value <= 0) return 0;
@@ -332,6 +355,84 @@ function prettyJson(value: unknown): string {
   }
 }
 
+// --- Exports ----------------------------------------------------------------
+/**
+ * Only the reports the API can actually export get a button here. Each entry
+ * names a real endpoint; a report with no export route is listed in
+ * `unexportableReports` below instead of getting a button that half-works.
+ */
+interface ExportableReport {
+  key: string;
+  name: string;
+  detail: string;
+  /** Path without the `.csv` / `.pdf` suffix. */
+  base: string;
+  query: string;
+  formats: Array<'csv' | 'pdf'>;
+  permission?: string;
+}
+const exportableReports: ExportableReport[] = [
+  {
+    key: 'volume',
+    name: 'Volume report snapshots',
+    detail: 'Persisted daily/weekly message-volume snapshots, newest first.',
+    base: '/reports/volume/export',
+    query: 'sort=-periodStart&limit=500&offset=0',
+    formats: ['csv', 'pdf'],
+  },
+  {
+    key: 'delivery',
+    name: 'Delivery receipts',
+    detail: 'Every delivery-receipt row from the SQLBox message store.',
+    base: '/reports/delivery/export',
+    query: 'limit=500',
+    // The API exposes reports/delivery/export.csv only — there is no PDF route.
+    formats: ['csv'],
+  },
+  {
+    key: 'messages',
+    name: 'Message detail',
+    detail: 'Full message rows with encoding, segmentation and delivery outcome.',
+    base: '/messages/export',
+    query: 'limit=500',
+    formats: ['csv', 'pdf'],
+    permission: 'messages.export',
+  },
+];
+/** Analytics panels the API has no export route for, stated rather than faked. */
+const unexportableReports = [
+  'Traffic trend',
+  'Delivery confirmation',
+  'Traffic by SMSC',
+  'Traffic by route',
+  'SMSC success rate',
+  'Route performance',
+  'Hourly traffic heatmap',
+  'Delivery latency (SLA)',
+];
+const visibleExports = computed(() =>
+  exportableReports.filter((report) => canAccess(session.value, report.permission)),
+);
+const exportNotice = ref('');
+const exportError = ref('');
+
+async function runExport(report: ExportableReport, format: 'csv' | 'pdf') {
+  busy.value = true;
+  exportNotice.value = '';
+  exportError.value = '';
+  try {
+    const exported = await apiDownloadFile(`${report.base}.${format}?${report.query}`);
+    saveDownloadedFile(exported.blob, exported.filename);
+    exportNotice.value = `${report.name}: exported ${
+      exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'
+    } rows as ${format.toUpperCase()}.`;
+  } catch (reason) {
+    exportError.value = messageFrom(reason, `The ${report.name} export failed.`);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function exportVolume(format: 'csv' | 'pdf') {
   busy.value = true;
   volumeNotice.value = '';
@@ -389,6 +490,22 @@ const routePerformance = ref<RateGrouping>(newRateGrouping());
 
 function formatRate(value: number): string {
   return `${Math.round(value * 10) / 10}%`;
+}
+
+/**
+ * Success/failure as a grouped bar per SMSC or route. A percentage table makes
+ * you read every row to find the outlier; the bars make the outlier the first
+ * thing you see, and the table under them keeps the exact numbers.
+ */
+function rateSeries(grouping: RateGrouping): ChartSeries[] {
+  const rows = grouping.groups.slice(0, topN);
+  return [
+    { label: 'Success %', color: 'var(--good)', values: rows.map((row) => row.successRate) },
+    { label: 'Failure %', color: 'var(--bad)', values: rows.map((row) => row.failureRate) },
+  ];
+}
+function rateLabels(grouping: RateGrouping) {
+  return grouping.groups.slice(0, topN).map((row) => row.label);
 }
 
 async function loadRates(path: string, target: typeof smscSuccess) {
@@ -476,6 +593,12 @@ async function loadHeatmap() {
   }
 }
 
+function changeHeatRange(days: number) {
+  if (days === heatDays.value) return;
+  heatDays.value = days;
+  void loadHeatmap();
+}
+
 // --- Latency / SLA ----------------------------------------------------------
 interface LatencySla {
   count: number;
@@ -492,6 +615,15 @@ const latencyError = ref('');
 const latency = ref<LatencySla | null>(null);
 const latencyDays = ref(7);
 const hasLatencyData = computed(() => (latency.value ? latency.value.count > 0 : false));
+/** p50/p95/p99 as one bar each: the shape of the tail, not three numbers to diff. */
+const latencySeries = computed<ChartSeries[]>(() => [
+  {
+    label: `Latency (${latency.value?.unit ?? 'seconds'})`,
+    color: 'var(--brand)',
+    values: latency.value ? [latency.value.p50, latency.value.p95, latency.value.p99] : [],
+  },
+]);
+const latencyLabels = ['p50', 'p95', 'p99'];
 
 async function loadLatency() {
   latencyState.value = 'loading';
@@ -517,6 +649,12 @@ async function loadLatency() {
     latencyError.value = messageFrom(reason, 'Latency percentiles could not be loaded.');
     latencyState.value = 'error';
   }
+}
+
+function changeLatencyRange(days: number) {
+  if (days === latencyDays.value) return;
+  latencyDays.value = days;
+  void loadLatency();
 }
 
 // --- Saved report definitions ----------------------------------------------
@@ -716,7 +854,7 @@ onMounted(() => void refreshAll());
 </script>
 
 <template>
-  <div data-testid="analytics-view">
+  <div class="analytics-page" data-testid="analytics-view">
     <div class="dashboard-actions">
       <button
         class="secondary-button"
@@ -829,21 +967,31 @@ onMounted(() => void refreshAll());
         <p v-else-if="!hasBreakdownData" class="chart-empty" data-testid="breakdown-empty">
           No delivery data yet.
         </p>
-        <div v-else class="breakdown" data-testid="breakdown">
-          <div v-for="seg in breakdownSegments" :key="seg.label" class="breakdown-row">
-            <div class="breakdown-label">
-              <span>{{ seg.label }}</span>
-              <strong>{{ seg.value }} ({{ segmentPercent(seg.value) }}%)</strong>
+        <template v-else>
+          <MiniChart
+            type="bar"
+            data-testid="breakdown-chart"
+            title="Delivery outcome breakdown"
+            :series="breakdownSeries"
+            :labels="breakdownLabels"
+            :height="140"
+          />
+          <div class="breakdown" data-testid="breakdown">
+            <div v-for="seg in breakdownSegments" :key="seg.label" class="breakdown-row">
+              <div class="breakdown-label">
+                <span>{{ seg.label }}</span>
+                <strong>{{ seg.value }} ({{ segmentPercent(seg.value) }}%)</strong>
+              </div>
+              <div class="breakdown-track">
+                <span
+                  class="breakdown-fill"
+                  :style="{ width: `${segmentPercent(seg.value)}%` }"
+                ></span>
+              </div>
             </div>
-            <div class="breakdown-track">
-              <span
-                class="breakdown-fill"
-                :style="{ width: `${segmentPercent(seg.value)}%` }"
-              ></span>
-            </div>
+            <small class="breakdown-total">Total {{ breakdownTotal }} messages</small>
           </div>
-          <small class="breakdown-total">Total {{ breakdownTotal }} messages</small>
-        </div>
+        </template>
       </article>
     </section>
 
@@ -945,34 +1093,43 @@ onMounted(() => void refreshAll());
         >
           No traffic recorded for this period yet.
         </p>
-        <div v-else class="table-wrap" :data-testid="`${group.key}-table`">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">{{ group.unit }}</th>
-                <th scope="col">Messages</th>
-                <th scope="col">DLRs</th>
-                <th scope="col">Success</th>
-                <th scope="col">Failure</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
-                <td>{{ row.label }}</td>
-                <td>{{ row.messages }}</td>
-                <td>{{ row.dlrs }}</td>
-                <td>
-                  <span class="status-badge good">{{ formatRate(row.successRate) }}</span>
-                </td>
-                <td>
-                  <span class="status-badge" :class="row.failureRate > 0 ? 'muted' : ''">{{
-                    formatRate(row.failureRate)
-                  }}</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <template v-else>
+          <MiniChart
+            type="bar"
+            :data-testid="`${group.key}-chart`"
+            :title="`${group.title} — success and failure percentage`"
+            :series="rateSeries(group.data)"
+            :labels="rateLabels(group.data)"
+            :height="150"
+          />
+          <div class="table-wrap" :data-testid="`${group.key}-table`">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Messages</th>
+                  <th scope="col">DLRs</th>
+                  <th scope="col">Success</th>
+                  <th scope="col">Failure</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.messages }}</td>
+                  <td>{{ row.dlrs }}</td>
+                  <td>
+                    <span class="status-badge good">{{ formatRate(row.successRate) }}</span>
+                  </td>
+                  <td>
+                    <span class="status-badge" :class="row.failureRate > 0 ? 'muted' : ''">{{
+                      formatRate(row.failureRate)
+                    }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
       </article>
     </section>
 
@@ -982,6 +1139,19 @@ onMounted(() => void refreshAll());
         <div>
           <h2>Hourly traffic heatmap</h2>
           <p>Message volume by day of week and hour{{ heatWindow ? ` · ${heatWindow}` : '' }}</p>
+        </div>
+        <div class="range-select" role="group" aria-label="Heatmap range">
+          <button
+            v-for="option in rangeOptions"
+            :key="option"
+            type="button"
+            class="range-button"
+            :class="{ active: heatDays === option }"
+            :data-testid="`heatmap-range-${option}`"
+            @click="changeHeatRange(option)"
+          >
+            {{ option }}d
+          </button>
         </div>
       </header>
       <p v-if="heatState === 'loading'" class="chart-empty">Loading heatmap…</p>
@@ -1021,6 +1191,19 @@ onMounted(() => void refreshAll());
             Submit-to-DLR latency percentiles{{ latency?.window ? ` · ${latency.window}` : '' }}
           </p>
         </div>
+        <div class="range-select" role="group" aria-label="Latency range">
+          <button
+            v-for="option in rangeOptions"
+            :key="option"
+            type="button"
+            class="range-button"
+            :class="{ active: latencyDays === option }"
+            :data-testid="`latency-range-${option}`"
+            @click="changeLatencyRange(option)"
+          >
+            {{ option }}d
+          </button>
+        </div>
       </header>
       <p v-if="latencyState === 'loading'" class="chart-empty">Loading latency…</p>
       <p v-else-if="latencyState === 'error'" class="chart-empty" data-testid="latency-unavailable">
@@ -1050,6 +1233,14 @@ onMounted(() => void refreshAll());
             icon="chart"
           />
         </div>
+        <MiniChart
+          type="bar"
+          data-testid="latency-chart"
+          :title="`Submit-to-DLR latency percentiles in ${latency.unit}`"
+          :series="latencySeries"
+          :labels="latencyLabels"
+          :height="150"
+        />
         <p v-if="latency.note" class="source-note">{{ latency.note }}</p>
       </template>
     </section>
@@ -1088,6 +1279,62 @@ onMounted(() => void refreshAll());
           </ul>
         </article>
       </div>
+    </section>
+
+    <!-- Exports ------------------------------------------------------------ -->
+    <section class="panel" aria-label="Report exports" data-testid="exports-panel">
+      <header class="panel-header">
+        <div>
+          <h2>Exports</h2>
+          <p>Download a report as a file. Only reports the API can export are listed.</p>
+        </div>
+      </header>
+      <p v-if="exportNotice" class="notice" role="status" data-testid="export-notice">
+        {{ exportNotice }}
+      </p>
+      <p v-if="exportError" class="chart-empty" role="alert" data-testid="export-error">
+        {{ exportError }}
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Report</th>
+              <th scope="col">Contents</th>
+              <th scope="col">Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="report in visibleExports"
+              :key="report.key"
+              :data-testid="`export-${report.key}`"
+            >
+              <td>{{ report.name }}</td>
+              <td>{{ report.detail }}</td>
+              <td class="row-actions">
+                <button
+                  v-for="format in report.formats"
+                  :key="format"
+                  class="secondary-button"
+                  :data-testid="`export-${report.key}-${format}`"
+                  :disabled="busy"
+                  @click="runExport(report, format)"
+                >
+                  {{ format.toUpperCase() }}
+                </button>
+                <small v-if="!report.formats.includes('pdf')" class="source-note"
+                  >CSV only — the API has no PDF route for this report.</small
+                >
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="source-note" data-testid="exports-unavailable-note">
+        No export endpoint exists for {{ unexportableReports.join(', ') }}. Those panels are read on
+        screen only; use the volume snapshot export for the underlying period totals.
+      </p>
     </section>
 
     <!-- Raw volume snapshots + exports ------------------------------------ -->
@@ -1416,6 +1663,26 @@ onMounted(() => void refreshAll());
 <style src="./workspace-extras.css"></style>
 
 <style scoped>
+/*
+  The page is a stack of sections, and none of them carried a bottom margin: the
+  three `.dashboard-grid` rows (traffic trend / by SMSC / success rate, and their
+  right-hand column) ran straight into each other and into the heatmap below.
+  One gap on the stack gives every seam the same 16px the grids use internally.
+*/
+.analytics-page {
+  display: grid;
+  /* minmax(0,1fr), not the implicit `auto`: an auto column is sized by its
+     widest content, which a wide report table would push past the viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+/* These already spaced themselves; their margin would double up against the gap.
+   The latency percentile cards keep theirs — a chart follows them inside the
+   same panel, and that seam is not the stack's to space. */
+.analytics-page > .dashboard-actions,
+.analytics-page [data-testid='overview-cards'] {
+  margin-bottom: 0;
+}
 .heatmap {
   display: flex;
   flex-direction: column;

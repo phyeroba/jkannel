@@ -118,6 +118,15 @@ select:focus-visible {
   color: #8da5be;
   font-size: 12px;
 }
+/* A collapsed group must occupy exactly its header's height. The vertical
+   rhythm therefore lives in the two grid gaps (between groups, and between a
+   header and its items) and never in a margin on the header itself: a margin
+   would still be there once the items are gone. */
+.nav-group {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
 /* Base styling for the collapsible nav group header. design-authority.css
    refines this; both keep it brighter and larger than the links it heads. */
 .nav-label {
@@ -126,7 +135,7 @@ select:focus-visible {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  margin: 8px 0 4px;
+  margin: 0;
   padding: 5px 10px;
   border: 0;
   background: none;
@@ -150,9 +159,14 @@ select:focus-visible {
   display: grid;
   gap: 4px;
 }
+/* align-content:start is load-bearing: the nav is a flex child that stretches to
+   the sidebar's full height, and a grid taller than its content distributes the
+   surplus into its auto rows. That is what made a collapsed group keep several
+   lines of height instead of shrinking to its header. */
 .sidebar nav {
   display: grid;
-  gap: 4px;
+  gap: 12px;
+  align-content: start;
 }
 .sidebar nav a {
   display: grid;

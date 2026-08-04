@@ -33,6 +33,13 @@ const envelope = (data: unknown) =>
 
 const mountShell = async (fetchMock?: ReturnType<typeof vi.fn>) => {
   localStorage.removeItem('jkannel-console-theme');
+  // A first visit now starts with only Operations expanded (see the nav spec).
+  // These assertions are about the links themselves, so start from a stored
+  // "nothing collapsed" preference and keep every group open.
+  localStorage.setItem(
+    'jkannel-console-nav-collapsed',
+    JSON.stringify({ version: 2, collapsed: [] }),
+  );
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -62,9 +69,11 @@ describe('application shell', () => {
   it('exposes navigation and skip-link landmarks with accessible labels', async () => {
     const wrapper = await mountShell();
     expect(wrapper.get('a.skip-link').attributes('href')).toBe('#workspace');
-    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(28);
-    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(28);
+    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(29);
+    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(29);
     expect(wrapper.findAll('.nav-group')).toHaveLength(4);
+    // Help is reachable from the top bar as well as the Platform group.
+    expect(wrapper.get('[data-testid="topbar-help"]').attributes('href')).toBe('/help');
     expect(wrapper.get('aside[aria-label="Primary navigation"]').text()).toContain('Messaging');
     expect(wrapper.get('main').attributes('tabindex')).toBe('-1');
     expect(document.documentElement.dataset.theme).toBe('light');

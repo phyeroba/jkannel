@@ -284,6 +284,98 @@ describe('module workspace per-module enhancements', () => {
     click.mockRestore();
   });
 
+  /**
+   * The list endpoint returns the SQLBox read model's whole normalised row per
+   * receipt, and there is no per-receipt endpoint — so the drawer is built from
+   * the row itself rather than a second request.
+   */
+  it('opens a delivery report row into a detail drawer with the full receipt', async () => {
+    const receipt = {
+      id: '9911',
+      source: 'sent_sms',
+      externalRef: 'campaign-77',
+      direction: 'DLR',
+      sender: '+256700000001',
+      receiver: '+256700123456',
+      text: 'Delivered to handset',
+      smscId: 'smsc-primary',
+      service: 'alerts',
+      account: 'acme',
+      dlrMask: 31,
+      dlrUrl: 'https://acme.example/dlr',
+      boxcId: 'smsbox-1',
+      timestamp: '2026-08-04T09:00:00Z',
+      status: 'delivery_report',
+      deliveryStatus: 'delivered',
+      dlrEvent: 1,
+      dlrAt: '2026-08-04T09:00:04Z',
+      coding: 0,
+      charset: 'UTF-8',
+      udhData: null,
+      binfo: 'bundle-3',
+      metaData: '?smpp?dlr_err=000',
+      segments: 1,
+    };
+    const fetchMock = vi.fn().mockImplementation(() =>
+      apiResponse({
+        items: [receipt],
+        nextCursor: null,
+        summary: { total: 1 },
+        source: { status: 'available', type: 'kamex-sqlbox' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    expect(wrapper.find('[data-testid="dlr-detail-panel"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="dlr-row-0"]').trigger('click');
+
+    const drawer = wrapper.get('[data-testid="dlr-detail-panel"]');
+    const shown = drawer.text();
+    // Identifiers, parties, SMSC, delivery outcome, DLR event, timestamps, cause.
+    expect(shown).toContain('9911');
+    expect(shown).toContain('campaign-77');
+    expect(shown).toContain('+256700000001');
+    expect(shown).toContain('+256700123456');
+    expect(shown).toContain('smsc-primary');
+    expect(shown).toContain('2026-08-04T09:00:00Z');
+    expect(shown).toContain('2026-08-04T09:00:04Z');
+    expect(shown).toContain('https://acme.example/dlr');
+    expect(shown).toContain('?smpp?dlr_err=000');
+    expect(drawer.get('[data-testid="dlr-detail-delivery-status"]').text()).toBe('delivered');
+    // The Kannel DLR mask is translated, not printed raw as "1".
+    expect(drawer.get('[data-testid="dlr-detail-event"]').text()).toBe('delivered');
+
+    // No second request: the row already carried everything.
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).includes('/reports/delivery')).length,
+    ).toBe(1);
+
+    await drawer.get('[data-testid="dlr-detail-close"]').trigger('click');
+    expect(wrapper.find('[data-testid="dlr-detail-panel"]').exists()).toBe(false);
+  });
+
+  it('shows a dash rather than a guess for receipt fields the store did not supply', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        apiResponse({
+          items: [{ id: 'd2', receiver: '+256700000002' }],
+          nextCursor: null,
+          summary: { total: 1 },
+          source: { status: 'available', type: 'kamex-sqlbox' },
+        }),
+      ),
+    );
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="dlr-row-0"]').trigger('click');
+    const drawer = wrapper.get('[data-testid="dlr-detail-panel"]');
+    expect(drawer.text()).toContain('—');
+    expect(drawer.get('[data-testid="dlr-detail-event"]').text()).toBe('no report yet');
+  });
+
   it('enables and disables plugins gated on system.manage', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/plugins/p1/enable') && init?.method === 'POST') return apiResponse({});

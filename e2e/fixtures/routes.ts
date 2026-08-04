@@ -43,4 +43,5 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Roles & Permissions', path: '/roles', root: 'roles-view' },
   { label: 'Sessions', path: '/sessions', root: 'sessions-view' },
   { label: 'System Settings', path: '/system', root: 'module-workspace' },
+  { label: 'Documentation & Help', path: '/help', root: 'help-view' },
 ];
