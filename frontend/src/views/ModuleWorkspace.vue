@@ -4811,10 +4811,13 @@ onUnmounted(() => {
       </header>
       <p v-if="key === 'alerts'" class="source-note" data-testid="alert-actions-note">
         Acknowledging an alert records who took it and stops its escalation; “Re-notify” resends it
-        to the configured notification channels. Resolution is performed by the rule evaluator when
-        the condition clears — there is no manual resolve, assign or per-alert suppress endpoint. To
-        suppress alerting for planned work, schedule a
-        <RouterLink class="text-link" to="/alert-response">maintenance window</RouterLink>.
+        to the configured notification channels. The rule evaluator also resolves an alert on its
+        own once the condition clears. For the rest of the lifecycle — resolve, assign, suppress,
+        reopen, close and the comment thread — open the row in
+        <RouterLink class="text-link" to="/alert-lifecycle">Alert Lifecycle</RouterLink>, which has
+        the single-alert context those actions need. To silence alerting for planned work across
+        many alerts at once, schedule a
+        <RouterLink class="text-link" to="/alert-response">maintenance window</RouterLink> instead.
       </p>
       <div class="table-wrap">
         <table>
