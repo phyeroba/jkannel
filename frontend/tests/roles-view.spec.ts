@@ -31,25 +31,38 @@ const mountRoles = async () => {
   return mount(RolesView, { global: { plugins: [router] } });
 };
 
-const stubApi = () => {
-  const fetchMock = vi.fn().mockImplementation((url: string) => {
-    if (url.includes('/users/roles'))
-      return apiResponse([
-        {
-          id: 'r1',
-          name: 'administrator',
-          description: 'Full platform access',
-          user_count: 2,
-          permissions: ['users.view', 'users.manage', 'smsc.view'],
-        },
-        {
-          id: 'r2',
-          name: 'auditor',
-          description: 'Read-only audit access',
-          user_count: 0,
-          permissions: ['users.view'],
-        },
-      ]);
+const ROLES = [
+  {
+    id: 'r1',
+    name: 'administrator',
+    description: 'Full platform access',
+    isSystem: true,
+    userCount: 2,
+    permissions: ['users.view', 'users.manage', 'smsc.view'],
+  },
+  {
+    id: 'r2',
+    name: 'auditor',
+    description: 'Read-only audit access',
+    isSystem: false,
+    userCount: 0,
+    permissions: ['users.view'],
+  },
+];
+
+const CATALOGUE = [
+  { code: 'users.view', description: 'Read users and roles', category: 'users' },
+  { code: 'users.manage', description: 'Create and edit users and roles', category: 'users' },
+  { code: 'smsc.view', description: 'Read SMSC connections', category: 'smsc' },
+  { code: 'smsc.manage', description: 'Change SMSC connections', category: 'smsc' },
+];
+
+const stubApi = (overrides: (url: string, init?: RequestInit) => unknown = () => undefined) => {
+  const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    const override = overrides(url, init);
+    if (override !== undefined) return override;
+    if (url.includes('/users/permissions')) return apiResponse(CATALOGUE);
+    if (url.includes('/users/roles')) return apiResponse(ROLES);
     if (url.includes('/users'))
       return apiResponse({
         items: [
@@ -63,6 +76,9 @@ const stubApi = () => {
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
+
+const conflict = (message: string) =>
+  Promise.resolve(new Response(JSON.stringify({ success: false, message }), { status: 409 }));
 
 describe('Roles & permissions view', () => {
   beforeEach(() => {
@@ -116,15 +132,156 @@ describe('Roles & permissions view', () => {
     wrapper.unmount();
   });
 
-  it('states plainly that role definitions cannot be edited through the API', async () => {
+  it('shows isSystem and userCount, and blocks the deletes the API would refuse', async () => {
     stubApi();
     const wrapper = await mountRoles();
     await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    const note = wrapper.get('[data-testid="roles-readonly-note"]').text();
-    expect(note).toContain('GET /users/roles');
-    expect(note).toContain('no endpoint to create a role');
-    // No create/edit/delete affordance is offered anywhere on the screen.
-    expect(wrapper.html()).not.toContain('data-testid="role-create"');
+    // administrator: system role, 2 holders -> delete disabled twice over.
+    expect(wrapper.find('[data-testid="role-system-r1"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="role-user-count-r1"]').text()).toBe('2');
+    expect(wrapper.get('[data-testid="role-delete-r1"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="role-delete-blocked-r1"]').text()).toContain(
+      'system role cannot be deleted',
+    );
+    // auditor: ordinary role with nobody holding it -> deletable.
+    expect(wrapper.find('[data-testid="role-system-r2"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="role-delete-r2"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-testid="role-delete-blocked-r2"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('creates a role with permissions picked from the catalogue, grouped by category', async () => {
+    const fetchMock = stubApi();
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+
+    await wrapper.get('[data-testid="role-create"]').trigger('click');
+    // Grouping comes from the catalogue's own `category`, not the code prefix.
+    expect(wrapper.find('[data-testid="role-permission-group-users"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="role-permission-group-smsc"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="role-permission-smsc.manage"]').text()).toContain(
+      'Change SMSC connections',
+    );
+
+    await wrapper.get('[data-testid="role-name"]').setValue('noc-operator');
+    await wrapper.get('[data-testid="role-description"]').setValue('Day shift');
+    await wrapper.get('[data-testid="role-permission-smsc.view"] input').setValue(true);
+    await wrapper.get('[data-testid="role-save"]').trigger('click');
+
+    await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        (entry) =>
+          String(entry[0]).includes('/users/roles') &&
+          (entry[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(String((call?.[1] as RequestInit).body));
+      expect(body).toEqual({
+        name: 'noc-operator',
+        description: 'Day shift',
+        permissions: ['smsc.view'],
+      });
+    });
+    wrapper.unmount();
+  });
+
+  it('edits a system role without sending a rename, and sends the whole replacement set', async () => {
+    const fetchMock = stubApi();
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+
+    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
+    expect(wrapper.get('[data-testid="role-form-system-note"]').text()).toContain(
+      'refuses a rename',
+    );
+    expect(wrapper.get('[data-testid="role-name"]').attributes('disabled')).toBeDefined();
+    // Untick smsc.view: PATCH replaces the whole set, so it must be absent.
+    await wrapper.get('[data-testid="role-permission-smsc.view"] input').setValue(false);
+    expect(wrapper.get('[data-testid="role-permission-diff"]').text()).toContain('smsc.view');
+    await wrapper.get('[data-testid="role-save"]').trigger('click');
+
+    await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        (entry) => (entry[1] as RequestInit | undefined)?.method === 'PATCH',
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(String((call?.[1] as RequestInit).body));
+      expect(body.name).toBeUndefined();
+      expect(body.permissions).toEqual(['users.view', 'users.manage']);
+    });
+    wrapper.unmount();
+  });
+
+  it('warns before a change that would leave nobody holding users.manage', async () => {
+    stubApi();
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
+    expect(wrapper.find('[data-testid="role-admin-warning"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="role-permission-users.manage"] input').setValue(false);
+    expect(wrapper.get('[data-testid="role-admin-warning"]').text()).toContain('users.manage');
+    wrapper.unmount();
+  });
+
+  it('surfaces the API 409 verbatim instead of a generic save failure', async () => {
+    stubApi((url, init) =>
+      init?.method === 'PATCH'
+        ? conflict(
+            'That change would leave no user holding users.manage; role administration would become impossible',
+          )
+        : undefined,
+    );
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
+    await wrapper.get('[data-testid="role-save"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="role-form-error"]').text()).toContain(
+        'no user holding users.manage',
+      ),
+    );
+    wrapper.unmount();
+  });
+
+  it('says so when the permission catalogue endpoint is absent, rather than inventing one', async () => {
+    stubApi((url) =>
+      url.includes('/users/permissions')
+        ? Promise.resolve(
+            new Response(JSON.stringify({ success: false, message: 'Not found' }), { status: 404 }),
+          )
+        : undefined,
+    );
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await wrapper.get('[data-testid="role-create"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="permission-catalogue-error"]').text()).toContain(
+        'GET /users/permissions',
+      ),
+    );
+    // It falls back to the codes roles advertise, and never claims more.
+    expect(wrapper.find('[data-testid="role-permission-smsc.view"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="role-permission-smsc.manage"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('hides every mutation control from an operator without users.manage', async () => {
+    stubApi();
+    // The shared session mock holds users.manage; strip it for this case only.
+    const store = await import('../src/stores/session');
+    const original = store.session.value;
+    (store.session as { value: unknown }).value = {
+      displayName: 'Read Only',
+      roles: ['auditor'],
+      permissions: new Set(['users.view']),
+    };
+    const wrapper = await mountRoles();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    expect(wrapper.find('[data-testid="role-create"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="role-edit-r1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="role-delete-r1"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="roles-readonly"]').text()).toContain('users.manage');
+    (store.session as { value: unknown }).value = original;
     wrapper.unmount();
   });
 

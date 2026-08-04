@@ -25,6 +25,13 @@ export const navigation: NavigationItem[] = [
   },
   { label: 'Alerts', to: '/alerts', icon: 'alert', permission: 'alerts.view', group: 'Operations' },
   {
+    label: 'Alert Lifecycle',
+    to: '/alert-lifecycle',
+    icon: 'alert',
+    permission: 'alerts.view',
+    group: 'Operations',
+  },
+  {
     label: 'Escalation & Maintenance',
     to: '/alert-response',
     icon: 'bell',
@@ -135,6 +142,13 @@ export const navigation: NavigationItem[] = [
     to: '/logs-audit',
     icon: 'terminal',
     permission: 'monitoring.view',
+    group: 'Platform',
+  },
+  {
+    label: 'Log Explorer',
+    to: '/log-explorer',
+    icon: 'terminal',
+    permission: 'system.view',
     group: 'Platform',
   },
   {

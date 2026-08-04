@@ -390,6 +390,87 @@ async function deleteWindow(row: RecordValue) {
   }
 }
 
+// --- Notification readiness -------------------------------------------------
+/**
+ * "If an alert fires right now, does anybody hear about it?" A fresh install
+ * has no SMTP_URL and no webhook, so every escalation step past the dashboard
+ * records "no enabled channel" in a column nobody reads and the alert sits open
+ * looking fine. This panel is the difference between "alerts work" and "alerts
+ * silently reach nobody", so it is rendered above the policies that depend on it.
+ *
+ * Reads need alerts.view (already the route guard); the repair that re-seeds
+ * the always-deliverable dashboard channel and a default policy is system.manage.
+ */
+interface ChannelReadiness {
+  id?: string;
+  name?: string;
+  type?: string;
+  enabled?: boolean;
+  deliverable?: boolean;
+  reason?: string;
+}
+interface TenantReadiness {
+  channels?: ChannelReadiness[];
+  deliverableChannels?: number;
+  openAlerts?: number;
+  undeliverableAlerts?: number;
+  unnotifiedAlerts?: number;
+  escalationPolicies?: number;
+  warning?: string | null;
+}
+
+const readiness = ref<TenantReadiness | null>(null);
+const readinessState = ref<LoadState>('loading');
+const readinessError = ref('');
+const readinessMissing = ref(false);
+const readinessNotice = ref('');
+const readinessBusy = ref(false);
+
+const readinessChannels = computed<ChannelReadiness[]>(() =>
+  Array.isArray(readiness.value?.channels) ? readiness.value.channels : [],
+);
+const deliverableCount = computed(() => Number(readiness.value?.deliverableChannels ?? 0));
+
+async function loadReadiness() {
+  readinessState.value = 'loading';
+  readinessMissing.value = false;
+  try {
+    readiness.value = await apiRequest<TenantReadiness>('/monitoring/notifications/readiness');
+    readinessError.value = '';
+    readinessState.value = 'ok';
+  } catch (reason) {
+    readiness.value = null;
+    readinessMissing.value = isMissing(reason);
+    readinessError.value = messageFrom(reason, 'Notification readiness could not be evaluated.');
+    readinessState.value = 'error';
+  }
+}
+
+async function repairReadiness() {
+  if (!canManage.value) return;
+  readinessBusy.value = true;
+  readinessNotice.value = '';
+  readinessError.value = '';
+  try {
+    const result = await apiRequest<{ channel?: boolean; policy?: boolean }>(
+      '/monitoring/notifications/readiness/repair',
+      { method: 'POST', body: '{}' },
+    );
+    const seeded = [
+      result.channel ? 'a default dashboard channel' : '',
+      result.policy ? 'a default escalation policy' : '',
+    ].filter(Boolean);
+    readinessNotice.value = seeded.length
+      ? `Seeded ${seeded.join(' and ')}. Dashboard delivery is in-app only — configure email, SMS or a webhook for anything that has to reach somebody off-console.`
+      : 'Nothing needed seeding: a dashboard channel and an enabled escalation policy already exist.';
+    await Promise.all([loadReadiness(), loadPolicies()]);
+  } catch (reason) {
+    readinessError.value = messageFrom(reason, 'Notification defaults could not be re-seeded.');
+  } finally {
+    readinessBusy.value = false;
+  }
+}
+
 // --- Correlation groups -----------------------------------------------------
 const correlations = ref<RecordValue[]>([]);
 const correlationState = ref<LoadState>('loading');
@@ -412,6 +493,7 @@ onMounted(() => {
   void loadPolicies();
   void loadWindows();
   void loadCorrelations();
+  void loadReadiness();
 });
 </script>
 
@@ -433,6 +515,151 @@ onMounted(() => {
       escalation are suppressed for their scope:
       <span class="mono">{{ activeWindows.map((row) => text(row.name)).join(', ') }}</span>
     </p>
+
+    <!-- Notification readiness -------------------------------------------------- -->
+    <section class="panel" data-testid="readiness-panel" aria-label="Notification readiness">
+      <header class="panel-header">
+        <div>
+          <h2>Notification readiness</h2>
+          <p aria-live="polite">
+            {{
+              readinessState === 'loading'
+                ? 'Evaluating whether an alert would reach anybody…'
+                : `${deliverableCount} of ${readinessChannels.length} channel(s) can actually deliver right now`
+            }}
+          </p>
+        </div>
+        <div class="detail-actions">
+          <button class="secondary-button" data-testid="readiness-refresh" @click="loadReadiness">
+            Re-check
+          </button>
+          <button
+            v-if="canManage"
+            class="secondary-button"
+            data-testid="readiness-repair"
+            :disabled="readinessBusy"
+            @click="repairReadiness"
+          >
+            {{ readinessBusy ? 'Seeding…' : 'Re-seed defaults' }}
+          </button>
+        </div>
+      </header>
+      <p class="source-note">
+        A channel is only called deliverable when its transport is genuinely usable — SMTP_URL set
+        for email, an http(s) URL for a webhook, an MSISDN for SMS. This reports capability, not a
+        delivery that happened.
+      </p>
+
+      <p v-if="readinessNotice" class="notice" role="status" data-testid="readiness-notice">
+        {{ readinessNotice }}
+      </p>
+      <p
+        v-if="readinessState === 'error'"
+        class="chart-empty"
+        role="alert"
+        data-testid="readiness-error"
+      >
+        {{
+          readinessMissing
+            ? 'The notification readiness API is not available in this deployment, so whether an alert reaches anybody cannot be verified here.'
+            : readinessError
+        }}
+      </p>
+      <template v-else>
+        <p
+          v-if="readiness?.warning"
+          class="warn-notice"
+          role="alert"
+          data-testid="readiness-warning"
+        >
+          {{ readiness.warning }}
+        </p>
+        <p
+          v-else-if="readinessState === 'ok'"
+          class="notice"
+          role="status"
+          data-testid="readiness-ok"
+        >
+          At least one channel can deliver and an escalation policy is enabled — an alert firing now
+          reaches somebody.
+        </p>
+
+        <div class="summary-strip">
+          <div class="metric">
+            <strong data-testid="readiness-deliverable">{{ deliverableCount }}</strong>
+            <small>Deliverable channels</small>
+          </div>
+          <div class="metric">
+            <strong data-testid="readiness-open-alerts">
+              {{ Number(readiness?.openAlerts ?? 0) }}
+            </strong>
+            <small>Open alerts</small>
+          </div>
+          <div class="metric">
+            <strong data-testid="readiness-undeliverable">
+              {{ Number(readiness?.undeliverableAlerts ?? 0) }}
+            </strong>
+            <small>Reached nobody</small>
+          </div>
+          <div class="metric">
+            <strong data-testid="readiness-unnotified">
+              {{ Number(readiness?.unnotifiedAlerts ?? 0) }}
+            </strong>
+            <small>Not yet attempted</small>
+          </div>
+          <div class="metric">
+            <strong>{{ Number(readiness?.escalationPolicies ?? 0) }}</strong>
+            <small>Enabled policies</small>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Channel</th>
+                <th scope="col">Transport</th>
+                <th scope="col">Enabled</th>
+                <th scope="col">Deliverable</th>
+                <th scope="col">Why not</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="channel in readinessChannels"
+                :key="text(channel.id)"
+                :data-testid="`readiness-channel-${text(channel.id)}`"
+              >
+                <td>
+                  <strong>{{ text(channel.name) }}</strong>
+                </td>
+                <td class="mono">{{ text(channel.type) }}</td>
+                <td>{{ channel.enabled === false ? 'no' : 'yes' }}</td>
+                <td>
+                  <span class="status-badge" :class="channel.deliverable ? 'good' : 'bad'">
+                    {{ channel.deliverable ? 'deliverable' : 'cannot deliver' }}
+                  </span>
+                </td>
+                <td>{{ text(channel.reason, '') }}</td>
+              </tr>
+              <tr v-if="readinessState === 'ok' && !readinessChannels.length">
+                <td colspan="5" class="empty-cell" data-testid="readiness-empty">
+                  No notification channels exist at all, so every alert reaches nobody.
+                  {{
+                    canManage
+                      ? 'Re-seed defaults to create the always-deliverable dashboard channel.'
+                      : 'Seeding the defaults requires the system.manage permission.'
+                  }}
+                </td>
+              </tr>
+              <tr v-if="readinessState === 'loading'">
+                <td colspan="5" class="empty-cell">Evaluating channels…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </section>
 
     <!-- Escalation policies --------------------------------------------------- -->
     <section class="panel" data-testid="escalation-panel" aria-label="Escalation policies">

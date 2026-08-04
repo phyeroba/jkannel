@@ -99,6 +99,17 @@ const messageRow = {
   dlrAt: '2026-08-04T09:05:00Z',
   externalRef: 'corr-900',
   timestamp: '2026-08-04T09:00:00Z',
+  // Encoding / segmentation columns the SQLBox read model now publishes.
+  coding: 2,
+  charset: 'UTF-16BE',
+  udhData: '050003AB0201',
+  validity: 1440,
+  deferred: null,
+  mclass: 1,
+  pid: 0,
+  binfo: 'acme-billing',
+  metaData: '?smpp?tlv=1',
+  segments: 3,
 };
 
 describe('module workspace operational density', () => {
@@ -295,7 +306,7 @@ describe('module workspace operational density', () => {
     wrapper.unmount();
   });
 
-  it('shows the sent_sms fields the grid used to drop, and is honest about the date filter', async () => {
+  it('shows the sent_sms fields the grid used to drop, including segments and encoding', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation(() => apiResponse({ items: [messageRow], nextCursor: null })),
@@ -310,15 +321,82 @@ describe('module workspace operational density', () => {
     expect(row).toContain('corr-900');
     // dlr_mask 2 on the correlated receipt means "failed", not "requested mask 2".
     expect(row).toContain('failed');
+    // coding 2 is UCS-2, and the derived segment count explains the billing.
+    expect(row).toContain('UCS-2');
+    expect(row).toContain('UTF-16BE');
+    expect(row).toContain('3');
+    wrapper.unmount();
+  });
+
+  it('sends the date range to the store rather than filtering the loaded page', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      apiResponse({
+        items: [messageRow],
+        nextCursor: null,
+        filters: { description: 'from=2026-08-05T00:00:00.000Z' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/messages', 'Messages');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
 
     await wrapper.get('[data-testid="message-from"]').setValue('2026-08-05T00:00');
+    await wrapper.get('[data-testid="message-apply"]').trigger('click');
+
+    // The range goes to the API; the row it returned is NOT re-filtered away.
+    await vi.waitFor(() => {
+      const listed = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(listed.some((url) => url.includes('/messages?') && url.includes('from='))).toBe(true);
+    });
+    expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true);
+    // The old "the API does not accept a date range yet" warning is gone.
+    expect(wrapper.html()).not.toContain('does not accept a date range yet');
+    // And the echoed filter set proves what the store actually applied.
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="message-date-note"]').text()).toContain(
-        'does not accept a date range yet',
+      expect(wrapper.get('[data-testid="message-applied-filters"]').text()).toContain(
+        'from=2026-08-05T00:00:00.000Z',
       ),
     );
-    // The row is outside the range, so the console filters it out of the page.
-    expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('shows the API 400 for an invalid range beside the filters, not as an outage', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        String(url).includes('from=')
+          ? Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: false,
+                  message: 'from must not be after to (from="2026-09-01", to="2026-08-01")',
+                }),
+                { status: 400 },
+              ),
+            )
+          : apiResponse({ items: [messageRow], nextCursor: null }),
+      ),
+    );
+    const wrapper = await mountWorkspace('/messages', 'Messages');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
+
+    // An inverted range is caught locally before the round trip.
+    await wrapper.get('[data-testid="message-from"]').setValue('2026-09-01T00:00');
+    await wrapper.get('[data-testid="message-to"]').setValue('2026-08-01T00:00');
+    expect(wrapper.get('[data-testid="message-range-error"]').text()).toContain(
+      'after the “To” date',
+    );
+
+    // And the API's own wording is shown when it is the one refusing.
+    await wrapper.get('[data-testid="message-to"]').setValue('');
+    await wrapper.get('[data-testid="message-apply"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="message-filter-error"]').text()).toContain(
+        'from must not be after to',
+      ),
+    );
+    // Not rendered as "workspace could not load".
+    expect(wrapper.find('[data-testid="api-state"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

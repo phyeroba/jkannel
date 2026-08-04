@@ -54,8 +54,34 @@ const activeWindow = {
   created_by: 'amina',
 };
 
+/** A fresh install: dashboard works, email/webhook were never configured. */
+const readiness = {
+  tenantId: 't1',
+  channels: [
+    { id: 'ch-1', name: 'Default dashboard', type: 'dashboard', enabled: true, deliverable: true },
+    {
+      id: 'ch-2',
+      name: 'NOC mailbox',
+      type: 'email',
+      enabled: true,
+      deliverable: false,
+      reason: 'SMTP_URL is not configured',
+    },
+  ],
+  deliverableChannels: 1,
+  openAlerts: 3,
+  undeliverableAlerts: 2,
+  unnotifiedAlerts: 1,
+  escalationPolicies: 1,
+  warning: '2 open alert(s) had an escalation step that could not be delivered.',
+};
+
 const stubApi = (overrides: Record<string, unknown> = {}) => {
   const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes('/monitoring/notifications/readiness/repair'))
+      return apiResponse({ channel: true, policy: false, readiness });
+    if (url.includes('/monitoring/notifications/readiness'))
+      return apiResponse(overrides.readiness ?? readiness);
     if (url.includes('/monitoring/escalation/policies') && init?.method)
       return apiResponse({ id: 'pol-1' });
     if (url.includes('/monitoring/escalation/policies')) return apiResponse([policy]);
@@ -237,6 +263,68 @@ describe('Escalation & maintenance view', () => {
     );
     expect(wrapper.get('[data-testid="policy-error"]').text()).toContain('not available');
     expect(wrapper.get('[data-testid="maintenance-error"]').text()).toContain('not available');
+    expect(wrapper.get('[data-testid="readiness-error"]').text()).toContain('not available');
     wrapper.unmount();
+  });
+
+  it('shows per-channel notification readiness and why a channel cannot deliver', async () => {
+    stubApi();
+    const wrapper = mount(AlertResponseView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="readiness-channel-ch-2"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="readiness-channel-ch-1"]').text()).toContain('deliverable');
+    const email = wrapper.get('[data-testid="readiness-channel-ch-2"]').text();
+    expect(email).toContain('cannot deliver');
+    expect(email).toContain('SMTP_URL is not configured');
+    expect(wrapper.get('[data-testid="readiness-deliverable"]').text()).toBe('1');
+    expect(wrapper.get('[data-testid="readiness-undeliverable"]').text()).toBe('2');
+    // The API's warning is the headline, not a rephrasing of it.
+    expect(wrapper.get('[data-testid="readiness-warning"]').text()).toContain(
+      'could not be delivered',
+    );
+    expect(wrapper.find('[data-testid="readiness-ok"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('confirms readiness when a channel can deliver and a policy is enabled', async () => {
+    stubApi({ readiness: { ...readiness, undeliverableAlerts: 0, warning: null } });
+    const wrapper = mount(AlertResponseView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="readiness-ok"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="readiness-ok"]').text()).toContain('reaches somebody');
+    expect(wrapper.find('[data-testid="readiness-warning"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('re-seeds notification defaults, and offers that only with system.manage', async () => {
+    const fetchMock = stubApi();
+    const wrapper = mount(AlertResponseView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="readiness-repair"]').exists()).toBe(true),
+    );
+    await wrapper.get('[data-testid="readiness-repair"]').trigger('click');
+    await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find((entry) =>
+        String(entry[0]).includes('/monitoring/notifications/readiness/repair'),
+      );
+      expect((call?.[1] as RequestInit | undefined)?.method).toBe('POST');
+    });
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="readiness-notice"]').text()).toContain(
+        'default dashboard channel',
+      ),
+    );
+    wrapper.unmount();
+
+    grant('alerts.view');
+    stubApi();
+    const readOnly = mount(AlertResponseView);
+    await vi.waitFor(() =>
+      expect(readOnly.find('[data-testid="readiness-panel"]').exists()).toBe(true),
+    );
+    expect(readOnly.find('[data-testid="readiness-repair"]').exists()).toBe(false);
+    readOnly.unmount();
   });
 });

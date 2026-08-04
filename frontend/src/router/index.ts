@@ -7,6 +7,8 @@ import AnalyticsView from '../views/AnalyticsView.vue';
 import BulkSendView from '../views/BulkSendView.vue';
 import LiveQueueView from '../views/LiveQueueView.vue';
 import AlertResponseView from '../views/AlertResponseView.vue';
+import AlertLifecycleView from '../views/AlertLifecycleView.vue';
+import LogExplorerView from '../views/LogExplorerView.vue';
 import RoutingDepthView from '../views/RoutingDepthView.vue';
 import RolesView from '../views/RolesView.vue';
 import { canAccess, session } from '../stores/session';
@@ -189,6 +191,30 @@ const routes: RouteRecordRaw[] = [
         'Define who an unacknowledged alert escalates to, and suppress alerting during planned work.',
       breadcrumb: ['Alerts', 'Escalation & Maintenance'],
       permission: 'alerts.view',
+    },
+  },
+  {
+    path: '/alert-lifecycle',
+    name: 'alert-lifecycle',
+    component: AlertLifecycleView,
+    meta: {
+      title: 'Alert Lifecycle',
+      description:
+        'Acknowledge, resolve, assign, suppress, reopen and close an alert, and keep the incident thread on the alert itself.',
+      breadcrumb: ['Alerts', 'Lifecycle'],
+      permission: 'alerts.view',
+    },
+  },
+  {
+    path: '/log-explorer',
+    name: 'log-explorer',
+    component: LogExplorerView,
+    meta: {
+      title: 'Log Explorer',
+      description:
+        'Search this API process’s in-memory log buffer by correlation id, level, route and time window. Not durable storage.',
+      breadcrumb: ['Log Explorer'],
+      permission: 'system.view',
     },
   },
   {

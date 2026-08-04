@@ -1,0 +1,542 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { ApiError, apiRequest } from '../api';
+import { useLiveResource } from '../composables/useLiveResource';
+
+type LoadState = 'loading' | 'ok' | 'error';
+
+interface LogEntry {
+  timestamp?: string;
+  level?: string;
+  message?: string;
+  context?: string;
+  correlationId?: string;
+  requestId?: string;
+  userId?: string;
+  tenantId?: string;
+  username?: string;
+  method?: string;
+  route?: string;
+  status?: number;
+  durationMs?: number;
+  clientIp?: string;
+  trace?: string;
+}
+
+interface LogQueryResult {
+  items?: LogEntry[];
+  matched?: number;
+  stored?: number;
+  capacity?: number;
+  dropped?: number;
+  oldest?: string | null;
+  newest?: string | null;
+  durable?: boolean;
+  scope?: string;
+  notice?: string;
+}
+
+/** Mirrors LOG_LEVELS in platform/log-buffer.ts, weakest first. */
+const LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
+const LIMIT_CHOICES = [50, 100, 250, 500, 1000];
+
+function text(value: unknown, fallback = '—') {
+  return value === null || value === undefined || value === '' ? fallback : String(value);
+}
+function num(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function messageFrom(reason: unknown, fallback: string) {
+  return reason instanceof Error ? reason.message : fallback;
+}
+function isMissing(reason: unknown) {
+  return reason instanceof ApiError && (reason.status === 404 || reason.status === 501);
+}
+function levelTone(level: unknown) {
+  const value = String(level ?? '').toLowerCase();
+  if (value === 'error' || value === 'fatal') return 'bad';
+  if (value === 'warn') return 'warn';
+  if (value === 'info') return 'good';
+  return '';
+}
+/** `datetime-local` (browser zone) -> the ISO instant the API expects. */
+function fromLocalInput(value: string): string {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : '';
+}
+
+// --- Filters ------------------------------------------------------------------
+// correlationId is first and is the primary control: "show me everything for
+// this incident" is the workflow this view exists for.
+const correlationId = ref('');
+const requestId = ref('');
+const minLevel = ref('');
+const level = ref('');
+const routeFilter = ref('');
+const contains = ref('');
+const tenantId = ref('');
+const userId = ref('');
+const since = ref('');
+const until = ref('');
+const limit = ref(100);
+
+const entries = ref<LogEntry[]>([]);
+const result = ref<LogQueryResult | null>(null);
+const state = ref<LoadState>('loading');
+const error = ref('');
+const missing = ref(false);
+const selected = ref<LogEntry | null>(null);
+
+const activeFilters = computed(() => {
+  const parts: string[] = [];
+  if (correlationId.value.trim()) parts.push(`correlationId=${correlationId.value.trim()}`);
+  if (requestId.value.trim()) parts.push(`requestId=${requestId.value.trim()}`);
+  if (level.value) parts.push(`level=${level.value}`);
+  if (minLevel.value) parts.push(`minLevel=${minLevel.value}`);
+  if (routeFilter.value.trim()) parts.push(`route=${routeFilter.value.trim()}`);
+  if (contains.value.trim()) parts.push(`contains=${contains.value.trim()}`);
+  if (tenantId.value.trim()) parts.push(`tenantId=${tenantId.value.trim()}`);
+  if (userId.value.trim()) parts.push(`userId=${userId.value.trim()}`);
+  if (since.value) parts.push(`since=${since.value}`);
+  if (until.value) parts.push(`until=${until.value}`);
+  return parts;
+});
+
+function buildParams() {
+  const params = new URLSearchParams();
+  if (correlationId.value.trim()) params.set('correlationId', correlationId.value.trim());
+  if (requestId.value.trim()) params.set('requestId', requestId.value.trim());
+  if (level.value) params.set('level', level.value);
+  if (minLevel.value) params.set('minLevel', minLevel.value);
+  if (routeFilter.value.trim()) params.set('route', routeFilter.value.trim());
+  if (contains.value.trim()) params.set('contains', contains.value.trim());
+  if (tenantId.value.trim()) params.set('tenantId', tenantId.value.trim());
+  if (userId.value.trim()) params.set('userId', userId.value.trim());
+  const sinceIso = since.value ? fromLocalInput(since.value) : '';
+  const untilIso = until.value ? fromLocalInput(until.value) : '';
+  if (sinceIso) params.set('since', sinceIso);
+  if (untilIso) params.set('until', untilIso);
+  params.set('limit', String(limit.value));
+  return params;
+}
+
+async function search() {
+  state.value = state.value === 'ok' ? 'ok' : 'loading';
+  missing.value = false;
+  try {
+    const payload = await apiRequest<LogQueryResult>(`/observability/logs?${buildParams()}`);
+    result.value = payload ?? null;
+    entries.value = Array.isArray(payload?.items) ? payload.items : [];
+    error.value = '';
+    state.value = 'ok';
+  } catch (reason) {
+    entries.value = [];
+    result.value = null;
+    missing.value = isMissing(reason);
+    // A 400 from the controller names the exact parameter it rejected
+    // (level, since, until, limit); show that instead of a generic failure.
+    error.value = messageFrom(reason, 'The log buffer could not be queried.');
+    state.value = 'error';
+  }
+}
+
+function resetFilters() {
+  correlationId.value = '';
+  requestId.value = '';
+  minLevel.value = '';
+  level.value = '';
+  routeFilter.value = '';
+  contains.value = '';
+  tenantId.value = '';
+  userId.value = '';
+  since.value = '';
+  until.value = '';
+  selected.value = null;
+  void search();
+}
+
+/** One click from any line to "everything else in this request's trace". */
+function traceCorrelation(entry: LogEntry) {
+  const id = text(entry.correlationId, '');
+  if (!id || id === '—') return;
+  correlationId.value = id;
+  requestId.value = '';
+  selected.value = null;
+  void search();
+}
+
+const truncated = computed(() => num(result.value?.matched) > entries.value.length);
+const bufferFull = computed(
+  () => num(result.value?.capacity) > 0 && num(result.value?.stored) >= num(result.value?.capacity),
+);
+const notice = computed(() => text(result.value?.notice, ''));
+const isDurable = computed(() => result.value?.durable === true);
+
+const refreshChoices = [5, 10, 30, 60];
+const { autoRefresh, intervalSeconds, refreshing, lastRefreshedAt, refreshNow } = useLiveResource(
+  () => search(),
+  { intervalSeconds: 10, enabled: false, immediate: false },
+);
+
+onMounted(() => {
+  void search();
+});
+</script>
+
+<template>
+  <div data-testid="log-explorer-view">
+    <!--
+      The honesty banner is not decoration. This endpoint reads a bounded ring
+      buffer inside ONE API process: it is lost on restart, it does not see the
+      other replicas, and it evicts its oldest lines once it wraps. Anybody
+      reading this screen as "the logs" would draw wrong conclusions from an
+      absence of evidence, so the limits are stated before the results.
+    -->
+    <p class="warn-notice" role="status" data-testid="log-buffer-warning">
+      This is <strong>not durable log storage</strong>. It is an in-memory ring buffer local to a
+      single API process: entries are lost on restart, are not shared between replicas, and the
+      oldest lines are evicted once the buffer wraps. A line missing here does not mean it never
+      happened — only that this process no longer holds it. Ship stdout to a real log store for
+      retention.
+      <span v-if="notice" class="mono" data-testid="log-buffer-notice">{{ notice }}</span>
+    </p>
+    <p v-if="isDurable" class="notice" role="status" data-testid="log-buffer-durable">
+      This deployment reports the log source as durable, so the caveat above does not apply to it.
+    </p>
+
+    <!-- Buffer health --------------------------------------------------------- -->
+    <section class="panel" data-testid="log-buffer-panel" aria-label="Log buffer health">
+      <header class="panel-header">
+        <div>
+          <h2>Buffer</h2>
+          <p aria-live="polite">
+            {{
+              state === 'loading'
+                ? 'Querying the buffer…'
+                : `Scope: ${text(result?.scope, 'process')} · durable: ${isDurable ? 'yes' : 'no'}`
+            }}
+          </p>
+        </div>
+      </header>
+      <div class="summary-strip">
+        <div class="metric">
+          <strong data-testid="log-stored">{{ num(result?.stored) }}</strong>
+          <small>Held in buffer</small>
+        </div>
+        <div class="metric">
+          <strong data-testid="log-capacity">{{ num(result?.capacity) }}</strong>
+          <small>Capacity</small>
+        </div>
+        <div class="metric">
+          <strong data-testid="log-dropped">{{ num(result?.dropped) }}</strong>
+          <small>Evicted since boot</small>
+        </div>
+        <div class="metric">
+          <strong data-testid="log-matched">{{ num(result?.matched) }}</strong>
+          <small>Matching this filter</small>
+        </div>
+        <div class="metric">
+          <strong>{{ text(result?.oldest) }}</strong>
+          <small>Oldest held</small>
+        </div>
+        <div class="metric">
+          <strong>{{ text(result?.newest) }}</strong>
+          <small>Newest held</small>
+        </div>
+      </div>
+      <p v-if="num(result?.dropped) > 0" class="warn-notice" data-testid="log-dropped-warning">
+        {{ num(result?.dropped) }} line(s) have already been evicted since this process started.
+        Anything older than {{ text(result?.oldest) }} is gone from here permanently.
+      </p>
+      <p v-else-if="bufferFull" class="source-note" data-testid="log-buffer-full">
+        The buffer is at capacity, so the next line written evicts the oldest one.
+      </p>
+    </section>
+
+    <!-- Search ----------------------------------------------------------------- -->
+    <section class="panel" data-testid="log-search-panel" aria-label="Log search">
+      <header class="panel-header">
+        <div>
+          <h2>Trace an incident</h2>
+          <p>
+            A correlation id ties every line one request produced together. It is the fastest way
+            from "a customer reported an error at 14:02" to the lines that caused it.
+          </p>
+        </div>
+      </header>
+
+      <div class="grid-toolbar">
+        <label class="filter-select filter-search">
+          <span>Correlation ID</span>
+          <input
+            v-model="correlationId"
+            data-testid="log-correlation-id"
+            type="search"
+            placeholder="Paste the correlation id from an error response or a header"
+            @keyup.enter="search"
+          />
+        </label>
+        <button class="primary-button" data-testid="log-search-submit" @click="search">
+          {{ state === 'loading' ? 'Searching…' : 'Search' }}
+        </button>
+        <button class="secondary-button" data-testid="log-reset" @click="resetFilters">
+          Clear filters
+        </button>
+      </div>
+
+      <div class="grid-toolbar">
+        <label class="filter-select">
+          <span>Request ID</span>
+          <input
+            v-model="requestId"
+            data-testid="log-request-id"
+            type="search"
+            @keyup.enter="search"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Minimum level</span>
+          <select v-model="minLevel" data-testid="log-min-level" @change="search">
+            <option value="">Any</option>
+            <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Exact level</span>
+          <select v-model="level" data-testid="log-level" @change="search">
+            <option value="">Any</option>
+            <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Route contains</span>
+          <input
+            v-model="routeFilter"
+            data-testid="log-route"
+            type="search"
+            placeholder="/api/v1/messages"
+            @keyup.enter="search"
+          />
+        </label>
+        <label class="filter-select filter-search">
+          <span>Message contains</span>
+          <input
+            v-model="contains"
+            data-testid="log-contains"
+            type="search"
+            placeholder="timeout, refused, …"
+            @keyup.enter="search"
+          />
+        </label>
+      </div>
+
+      <div class="grid-toolbar">
+        <label class="filter-select">
+          <span>Tenant ID</span>
+          <input v-model="tenantId" data-testid="log-tenant" type="search" @keyup.enter="search" />
+        </label>
+        <label class="filter-select">
+          <span>User ID</span>
+          <input v-model="userId" data-testid="log-user" type="search" @keyup.enter="search" />
+        </label>
+        <label class="filter-select">
+          <span>Since</span>
+          <input v-model="since" data-testid="log-since" type="datetime-local" />
+        </label>
+        <label class="filter-select">
+          <span>Until</span>
+          <input v-model="until" data-testid="log-until" type="datetime-local" />
+        </label>
+        <label class="filter-select">
+          <span>Rows</span>
+          <select v-model.number="limit" data-testid="log-limit" @change="search">
+            <option v-for="choice in LIMIT_CHOICES" :key="choice" :value="choice">
+              {{ choice }}
+            </option>
+          </select>
+        </label>
+        <button class="secondary-button" data-testid="log-apply" @click="search">
+          Apply filters
+        </button>
+      </div>
+
+      <div class="grid-toolbar">
+        <label class="filter-select">
+          <span>Auto refresh</span>
+          <select v-model="autoRefresh" data-testid="log-auto-toggle">
+            <option :value="true">On</option>
+            <option :value="false">Off</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Every</span>
+          <select v-model.number="intervalSeconds" data-testid="log-interval">
+            <option v-for="choice in refreshChoices" :key="choice" :value="choice">
+              {{ choice }}s
+            </option>
+          </select>
+        </label>
+        <button
+          class="secondary-button"
+          data-testid="log-refresh"
+          :disabled="refreshing"
+          @click="refreshNow(true)"
+        >
+          {{ refreshing ? 'Refreshing…' : 'Refresh' }}
+        </button>
+        <span class="source-note" data-testid="log-last-refreshed">
+          {{ lastRefreshedAt ? `Last updated ${lastRefreshedAt}` : 'Not refreshed yet' }}
+        </span>
+      </div>
+
+      <p v-if="activeFilters.length" class="source-note" data-testid="log-active-filters">
+        Applied: <span class="mono">{{ activeFilters.join(' · ') }}</span>
+      </p>
+    </section>
+
+    <!-- Results ----------------------------------------------------------------- -->
+    <section class="panel" data-testid="log-results-panel" aria-label="Log entries">
+      <header class="panel-header">
+        <div>
+          <h2>Entries</h2>
+          <p aria-live="polite">
+            {{
+              state === 'loading'
+                ? 'Loading log entries…'
+                : `${entries.length} shown of ${num(result?.matched)} matching, newest first`
+            }}
+          </p>
+        </div>
+      </header>
+
+      <p v-if="state === 'error'" class="chart-empty" role="alert" data-testid="log-error">
+        {{ missing ? 'The log query API is not available in this deployment.' : error }}
+      </p>
+      <template v-else>
+        <p v-if="truncated" class="warn-notice" data-testid="log-truncated">
+          {{ num(result?.matched) }} entries match, but only {{ entries.length }} are shown. Raise
+          the row count or narrow the filters — this is the newest slice, not the whole match.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Level</th>
+                <th scope="col">Message</th>
+                <th scope="col">Route</th>
+                <th scope="col">Status</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Correlation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(entry, index) in entries"
+                :key="`${entry.timestamp}-${index}`"
+                :data-testid="`log-row-${index}`"
+                @click="selected = entry"
+              >
+                <td class="mono">{{ text(entry.timestamp) }}</td>
+                <td>
+                  <span class="status-badge" :class="levelTone(entry.level)">
+                    {{ text(entry.level) }}
+                  </span>
+                </td>
+                <td>
+                  {{ text(entry.message) }}
+                  <small v-if="entry.context" class="row-id mono">{{ entry.context }}</small>
+                </td>
+                <td class="mono">
+                  {{ entry.method ? `${entry.method} ` : '' }}{{ text(entry.route) }}
+                </td>
+                <td class="mono">{{ text(entry.status) }}</td>
+                <td class="mono">
+                  {{ entry.durationMs === undefined ? '—' : `${num(entry.durationMs)} ms` }}
+                </td>
+                <td class="row-actions" @click.stop>
+                  <button
+                    v-if="entry.correlationId"
+                    class="secondary-button"
+                    :data-testid="`log-trace-${index}`"
+                    :title="`Show every line for ${entry.correlationId}`"
+                    @click="traceCorrelation(entry)"
+                  >
+                    {{ String(entry.correlationId).slice(0, 8) }}…
+                  </button>
+                  <span v-else class="cell-health">none</span>
+                </td>
+              </tr>
+              <tr v-if="state === 'ok' && !entries.length">
+                <td colspan="7" class="empty-cell" data-testid="log-empty">
+                  No entry in this process's buffer matches. That is not proof the event did not
+                  happen — the buffer holds only {{ num(result?.capacity) }} lines from this one
+                  process, and {{ num(result?.dropped) }} have already been evicted.
+                </td>
+              </tr>
+              <tr v-if="state === 'loading'">
+                <td colspan="7" class="empty-cell">Loading log entries…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </section>
+
+    <!-- Single entry ------------------------------------------------------------ -->
+    <section
+      v-if="selected"
+      class="panel detail-panel"
+      data-testid="log-entry-panel"
+      aria-label="Log entry"
+    >
+      <header>
+        <h2>Log entry</h2>
+        <button class="secondary-button" data-testid="log-entry-close" @click="selected = null">
+          Close
+        </button>
+      </header>
+      <dl class="detail-grid">
+        <dt>Timestamp</dt>
+        <dd class="mono">{{ text(selected.timestamp) }}</dd>
+        <dt>Level</dt>
+        <dd>
+          <span class="status-badge" :class="levelTone(selected.level)">
+            {{ text(selected.level) }}
+          </span>
+        </dd>
+        <dt>Message</dt>
+        <dd>{{ text(selected.message) }}</dd>
+        <dt>Context</dt>
+        <dd class="mono">{{ text(selected.context) }}</dd>
+        <dt>Correlation ID</dt>
+        <dd class="mono">{{ text(selected.correlationId) }}</dd>
+        <dt>Request ID</dt>
+        <dd class="mono">{{ text(selected.requestId) }}</dd>
+        <dt>Route</dt>
+        <dd class="mono">
+          {{ selected.method ? `${selected.method} ` : '' }}{{ text(selected.route) }}
+        </dd>
+        <dt>Status</dt>
+        <dd class="mono">{{ text(selected.status) }}</dd>
+        <dt>Duration</dt>
+        <dd class="mono">
+          {{ selected.durationMs === undefined ? '—' : `${num(selected.durationMs)} ms` }}
+        </dd>
+        <dt>Tenant</dt>
+        <dd class="mono">{{ text(selected.tenantId) }}</dd>
+        <dt>User</dt>
+        <dd class="mono">{{ text(selected.username ?? selected.userId) }}</dd>
+        <dt>Client IP</dt>
+        <dd class="mono">{{ text(selected.clientIp) }}</dd>
+      </dl>
+      <template v-if="selected.trace">
+        <h3>Trace</h3>
+        <pre class="json-block" data-testid="log-entry-trace">{{ selected.trace }}</pre>
+      </template>
+    </section>
+  </div>
+</template>
+
+<style src="./workspace-extras.css"></style>

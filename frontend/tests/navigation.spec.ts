@@ -29,11 +29,13 @@ describe('primary navigation contract', () => {
         '/copilot',
         '/sessions',
         '/alert-response',
+        '/alert-lifecycle',
+        '/log-explorer',
         '/routing-advanced',
         '/roles',
       ]),
     );
-    expect(navigation).toHaveLength(26);
+    expect(navigation).toHaveLength(28);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(

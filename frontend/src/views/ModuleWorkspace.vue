@@ -104,6 +104,18 @@ function badgeTone(value: unknown) {
   return '';
 }
 
+/**
+ * `notification_state` is the difference between "an alert fired" and "somebody
+ * was told about it". `undeliverable` and `pending` both mean nobody has heard.
+ */
+function notificationTone(value: unknown) {
+  const state = String(value ?? '').toLowerCase();
+  if (state === 'delivered' || state === 'sent') return 'good';
+  if (state === 'undeliverable' || state === 'failed') return 'bad';
+  if (state === 'pending') return 'warn';
+  return '';
+}
+
 /** Kannel DLR event mask → the outcome it reports (see DLR_EVENT_STATUS). */
 const DLR_EVENTS: Record<string, string> = {
   '1': 'delivered',
@@ -133,6 +145,36 @@ function truncate(value: unknown, limit = 80) {
   return body.length > limit ? `${body.slice(0, limit)}…` : body;
 }
 
+/**
+ * Kannel DCS coding, as the SQLBox read model publishes it: 0 = GSM-7,
+ * 1 = 8-bit binary, 2 = UCS-2. The number alone means nothing to an operator
+ * working out why a 70-character message billed as three segments.
+ */
+const CODING_LABELS: Record<string, string> = {
+  '0': 'GSM-7',
+  '1': '8-bit',
+  '2': 'UCS-2',
+};
+function codingLabel(raw: RecordValue): string {
+  const coding = raw.coding;
+  const charset = text(raw.charset, '');
+  if (coding === null || coding === undefined || coding === '')
+    return charset && charset !== '—' ? charset : '—';
+  const label = CODING_LABELS[String(coding)] ?? `coding ${coding}`;
+  return charset && charset !== '—' ? `${label} · ${charset}` : label;
+}
+/**
+ * Segment count. `segments` is derived by the read model from the body, the
+ * coding and any UDH; a row that predates it shows a dash rather than "1",
+ * because a wrong billing count is worse than an absent one.
+ */
+function segmentCount(raw: RecordValue): string {
+  const value = raw.segments;
+  if (value === null || value === undefined || value === '') return '—';
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? String(parsed) : '—';
+}
+
 const definitions: Record<string, Workspace> = {
   messages: {
     noun: 'message',
@@ -151,6 +193,12 @@ const definitions: Record<string, Workspace> = {
       { header: 'Sender', value: (raw) => text(raw.sender), mono: true },
       { header: 'Receiver', value: (raw) => text(raw.receiver), mono: true },
       { header: 'Message', value: (raw) => truncate(raw.text ?? raw.msgdata) },
+      {
+        header: 'Segments',
+        value: (raw) => segmentCount(raw),
+        hint: (raw) => (raw.udhData ? 'concatenated (UDH present)' : ''),
+      },
+      { header: 'Encoding', value: (raw) => codingLabel(raw) },
       { header: 'SMSC', value: (raw) => text(raw.smscId ?? raw.smsc_id), mono: true },
       {
         header: 'DLR',
@@ -387,7 +435,14 @@ const definitions: Record<string, Workspace> = {
       sortFields: ['openedAt', 'status', 'severity'],
       defaultSort: '-openedAt',
       filters: [
-        { field: 'status', label: 'Status', options: ['open', 'acknowledged', 'resolved'] },
+        // Every status alert_instances may hold (migration 037), not just the
+        // three that existed before the lifecycle landed — otherwise a
+        // suppressed or closed alert cannot be filtered for at all.
+        {
+          field: 'status',
+          label: 'Status',
+          options: ['open', 'acknowledged', 'suppressed', 'resolved', 'closed'],
+        },
         { field: 'severity', label: 'Severity', options: ['info', 'warning', 'critical'] },
         { field: 'ruleId', label: 'Rule ID' },
       ],
@@ -408,6 +463,26 @@ const definitions: Record<string, Workspace> = {
         header: 'Status',
         value: (raw) => text(raw.status),
         badge: (raw) => badgeTone(raw.status),
+      },
+      // The alerts index selects a.*, so the lifecycle columns arrive in their
+      // snake_case database form. camelCase is read too because
+      // GET /alerts/:id/lifecycle publishes the same fields that way.
+      {
+        header: 'Assigned to',
+        value: (raw) =>
+          text(raw.assigned_to_username ?? raw.assignedToUsername ?? raw.assigned_to, 'unassigned'),
+        mono: true,
+        hint: (raw) => text(raw.assigned_at ?? raw.assignedAt, ''),
+      },
+      {
+        header: 'Suppressed until',
+        value: (raw) => text(raw.suppressed_until ?? raw.suppressedUntil),
+        hint: (raw) => text(raw.suppressed_reason ?? raw.suppressedReason, ''),
+      },
+      {
+        header: 'Notification',
+        value: (raw) => text(raw.notification_state ?? raw.notificationState, 'unknown'),
+        badge: (raw) => notificationTone(raw.notification_state ?? raw.notificationState),
       },
       { header: 'Source', value: (raw) => text(raw.source) },
       { header: 'Rule', value: (raw) => text(raw.rule_name ?? raw.ruleName) },
@@ -677,9 +752,11 @@ const smscPort = ref(2775);
 const smscTps = ref(10);
 
 /* Server-side grid state (search is shared with the legacy client filter). */
-/* Message search (G13): the SQLBox read model filters on delivery status,
-   direction and SMSC server-side; the date range is applied here as well —
-   see messageParams()/messageDateFiltered for exactly what is server-side. */
+/* Message search (G13): every filter below — query, status, direction, SMSC and
+   the from/to range — is parsed server-side by one shared parser
+   (messaging-depth/message-filters.ts) that `GET /messages`, `export.csv` and
+   `export.pdf` all call, so the export cannot answer a different question from
+   the screen. Nothing is re-filtered in the console. */
 const msgStatus = ref('');
 const msgDirection = ref('');
 const msgSmscId = ref('');
@@ -875,7 +952,6 @@ const visibleRows = computed(() => {
   if (grid.value) return rows.value;
   return rows.value
     .filter((row) => state.value === 'All' || row.status === state.value)
-    .filter((row) => key.value !== 'messages' || withinMessageDates(row))
     .filter((row) =>
       `${row.id} ${row.name} ${row.detail} ${row.status}`
         .toLowerCase()
@@ -988,10 +1064,12 @@ function buildGridQuery(overrides: { limit?: number; offset?: number } = {}) {
 }
 
 /**
- * Query string for the SQLBox message read model. `status`, `direction`,
- * `smscId`, `query` and `limit` are honoured server-side. `from`/`to` are sent
- * too — the console applies them to the loaded page regardless, because the
- * message API does not filter on a date range yet (see messageDateFiltered).
+ * THE message query string. `query`, `status`, `direction`, `smscId`, `from`,
+ * `to` and `limit` are all honoured server-side by the shared filter parser, and
+ * this same function builds the query for the grid AND for both exports — so an
+ * export is structurally the same question as the screen, not a promise that it
+ * is. An invalid or inverted range is a 400 naming the problem, surfaced inline
+ * by `messageFilterError` rather than as a generic workspace failure.
  */
 function messageParams(limitOverride?: number) {
   const params = new URLSearchParams();
@@ -1007,18 +1085,30 @@ function messageParams(limitOverride?: number) {
   return params;
 }
 const messageDateFiltered = computed(() => Boolean(msgFrom.value || msgTo.value));
-function withinMessageDates(row: Row) {
-  if (!messageDateFiltered.value) return true;
-  const stamp = Date.parse(text(row.raw.timestamp ?? row.raw.time ?? row.updated, ''));
-  if (!Number.isFinite(stamp)) return false;
+/** Inverted range, caught here so the operator is not made to wait for a 400. */
+const messageRangeInverted = computed(() => {
   const from = msgFrom.value ? Date.parse(msgFrom.value) : NaN;
   const to = msgTo.value ? Date.parse(msgTo.value) : NaN;
-  if (Number.isFinite(from) && stamp < from) return false;
-  if (Number.isFinite(to) && stamp > to) return false;
-  return true;
-}
+  return Number.isFinite(from) && Number.isFinite(to) && from > to;
+});
+/** The API's own 400 text ("from must not be after to", "status contains …"). */
+const messageFilterError = ref('');
+/** Human summary of the filter set the API echoed back, proving what it applied. */
+const messageAppliedFilters = ref('');
 function applyMessageFilters() {
   void load();
+}
+/**
+ * `GET /messages` echoes the filter set it actually parsed, including a
+ * `description`. Showing it is how the operator can prove the screen and the
+ * export were asked the same question rather than being told they were.
+ */
+function captureMessageFilterEcho(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return;
+  const filters = (payload as RecordValue).filters;
+  if (!filters || typeof filters !== 'object') return;
+  messageAppliedFilters.value = text((filters as RecordValue).description, '');
+  if (messageAppliedFilters.value === '—') messageAppliedFilters.value = '';
 }
 
 function detectUnavailableSource(payload: unknown) {
@@ -1041,6 +1131,10 @@ async function load(preserveNotice = false) {
   sourceUnavailable.value = false;
   sourceMessage.value = '';
   if (!preserveNotice) notice.value = '';
+  if (key.value === 'messages') {
+    messageFilterError.value = '';
+    messageAppliedFilters.value = '';
+  }
   appliedSearch = query.value;
 
   try {
@@ -1062,6 +1156,7 @@ async function load(preserveNotice = false) {
       rows.value = page.items;
       total.value = page.total;
       detectUnavailableSource(payload);
+      if (key.value === 'messages') captureMessageFilterEcho(payload);
     }
   } catch (reason) {
     rows.value = [];
@@ -1071,7 +1166,16 @@ async function load(preserveNotice = false) {
     settingItems.value = [];
     unavailable.value =
       reason instanceof ApiError && (reason.status === 404 || reason.status === 501);
-    error.value = reason instanceof Error ? reason.message : 'The service could not be reached.';
+    const detail = reason instanceof Error ? reason.message : 'The service could not be reached.';
+    // A 400 on /messages is a rejected filter, and the API names which one. Put
+    // it beside the controls that caused it instead of in the generic
+    // "workspace could not load" panel, which would read as an outage.
+    if (key.value === 'messages' && reason instanceof ApiError && reason.status === 400) {
+      messageFilterError.value = detail;
+      error.value = '';
+    } else {
+      error.value = detail;
+    }
   } finally {
     loading.value = false;
   }
@@ -2232,12 +2336,11 @@ async function markNotificationRead(row: Row) {
 }
 
 /**
- * Alert lifecycle. The API exposes exactly two mutations on an alert instance —
- * POST :id/acknowledgements and POST :id/notifications — both gated on
- * alerts.acknowledge. There is no resolve/assign/suppress endpoint and the
- * alert_instances CHECK only permits open/acknowledged/resolved, so no button
- * is offered for actions the backend cannot perform. Planned suppression is
- * done with a maintenance window (Escalation & Maintenance).
+ * Acknowledge and re-notify, the two actions worth having inline on a triage
+ * grid. The rest of the lifecycle — resolve, assign, suppress, reopen, close
+ * and the comment thread — needs the single-alert context that the Alert
+ * Lifecycle workspace provides, so this row links there rather than growing a
+ * six-button cell whose legal transitions depend on the row's own state.
  */
 async function acknowledgeAlert(row: Row) {
   if (!canAcknowledgeAlerts.value) return;
@@ -3032,21 +3135,38 @@ onUnmounted(() => {
       <button class="secondary-button" data-testid="message-apply" @click="applyMessageFilters">
         Apply filters
       </button>
-      <span class="source-note">
-        Delivery status, direction, SMSC and the free-text search are applied by the message store.
+      <span class="source-note" data-testid="message-filter-scope">
+        Delivery status, direction, SMSC, the date range and the free-text search are all applied by
+        the message store, and the CSV/PDF exports use the identical filter set — an export always
+        matches what is on screen.
       </span>
-      <p v-if="messageDateFiltered" class="warn-notice" data-testid="message-date-note">
-        The message API does not accept a date range yet, so the date filter is applied by the
-        console to the {{ rows.length }} row(s) loaded above — it is not a search of the whole
-        store. Narrow the other filters, or raise the row count, before trusting a date-bounded
-        result. The same range is sent to the export, and will start filtering server-side as soon
-        as the API supports it.
+      <p
+        v-if="messageRangeInverted"
+        class="form-error"
+        role="alert"
+        data-testid="message-range-error"
+      >
+        The “From” date is after the “To” date, so this range matches nothing. Swap them before
+        searching.
       </p>
-      <p v-if="msgStatus" class="warn-notice" data-testid="message-export-status-note">
-        The CSV/PDF export endpoint does not currently apply the delivery-status filter, so an
-        export taken now will contain the wider direction/search/SMSC scope rather than only the “{{
-          msgStatus
-        }}” rows on screen.
+      <p
+        v-else-if="messageFilterError"
+        class="form-error"
+        role="alert"
+        data-testid="message-filter-error"
+      >
+        {{ messageFilterError }}
+      </p>
+      <p
+        v-else-if="messageAppliedFilters"
+        class="source-note"
+        data-testid="message-applied-filters"
+      >
+        Applied by the message store: <span class="mono">{{ messageAppliedFilters }}</span>
+      </p>
+      <p v-else-if="messageDateFiltered" class="source-note" data-testid="message-date-note">
+        The date range is inclusive and is evaluated over the whole message store, not just the
+        {{ rows.length }} row(s) loaded here.
       </p>
     </section>
 
@@ -3709,6 +3829,29 @@ onUnmounted(() => {
           <dd>{{ text(messageRow.created_at ?? messageRow.createdAt ?? messageRow.timestamp) }}</dd>
           <dt>Updated</dt>
           <dd>{{ text(messageRow.updated_at ?? messageRow.updatedAt) }}</dd>
+          <!--
+            Encoding / segmentation / scheduling / billing. These columns have
+            always existed in the engine's store but were invisible in the
+            console, so "why did one SMS bill as three?" had no answer here.
+          -->
+          <dt>Segments</dt>
+          <dd data-testid="message-segments">{{ segmentCount(messageRow) }}</dd>
+          <dt>Encoding</dt>
+          <dd data-testid="message-encoding">{{ codingLabel(messageRow) }}</dd>
+          <dt>UDH</dt>
+          <dd class="mono">{{ text(messageRow.udhData) }}</dd>
+          <dt>Validity</dt>
+          <dd>{{ text(messageRow.validity) }}</dd>
+          <dt>Deferred</dt>
+          <dd>{{ text(messageRow.deferred) }}</dd>
+          <dt>Message class</dt>
+          <dd>{{ text(messageRow.mclass) }}</dd>
+          <dt>PID</dt>
+          <dd>{{ text(messageRow.pid) }}</dd>
+          <dt>Billing info</dt>
+          <dd class="mono">{{ text(messageRow.binfo) }}</dd>
+          <dt>Metadata</dt>
+          <dd class="mono">{{ text(messageRow.metaData) }}</dd>
         </dl>
         <p v-if="messageTrace?.summary" class="form-hint" data-testid="message-trace-summary">
           {{ prettyJson(messageTrace.summary) }}
@@ -4792,6 +4935,14 @@ onUnmounted(() => {
                   </button>
                 </template>
                 <span v-else class="cell-health">Requires alerts.acknowledge</span>
+                <RouterLink
+                  class="text-link"
+                  :data-testid="`alert-lifecycle-${row.id}`"
+                  :to="`/alert-lifecycle?alert=${row.id}`"
+                  @click.stop
+                >
+                  Lifecycle
+                </RouterLink>
               </td>
               <td v-else-if="key === 'plugins'" class="row-actions">
                 <template v-if="canManageSystem">

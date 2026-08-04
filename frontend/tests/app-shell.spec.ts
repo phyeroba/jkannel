@@ -62,8 +62,8 @@ describe('application shell', () => {
   it('exposes navigation and skip-link landmarks with accessible labels', async () => {
     const wrapper = await mountShell();
     expect(wrapper.get('a.skip-link').attributes('href')).toBe('#workspace');
-    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(26);
-    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(26);
+    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(28);
+    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(28);
     expect(wrapper.findAll('.nav-group')).toHaveLength(4);
     expect(wrapper.get('aside[aria-label="Primary navigation"]').text()).toContain('Messaging');
     expect(wrapper.get('main').attributes('tabindex')).toBe('-1');
