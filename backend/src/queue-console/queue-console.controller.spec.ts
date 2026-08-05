@@ -95,6 +95,7 @@ describe('QueueConsoleController', () => {
     expect(queue.resend).toHaveBeenCalledWith(expectedActor, {
       ids: ['1', '2'],
       targetSmscId: 'local-fake-b',
+      priority: null,
     });
 
     await controller.resend(request, {
@@ -104,6 +105,7 @@ describe('QueueConsoleController', () => {
     expect(queue.resend).toHaveBeenLastCalledWith(expectedActor, {
       filter: expect.objectContaining({ status: 'failed' }),
       targetSmscId: 'local-fake-b',
+      priority: null,
     });
 
     expect(() =>
@@ -117,7 +119,39 @@ describe('QueueConsoleController', () => {
     expect(queue.resend).toHaveBeenCalledWith(expectedActor, {
       filter: expect.objectContaining({ limit: 500 }),
       targetSmscId: 'local-fake-b',
+      priority: null,
     });
+  });
+
+  /**
+   * Priority orders bearerbox's per-SMSC outbound queue, so it only changes
+   * anything when a backlog exists — which a bulk replay is exactly how to
+   * create. Omitting it must behave precisely as it did before the parameter
+   * existed, which the two tests above already pin (priority: null).
+   */
+  it('carries an in-range resend priority through to the service', async () => {
+    const { queue, controller } = makeController();
+    await controller.resend(request, { ids: ['1'], targetSmscId: 'local-fake-b', priority: 3 });
+    expect(queue.resend).toHaveBeenCalledWith(
+      expectedActor,
+      expect.objectContaining({ priority: 3 }),
+    );
+    // 0 is a real level (deprioritise this replay), not "unset".
+    await controller.resend(request, { ids: ['1'], targetSmscId: 'local-fake-b', priority: 0 });
+    expect(queue.resend).toHaveBeenLastCalledWith(
+      expectedActor,
+      expect.objectContaining({ priority: 0 }),
+    );
+  });
+
+  it('rejects a resend priority outside 0-3 before anything is spooled', () => {
+    const { queue, controller } = makeController();
+    for (const priority of [-1, 4, 'urgent']) {
+      expect(() =>
+        controller.resend(request, { ids: ['1'], targetSmscId: 'local-fake-b', priority }),
+      ).toThrow(BadRequestException);
+    }
+    expect(queue.resend).not.toHaveBeenCalled();
   });
 
   it('validates the bind control operation', async () => {

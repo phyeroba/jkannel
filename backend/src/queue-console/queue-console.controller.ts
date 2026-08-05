@@ -9,7 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { isKnownStatusToken } from '../engine/kamex-sqlbox.repository';
+import { isKnownStatusToken, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 import { parseInstant } from '../messaging-depth/message-filters';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
@@ -187,19 +187,29 @@ export class QueueConsoleController {
    * Submits new spool rows for already-sent messages, against another bind.
    * Either `ids` (explicit) or `filter` (delivery-status selection, defaulting
    * to `resendable` = failed + rejected).
+   *
+   * OPTIONAL `priority`: SMPP priority_flag 0-3, written onto every new spool
+   * row; omit it for the pre-existing "no preference" behaviour, and anything
+   * outside 0-3 is a 400 naming the range. It orders bearerbox's per-SMSC
+   * outbound queue, so it only matters when a backlog exists — which is exactly
+   * the situation a bulk replay creates. Send a large replay at 0 to keep it
+   * behind live traffic, or at 3 to push it in front.
    */
   @Post('resend') @RequirePermissions('messages.send') resend(
     @Req() r: Request,
     @Body() b: any = {},
   ) {
     const targetSmscId = requiredText(b?.targetSmscId, 'targetSmscId');
+    // Rejected at the door rather than after the first row is spooled.
+    const priority = parseMessagePriority(b?.priority);
     if (b?.ids !== undefined && b?.filter !== undefined)
       throw new BadRequestException('provide either ids or filter, not both');
     if (b?.ids !== undefined)
-      return this.queue.resend(actor(r), { ids: parseIds(b.ids), targetSmscId });
+      return this.queue.resend(actor(r), { ids: parseIds(b.ids), targetSmscId, priority });
     return this.queue.resend(actor(r), {
       filter: parseHistoryQuery({ limit: MAX_BATCH, ...(b?.filter ?? {}) }),
       targetSmscId,
+      priority,
     });
   }
 

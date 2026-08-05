@@ -9,6 +9,8 @@ import {
 } from '../routing-depth/route-resolution.service';
 import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { MessageBlocklistService } from './message-blocklist.service';
+import { ContentFilterService } from './content-filter.service';
+import { ContentFilterVerdict } from './content-filter';
 import { SendEntitlementsService } from './send-entitlements.service';
 import { MessageSchedule, engineScheduleColumns } from './message-scheduling';
 
@@ -110,6 +112,18 @@ export interface SendResult {
 
 type DecisionOutcome = 'routed' | 'explicit' | 'rerouted' | 'rejected';
 
+/**
+ * Folds a content-filter verdict into the decision record: the deciding rule's
+ * identity, and its sentence appended to the running reason. Applied for an
+ * ALLOW match too, so an operator can see that a message went out because a
+ * specific exemption rule permitted it, not merely because nothing stopped it.
+ */
+function contentDecision(verdict: ContentFilterVerdict): Partial<DecisionRecord> {
+  const decided = verdict.decidedBy;
+  if (!decided) return {};
+  return { contentRuleId: decided.ruleId, contentRuleName: decided.ruleName };
+}
+
 interface DecisionRecord {
   customerId: string | null;
   messageRef: string | null;
@@ -129,6 +143,13 @@ interface DecisionRecord {
   availableSmscIds: string[];
   candidatesConsidered: number;
   trace: string[];
+  /**
+   * The content-filter rule that decided this message's fate, when one did.
+   * Recorded structurally as well as in `reason` so "which rule stopped this?"
+   * is a query rather than a substring search through prose.
+   */
+  contentRuleId: string | null;
+  contentRuleName: string | null;
 }
 
 /**
@@ -146,6 +167,11 @@ interface DecisionRecord {
  *      per-API-key limiter cannot provide, because one customer may hold many
  *      keys and each would stay inside its own budget
  *   3. blacklist / whitelist / DND
+ *   3b. content filtering — body / sender ID / recipient / per-SMSC keyword
+ *      rules (content-filter.service.ts). Runs here when no rule is
+ *      SMSC-scoped; when one is, it runs immediately after step 4 instead,
+ *      because an SMSC-scoped rule cannot be judged before the carrier is
+ *      known. Either way it is before anything is consumed or spooled.
  *   4. select the route — deployed routes only, against live bind health, with
  *      failover — unless the caller pinned a bind
  *   5. enforce entitlements: sender-ID approval, customer route binding, quota,
@@ -179,6 +205,7 @@ export class MessageSendService {
     private readonly entitlements: SendEntitlementsService,
     private readonly blocklist: MessageBlocklistService,
     private readonly rateLimits: CustomerRateLimitService,
+    private readonly contentFilter: ContentFilterService,
   ) {}
 
   private nextRotation(tenantId: string): number {
@@ -204,8 +231,9 @@ export class MessageSendService {
         `INSERT INTO message_route_decisions
            (tenant_id, customer_id, message_ref, foreign_id, channel, sender, destination,
             destination_raw, route_id, route_name, strategy, smsc_id, requested_smsc_id,
-            fallback_used, outcome, reason, available_smsc_ids, candidates_considered, trace, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+            fallback_used, outcome, reason, available_smsc_ids, candidates_considered, trace, created_by,
+            content_rule_id, content_rule_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
          RETURNING id::text`,
         [
           actor.tenantId,
@@ -228,6 +256,8 @@ export class MessageSendService {
           record.candidatesConsidered,
           JSON.stringify(record.trace),
           actor.userId,
+          record.contentRuleId,
+          record.contentRuleName,
         ],
       )
     ).rows[0];
@@ -287,10 +317,17 @@ export class MessageSendService {
       availableSmscIds: [],
       candidatesConsidered: 0,
       trace: [],
+      contentRuleId: null,
+      contentRuleName: null,
     };
 
     // Captured inside the transaction so a rollback can still report why.
     let forensic: DecisionRecord = { ...base };
+    // Settled (quarantine + hit counter) after the transaction closes, so that
+    // bookkeeping can never fail a send nor be rolled back with one. Held in a
+    // const container rather than a reassigned `let` so the value survives the
+    // rollback path without a cross-await reassignment.
+    const filterOutcome: { verdict: ContentFilterVerdict | null } = { verdict: null };
 
     try {
       return await this.database.tenantTransaction(actor.tenantId, async (client) => {
@@ -302,10 +339,47 @@ export class MessageSendService {
         // 3. Blocklist, BEFORE any route is chosen.
         await this.blocklist.assertAllowedInClient(client, destination, request.customerId ?? null);
 
+        // 3b. CONTENT FILTERING — body / sender ID / recipient / per-SMSC
+        // keyword rules. One cached, indexed read per tenant per cache window;
+        // zero round trips on a hit. See ContentFilterService for the cost and
+        // for why the evaluation point is chosen from the rule set rather than
+        // hard-coded: an SMSC-scoped rule cannot be judged before the carrier
+        // is known, and with first-match-wins precedence, guessing is wrong.
+        const ruleSet = await this.contentFilter.loadInClient(client, actor.tenantId);
+        const filterContext = {
+          sender,
+          recipient: destination,
+          body: request.text ?? '',
+          customerId: request.customerId ?? null,
+        };
+        if (!ruleSet.hasSmscScopedRules) {
+          const verdict = this.contentFilter.evaluate(ruleSet, {
+            ...filterContext,
+            smscId: null,
+          });
+          filterOutcome.verdict = verdict;
+          forensic = { ...forensic, ...contentDecision(verdict) };
+          this.contentFilter.assertAllowed(verdict);
+        }
+
         // 4. Which bind?
         const chosen = await this.chooseBind(client, actor, request, destination, requestedSmscId);
-        const record: DecisionRecord = { ...forensic, ...chosen.record };
+        let record: DecisionRecord = { ...forensic, ...chosen.record };
         forensic = record;
+
+        // 3c. The deferred half of content filtering: the carrier is now known,
+        // and NOTHING has been consumed or spooled yet — route selection is a
+        // pure read. A refusal here is as clean as one before routing.
+        if (ruleSet.hasSmscScopedRules) {
+          const verdict = this.contentFilter.evaluate(ruleSet, {
+            ...filterContext,
+            smscId: chosen.smscId,
+          });
+          filterOutcome.verdict = verdict;
+          record = { ...record, ...contentDecision(verdict) };
+          forensic = record;
+          this.contentFilter.assertAllowed(verdict);
+        }
 
         // 5. Entitlements, in THIS transaction.
         const outcome = await this.entitlements.consumeInClient(client, actor, {
@@ -412,6 +486,14 @@ export class MessageSendService {
           : `refused: ${String((error as Error).message ?? error)}`,
       });
       throw error;
+    } finally {
+      // Content-filter bookkeeping: quarantine a regex that blew its budget and
+      // bump the hit counter of a rule that blocked. Outside the transaction on
+      // purpose — a blocked send rolls back, and the record of WHY it was
+      // blocked must not roll back with it. Does no I/O at all on the happy
+      // path (nothing matched, or an allow matched), so it is free there.
+      if (filterOutcome.verdict)
+        await this.contentFilter.settle(actor.tenantId, filterOutcome.verdict);
     }
   }
 

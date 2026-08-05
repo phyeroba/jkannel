@@ -10,11 +10,18 @@ import { BulkSendService } from './bulk-send.service';
 import { BulkSendController } from './bulk-send.controller';
 import { MessageSendService } from './message-send.service';
 import { MessageBlocklistService } from './message-blocklist.service';
+import { ContentFilterService } from './content-filter.service';
+import { ContentFilterController } from './content-filter.controller';
 import { SendEntitlementsService } from './send-entitlements.service';
 import { MessagingPolicyController } from './messaging-policy.controller';
 import { ScheduledSendService } from './scheduled-send.service';
 import { ScheduledSendController } from './scheduled-send.controller';
 import { ScheduledSendJobHandlers } from './scheduled-send.handlers';
+import { MoRulesService } from './mo-rules.service';
+import { MoInboundService } from './mo-inbound.service';
+import { MoDeliveryService } from './mo-delivery.service';
+import { MoJobHandlers } from './mo.handlers';
+import { MoController } from './mo.controller';
 
 /**
  * Messaging-depth feature module. It owns THE send path
@@ -47,18 +54,30 @@ import { ScheduledSendJobHandlers } from './scheduled-send.handlers';
     MessageOperationsController,
     BulkSendController,
     MessagingPolicyController,
+    ContentFilterController,
     ScheduledSendController,
+    MoController,
   ],
   providers: [
     DatabaseService,
     MessageOperationsService,
     BulkSendService,
     MessageBlocklistService,
+    ContentFilterService,
     SendEntitlementsService,
     MessageSendService,
     ScheduledSendService,
     ScheduledSendJobHandlers,
+    MoRulesService,
+    MoInboundService,
+    MoDeliveryService,
+    MoJobHandlers,
   ],
-  exports: [MessageSendService, MessageBlocklistService, ScheduledSendService],
+  exports: [
+    MessageSendService,
+    MessageBlocklistService,
+    ContentFilterService,
+    ScheduledSendService,
+  ],
 })
 export class MessagingDepthModule {}

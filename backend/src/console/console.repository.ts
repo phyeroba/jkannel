@@ -254,12 +254,21 @@ export class ConsoleRepository {
              priority,tags,enabled,created_by,notes,
              system_id,username_secret_ref,system_type,receive_port,address_range,alt_charset,send_url,
              bind_mode,interface_version,source_addr_ton,source_addr_npi,dest_addr_ton,dest_addr_npi,
-             window_size,keepalive_seconds,reconnect_delay_seconds,wait_ack_seconds,max_error_count,use_tls)
+             window_size,keepalive_seconds,reconnect_delay_seconds,wait_ack_seconds,max_error_count,use_tls,
+             connection_count,connection_timeout_seconds,wait_ack_expire_action,retry_on_auth_failure,
+             allowed_smsc_ids,denied_smsc_ids,preferred_smsc_ids,
+             allowed_prefixes,denied_prefixes,preferred_prefixes)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
                   $15,$16,$17,$18,$19,$20,$21,
                   COALESCE($22,'transceiver'),COALESCE($23,34),COALESCE($24,0),COALESCE($25,1),
                   COALESCE($26,1),COALESCE($27,1),COALESCE($28,10),COALESCE($29,30),
-                  COALESCE($30,10),COALESCE($31,60),COALESCE($32,10),COALESCE($33,false))
+                  COALESCE($30,10),COALESCE($31,60),COALESCE($32,10),COALESCE($33,false),
+                  -- Migration 041. The two nullable columns are inserted as-is
+                  -- (NULL means "do not emit the directive"); the NOT NULL ones
+                  -- are COALESCEd onto the same defaults the migration declares.
+                  COALESCE($34,1),$35,$36,COALESCE($37,false),
+                  COALESCE($38::text[],'{}'),COALESCE($39::text[],'{}'),COALESCE($40::text[],'{}'),
+                  COALESCE($41::text[],'{}'),COALESCE($42::text[],'{}'),COALESCE($43::text[],'{}'))
            RETURNING *`,
           [
             actor.tenantId,
@@ -295,6 +304,16 @@ export class ConsoleRepository {
             value.waitAckSeconds ?? null,
             value.maxErrorCount ?? null,
             value.useTls ?? null,
+            value.connectionCount ?? null,
+            value.connectionTimeoutSeconds ?? null,
+            value.waitAckExpireAction ?? null,
+            value.retryOnAuthFailure ?? null,
+            value.allowedSmscIds ?? null,
+            value.deniedSmscIds ?? null,
+            value.preferredSmscIds ?? null,
+            value.allowedPrefixes ?? null,
+            value.deniedPrefixes ?? null,
+            value.preferredPrefixes ?? null,
           ],
         )
       ).rows[0];
@@ -331,6 +350,22 @@ export class ConsoleRepository {
              wait_ack_seconds=COALESCE($26,wait_ack_seconds),
              max_error_count=COALESCE($27,max_error_count),
              use_tls=COALESCE($28,use_tls),
+             -- Migration 041. Same COALESCE-on-NULL semantics as everything
+             -- above: an omitted key leaves the stored value alone. The routing
+             -- lists are cast explicitly because an empty JS array would
+             -- otherwise reach PostgreSQL as an untyped parameter, and an
+             -- explicitly-supplied [] is how a caller CLEARS a rule -- it is
+             -- passed through as an empty array, not folded back to NULL.
+             connection_count=COALESCE($29,connection_count),
+             connection_timeout_seconds=COALESCE($30,connection_timeout_seconds),
+             wait_ack_expire_action=COALESCE($31,wait_ack_expire_action),
+             retry_on_auth_failure=COALESCE($32,retry_on_auth_failure),
+             allowed_smsc_ids=COALESCE($33::text[],allowed_smsc_ids),
+             denied_smsc_ids=COALESCE($34::text[],denied_smsc_ids),
+             preferred_smsc_ids=COALESCE($35::text[],preferred_smsc_ids),
+             allowed_prefixes=COALESCE($36::text[],allowed_prefixes),
+             denied_prefixes=COALESCE($37::text[],denied_prefixes),
+             preferred_prefixes=COALESCE($38::text[],preferred_prefixes),
              updated_at=now()
            WHERE id=$1 RETURNING *`,
           [
@@ -362,6 +397,16 @@ export class ConsoleRepository {
             value.waitAckSeconds ?? null,
             value.maxErrorCount ?? null,
             value.useTls ?? null,
+            value.connectionCount ?? null,
+            value.connectionTimeoutSeconds ?? null,
+            value.waitAckExpireAction ?? null,
+            value.retryOnAuthFailure ?? null,
+            value.allowedSmscIds ?? null,
+            value.deniedSmscIds ?? null,
+            value.preferredSmscIds ?? null,
+            value.allowedPrefixes ?? null,
+            value.deniedPrefixes ?? null,
+            value.preferredPrefixes ?? null,
           ],
         )
       ).rows[0];

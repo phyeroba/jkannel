@@ -267,6 +267,45 @@ describe('QueueConsoleService.resend', () => {
     expect(audits[0][2]).toBe('queue.resent');
   });
 
+  it('writes the requested priority onto every new spool row, and null by default', async () => {
+    // The value only matters under backlog — it orders bearerbox's per-SMSC
+    // queue — but a replay is precisely how a backlog gets created, so an
+    // operator needs to be able to put one behind (0) or ahead of (3) live
+    // traffic.
+    const withPriority = availableSqlbox({
+      findSentForResend: jest.fn(async () => [historyRow()]),
+    });
+    const prioritised = await makeService(withPriority).resend(actor, {
+      ids: ['42'],
+      targetSmscId: 'local-fake-b',
+      priority: 3,
+    });
+    expect(withPriority.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: 3 }));
+    expect(prioritised).toMatchObject({ priority: 3 });
+
+    const plain = availableSqlbox({ findSentForResend: jest.fn(async () => [historyRow()]) });
+    const unchanged = await makeService(plain).resend(actor, {
+      ids: ['42'],
+      targetSmscId: 'local-fake-b',
+    });
+    // Unset must behave exactly as it did before the field existed: NULL, which
+    // the engine decodes as MSG_PARAM_UNDEFINED.
+    expect(plain.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: null }));
+    expect(unchanged).toMatchObject({ priority: null });
+  });
+
+  it('refuses an out-of-range priority without spooling anything', async () => {
+    const sqlbox = availableSqlbox({ findSentForResend: jest.fn(async () => [historyRow()]) });
+    await expect(
+      makeService(sqlbox).resend(actor, {
+        ids: ['42'],
+        targetSmscId: 'local-fake-b',
+        priority: 9,
+      }),
+    ).rejects.toThrow(/between 0 and 3/);
+    expect(sqlbox.submit).not.toHaveBeenCalled();
+  });
+
   it('skips delivery reports with a reason instead of resending a receipt', async () => {
     const sqlbox = availableSqlbox({
       findSentForResend: jest.fn(async () => [

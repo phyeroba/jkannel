@@ -9,7 +9,7 @@ import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { EngineAdapterRegistry } from '../engine/engine-adapter.registry';
 import { KamexAdapter } from '../engine/kamex.adapter';
-import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { KamexSqlboxRepository, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 
 export interface Actor {
   tenantId: string;
@@ -44,6 +44,18 @@ export interface ResendRequest {
   /** Resend everything matching a delivery-status filter, e.g. all failures. */
   filter?: HistoryQuery;
   targetSmscId: string;
+  /**
+   * SMPP priority_flag (0-3) for the new spool rows, or null/undefined for "no
+   * preference" — which is exactly what a resend carried before this existed.
+   *
+   * This is the one control on this endpoint that only matters under load: it
+   * orders bearerbox's per-SMSC outbound queue, so a low value keeps a large
+   * replay behind live traffic and a high one pushes it in front. On an idle
+   * bind with a sub-second drain it changes nothing observable. The original
+   * message's own priority is deliberately NOT reused: a resend is a new
+   * decision about urgency, taken now.
+   */
+  priority?: number | null;
 }
 export type BindOperation = 'enable' | 'disable' | 'reconnect';
 
@@ -366,6 +378,9 @@ export class QueueConsoleService {
    */
   async resend(actor: Actor, request: ResendRequest) {
     await this.requireSqlbox();
+    // Parsed before anything is submitted, so an out-of-range priority is a 400
+    // rather than a half-completed batch.
+    const priority = parseMessagePriority(request.priority);
     const { allowed } = await this.resolveTarget(actor.tenantId, request.targetSmscId);
     // Two ways in: explicit ids, or "everything matching this delivery status".
     // The filter path resolves to concrete ids first so both paths share one
@@ -430,6 +445,7 @@ export class QueueConsoleService {
           // New correlation id so the resend is traceable on its own and its
           // delivery reports do not collide with the original message.
           foreignId: randomUUID(),
+          priority,
         });
         results.push({
           id,
@@ -447,6 +463,8 @@ export class QueueConsoleService {
       resent,
       skipped: ids.length - resent,
       targetSmscId: request.targetSmscId,
+      /** Priority written onto every new spool row; null = no preference. */
+      priority,
       // Echoed so the caller can tell a filtered resend apart from an explicit
       // one, and see which filter actually ran.
       appliedFilter: request.ids?.length ? null : { status: 'resendable', ...request.filter },

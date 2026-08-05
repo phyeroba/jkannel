@@ -1392,6 +1392,21 @@ export class ReadModelsController {
    * `send_sms.validity` on the eventual submit — that one real SMPP carriers do
    * honour. A past `scheduledAt`, or a validity that would expire at or before
    * it, is a 400 naming the problem. See messaging-depth/message-scheduling.ts.
+   *
+   * MESSAGE PRIORITY is not a parameter of this endpoint, and the absence is
+   * deliberate rather than an oversight. `send_sms.priority` is now a real,
+   * honoured control: the sqlbox image this platform builds patches its
+   * PostgreSQL driver to select the column, and bearerbox orders each SMSC's
+   * outbound queue by it — see the note above KamexSqlboxRepository.submit for
+   * the full chain. But this endpoint does not reach `submit()` directly; it
+   * delegates to ScheduledSendService -> MessageSendService, and until
+   * `priority` is carried across those two hops (a field on `SendRequest`,
+   * forwarded into their `sqlbox.submit({...})` call) accepting it here would
+   * validate a value and then silently drop it — an inert control, which is
+   * worse than none. The send path that accepts it end to end today is
+   * `POST /queue/resend`, which spools directly. Either way, priority only
+   * reorders a queue that has a backlog in it: on an idle bind with a
+   * sub-second drain it changes nothing observable.
    */
   @Post('messages') @RequirePermissions('configuration.manage') async submit(
     @Req() r: Request,

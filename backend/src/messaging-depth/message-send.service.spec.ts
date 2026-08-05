@@ -5,6 +5,8 @@ import { CustomerQuotaService } from '../customers-depth/customer-quota.service'
 import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { RouteResolutionService } from '../routing-depth/route-resolution.service';
 import { RoutingDepthRepository } from '../routing-depth/routing-depth.repository';
+import { ContentFilterService } from './content-filter.service';
+import { ContentRuleRow } from './content-filter';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { MessageSendService } from './message-send.service';
 import { SendEntitlementsService } from './send-entitlements.service';
@@ -63,6 +65,36 @@ interface StackFixture {
   rateLimitPerMin?: number | null;
   /** null models an absent/unreachable Redis, which must FAIL OPEN. */
   redis?: { eval: jest.Mock } | null;
+  /** Enabled content-filter rules the send path will load and evaluate. */
+  contentRules?: Array<Partial<ContentRuleRow>>;
+}
+
+/** A content rule row with every column the compiler reads, defaulted. */
+export function contentRuleRow(overrides: Partial<ContentRuleRow> = {}): ContentRuleRow {
+  return {
+    id: '00000000-0000-4000-8000-000000000001',
+    name: 'rule',
+    description: null,
+    match_field: 'body',
+    match_type: 'substring',
+    pattern: 'x',
+    case_sensitive: false,
+    action: 'block',
+    smsc_id: null,
+    customer_id: null,
+    enabled: true,
+    priority: 100,
+    expires_at: null,
+    reason: null,
+    match_count: 0,
+    last_matched_at: null,
+    quarantined_at: null,
+    quarantine_reason: null,
+    created_by: 'u1',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
 }
 
 /**
@@ -113,6 +145,7 @@ function makeStack(fixture: StackFixture) {
     debits: [] as Array<{ amount: number; balanceAfter: number }>,
     decisions: [] as Array<Record<string, unknown>>,
     audits: [] as string[],
+    contentRuleWrites: [] as string[],
   };
 
   const sql = { log: [] as string[] };
@@ -151,6 +184,12 @@ function makeStack(fixture: StackFixture) {
       if (text.includes('FROM smsc_definitions')) {
         const found = smscs.find((s) => s.engineId === params[0]);
         return { rows: found ? [{ id: found.id }] : [] };
+      }
+      if (text.includes('FROM messaging_content_rules'))
+        return { rows: (fixture.contentRules ?? []).map((rule) => contentRuleRow(rule)) };
+      if (text.startsWith('UPDATE messaging_content_rules')) {
+        state.contentRuleWrites.push(text);
+        return { rows: [] };
       }
       if (text.includes('rate_limit_per_min FROM customers'))
         return { rows: [{ rate_limit_per_min: fixture.rateLimitPerMin ?? null }] };
@@ -218,6 +257,8 @@ function makeStack(fixture: StackFixture) {
           availableSmscIds: params[16],
           candidatesConsidered: params[17],
           trace: params[18],
+          contentRuleId: params[20],
+          contentRuleName: params[21],
         });
         return { rows: [{ id }] };
       }
@@ -254,6 +295,9 @@ function makeStack(fixture: StackFixture) {
   };
 
   const redis = fixture.redis === undefined ? fakeRedis() : fixture.redis;
+  // A fresh instance per stack: the rule cache is per-process, and one test's
+  // rule set must never leak into the next.
+  const contentFilter = new ContentFilterService(database);
   const service = new MessageSendService(
     database,
     sqlbox,
@@ -264,8 +308,9 @@ function makeStack(fixture: StackFixture) {
     ),
     new MessageBlocklistService(database),
     new CustomerRateLimitService(new GatewayRateLimiter(redis)),
+    contentFilter,
   );
-  return { service, sqlbox, state, sql, redis };
+  return { service, sqlbox, state, sql, redis, contentFilter };
 }
 
 const message = { sender: 'JKANNEL', receiver: '+256700000000', text: 'hello' };
@@ -682,5 +727,130 @@ describe('MessageSendService — per-customer rate limit (customers.rate_limit_p
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('MessageSendService — content filtering on the send path', () => {
+  const routes = [routeRow({ id: 'r-ug', name: 'Uganda', target_smsc_id: 'smsc-a' })];
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+  it('refuses a message whose BODY matches a block rule, and never spools it', async () => {
+    const { service, sqlbox } = makeStack({
+      routes,
+      contentRules: [{ id: uuid(1), name: 'no-loans', pattern: 'loan' }],
+    });
+    await expect(
+      service.send(actor, { ...message, text: 'cheap loan today', channel: 'console' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(sqlbox.submit).not.toHaveBeenCalled();
+  });
+
+  it('records the refusal against the rule that caused it', async () => {
+    const { service, state } = makeStack({
+      routes,
+      contentRules: [{ id: uuid(1), name: 'no-loans', pattern: 'loan' }],
+    });
+    await expect(
+      service.send(actor, { ...message, text: 'cheap loan today', channel: 'console' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    const rejected = state.decisions.filter((d) => d.outcome === 'rejected');
+    expect(rejected).toHaveLength(1);
+    // Structured, not just prose: "which rule stopped this?" is a query.
+    expect(rejected[0].contentRuleId).toBe(uuid(1));
+    expect(rejected[0].contentRuleName).toBe('no-loans');
+    expect(String(rejected[0].reason)).toContain('no-loans');
+  });
+
+  it('bumps the rule hit counter for a block, outside the rolled-back transaction', async () => {
+    const { service, state } = makeStack({
+      routes,
+      contentRules: [{ id: uuid(1), name: 'no-loans', pattern: 'loan' }],
+    });
+    await expect(
+      service.send(actor, { ...message, text: 'loan', channel: 'console' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(state.contentRuleWrites.some((s) => s.includes('match_count = match_count + 1'))).toBe(
+      true,
+    );
+  });
+
+  it('blocks on the SENDER ID as well as the body', async () => {
+    const { service, sqlbox } = makeStack({
+      routes,
+      contentRules: [
+        {
+          id: uuid(1),
+          name: 'banned-sender',
+          match_field: 'sender',
+          match_type: 'exact',
+          pattern: 'JKANNEL',
+        },
+      ],
+    });
+    await expect(service.send(actor, { ...message, channel: 'console' })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(sqlbox.submit).not.toHaveBeenCalled();
+  });
+
+  it('sends normally when nothing matches, and records no content rule', async () => {
+    const { service, sqlbox, state } = makeStack({
+      routes,
+      contentRules: [{ id: uuid(1), name: 'no-loans', pattern: 'loan' }],
+    });
+    await service.send(actor, { ...message, text: 'your balance is 500', channel: 'console' });
+    expect(sqlbox.submit).toHaveBeenCalledTimes(1);
+    expect(state.decisions[0].contentRuleId).toBeNull();
+  });
+
+  it('lets a higher-precedence ALLOW rule exempt a message a block rule would stop', async () => {
+    const { service, sqlbox, state } = makeStack({
+      routes,
+      contentRules: [
+        { id: uuid(1), name: 'vip', action: 'allow', pattern: 'loan', priority: 10 },
+        { id: uuid(2), name: 'no-loans', action: 'block', pattern: 'loan', priority: 20 },
+      ],
+    });
+    await service.send(actor, { ...message, text: 'cheap loan', channel: 'console' });
+    expect(sqlbox.submit).toHaveBeenCalledTimes(1);
+    expect(state.decisions[0].contentRuleName).toBe('vip');
+  });
+
+  it('applies an SMSC-scoped rule only once the carrier is known, and only to that carrier', async () => {
+    const blocked = makeStack({
+      routes,
+      contentRules: [
+        { id: uuid(1), name: 'mtn-no-promo', pattern: 'promo', smsc_id: 'local-fake' },
+      ],
+    });
+    await expect(
+      blocked.service.send(actor, { ...message, text: 'promo!', channel: 'console' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(blocked.sqlbox.submit).not.toHaveBeenCalled();
+    // The refusal still names the rule even though it was judged after routing.
+    expect(blocked.state.decisions[0].contentRuleName).toBe('mtn-no-promo');
+
+    const allowed = makeStack({
+      routes,
+      contentRules: [
+        { id: uuid(1), name: 'other-carrier', pattern: 'promo', smsc_id: 'someone-else' },
+      ],
+    });
+    await allowed.service.send(actor, { ...message, text: 'promo!', channel: 'console' });
+    expect(allowed.sqlbox.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot be hung by a pathological pattern that reached the table anyway', async () => {
+    // Write-time validation refuses `(a+)+$`, so a row carrying it can only have
+    // arrived by direct SQL. It must still not stop the sender.
+    const { service, sqlbox } = makeStack({
+      routes,
+      contentRules: [{ id: uuid(1), name: 'hostile', match_type: 'regex', pattern: '(a+)+$' }],
+    });
+    const started = Date.now();
+    await service.send(actor, { ...message, text: 'a'.repeat(60) + '!', channel: 'console' });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(sqlbox.submit).toHaveBeenCalledTimes(1);
   });
 });
