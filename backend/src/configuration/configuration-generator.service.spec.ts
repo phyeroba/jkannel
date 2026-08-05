@@ -22,6 +22,7 @@ describe('ConfigurationGeneratorService', () => {
     logLevel: 1 as const,
     sqlbox: {
       enabled: true,
+      serviceHost: 'kamex-sqlbox',
       host: 'postgres',
       port: 5432,
       database: 'jkannel',

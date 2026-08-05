@@ -95,6 +95,10 @@ export const BUILTIN_TEMPLATES: Array<{
       logLevel: 1,
       sqlbox: {
         enabled: true,
+        // SQLBox's own service name on the container network — distinct from
+        // `host`, which is its PostgreSQL. The smsbox group must point here,
+        // not at bearerbox, or SQLBox is bypassed and history is lost.
+        serviceHost: 'kamex-sqlbox',
         host: 'postgres',
         port: 5432,
         database: 'jkannel',

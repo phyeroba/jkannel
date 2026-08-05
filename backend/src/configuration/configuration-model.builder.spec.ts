@@ -1,4 +1,4 @@
-import { ConfigurationModelBuilder } from './configuration-model.builder';
+import { ConfigurationModelBuilder, MO_PUSH_QUERY } from './configuration-model.builder';
 import { ConfigurationGeneratorService } from './configuration-generator.service';
 
 const actor = { tenantId: '7', userId: 'user-1' };
@@ -79,6 +79,8 @@ describe('ConfigurationModelBuilder', () => {
       'KAMEX_BEARERBOX_HOST',
       'KAMEX_SENDSMS_USERNAME',
       'KAMEX_SQLBOX_DATABASE_URL',
+      'KAMEX_SQLBOX_HOST',
+      'KAMEX_MO_PUSH_URL',
     ])
       delete process.env[key];
   });
@@ -168,7 +170,11 @@ describe('ConfigurationModelBuilder', () => {
     expect(model.sendsmsUsers).toEqual([
       { username: 'jkannel', passwordSecretRef: 'secret://kamex/sendsms-password' },
     ]);
-    expect(model.smsServices).toEqual([{ keyword: 'default', text: 'No service specified' }]);
+    // maxMessages 0 suppresses the canned auto-reply. Without it Kannel answers
+    // every inbound message with this `text` as a real, billable MT.
+    expect(model.smsServices).toEqual([
+      { keyword: 'default', text: 'No service specified', maxMessages: 0 },
+    ]);
     expect(model.dlrStorage).toEqual({ type: 'internal' });
     expect(model.adminSecretRef).toBe('secret://kamex/admin-password');
   });
@@ -200,11 +206,93 @@ describe('ConfigurationModelBuilder', () => {
     process.env.KAMEX_SQLBOX_DATABASE_URL = 'postgresql://u:p@postgres:5432/jkannel';
     expect((await new ConfigurationModelBuilder(database).build(actor)).model.sqlbox).toEqual({
       enabled: true,
+      // SQLBox's own service name, separate from `host` (its PostgreSQL). The
+      // smsbox group is pointed at this, never at bearerbox.
+      serviceHost: 'kamex-sqlbox',
       host: 'postgres',
       port: 5432,
       database: 'jkannel',
       usernameEnv: 'JKANNEL_SQLBOX_USER',
       passwordEnv: 'JKANNEL_SQLBOX_PASSWORD',
+    });
+  });
+
+  /**
+   * The bypass this guards against is invisible in operation: an smsbox wired
+   * straight to bearerbox still sends fine, and the only symptom is that
+   * `sent_sms` stops being written — taking message history and MO ingest
+   * (which sweeps that table) with it, silently.
+   */
+  describe('smsbox upstream', () => {
+    it('points the smsbox at SQLBox, not bearerbox, when SQLBox is deployed', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_SQLBOX_DATABASE_URL = 'postgresql://u:p@postgres:5432/jkannel';
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      expect(model.smsbox?.bearerboxHost).toBe('kamex-sqlbox');
+    });
+
+    it('keeps pointing at bearerbox when SQLBox is not in the topology', async () => {
+      const { database } = withRows([smscRow()]);
+      delete process.env.KAMEX_SQLBOX_DATABASE_URL;
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      expect(model.smsbox?.bearerboxHost).toBe('kamex-bearerbox');
+    });
+
+    it('refuses an explicit override that would route around SQLBox', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_SQLBOX_DATABASE_URL = 'postgresql://u:p@postgres:5432/jkannel';
+      process.env.KAMEX_BEARERBOX_HOST = 'kamex-bearerbox';
+      await expect(new ConfigurationModelBuilder(database).build(actor)).rejects.toThrow(
+        /bypasses SQLBox/,
+      );
+    });
+
+    it('accepts an explicit override that AGREES with the topology', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_SQLBOX_DATABASE_URL = 'postgresql://u:p@postgres:5432/jkannel';
+      process.env.KAMEX_BEARERBOX_HOST = 'kamex-sqlbox';
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      expect(model.smsbox?.bearerboxHost).toBe('kamex-sqlbox');
+    });
+  });
+
+  describe('MO push service', () => {
+    it('suppresses the canned auto-reply by default and renders no post-url', async () => {
+      const { database } = withRows([smscRow()]);
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      expect(model.smsServices).toEqual([
+        { keyword: 'default', text: 'No service specified', maxMessages: 0 },
+      ]);
+    });
+
+    it('renders a catch-all post-url, still with the reply suppressed, when configured', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_MO_PUSH_URL = 'http://jkannel-backend:3000/api/v1/mo/inbound';
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      const [service] = model.smsServices!;
+      expect(service.postUrl).toBe(
+        'http://jkannel-backend:3000/api/v1/mo/inbound?' + MO_PUSH_QUERY,
+      );
+      // Without this the "reply" would be the endpoint's HTTP response body —
+      // a JSON envelope SMSed back to the subscriber.
+      expect(service.maxMessages).toBe(0);
+      expect(service.catchAll).toBe(true);
+    });
+
+    it('rejects a push URL that already carries a query string', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_MO_PUSH_URL = 'http://backend:3000/mo?x=1';
+      await expect(new ConfigurationModelBuilder(database).build(actor)).rejects.toThrow(
+        /must not contain a query string/,
+      );
+    });
+
+    it('rejects a push URL that is not absolute http(s)', async () => {
+      const { database } = withRows([smscRow()]);
+      process.env.KAMEX_MO_PUSH_URL = '/api/v1/mo/inbound';
+      await expect(new ConfigurationModelBuilder(database).build(actor)).rejects.toThrow(
+        /absolute http\(s\) URL/,
+      );
     });
   });
 

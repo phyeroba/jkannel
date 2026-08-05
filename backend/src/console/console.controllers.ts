@@ -926,6 +926,12 @@ export class ConfigurationsController {
       logLevel: 1,
       sqlbox: {
         enabled: true,
+        // SQLBox's service name on the container network, distinct from `host`
+        // (its PostgreSQL). If an smsbox group is added to this baseline its
+        // bearerboxHost must match THIS value, not bearerbox — routing the
+        // smsbox around SQLBox stops sent_sms being written and takes message
+        // history and MO ingest with it.
+        serviceHost: 'kamex-sqlbox',
         host: 'postgres',
         port: 5432,
         database: 'jkannel',

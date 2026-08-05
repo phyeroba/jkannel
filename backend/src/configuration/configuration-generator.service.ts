@@ -148,11 +148,30 @@ export interface EngineSmsService {
   text?: string;
   getUrl?: string;
   postUrl?: string;
+  /**
+   * `max-messages`: how many SMS the service's ANSWER may be split into.
+   *
+   * 0 is not "unlimited", it is "send no reply at all" — gw/smsbox.c
+   * send_message() returns early with `info(0, "No reply sent, denied.")` when
+   * urltrans_max_messages(trans) == 0. That is the only way to stop smsbox
+   * turning a service's output into an outbound (billable) MT back to the
+   * person who texted in, and it matters for every callback service: on a 2xx
+   * the HTTP RESPONSE BODY becomes the reply SMS (url_result_thread), and on a
+   * non-2xx `reply-couldnotfetch` does. A JSON API answering here would text
+   * its envelope, or its error, straight back to the subscriber.
+   */
   maxMessages?: number;
   concatenation?: boolean;
   catchAll?: boolean;
   omitEmpty?: boolean;
   acceptXKannelHeaders?: boolean;
+  /**
+   * `send-sender`: add the `X-Kannel-From` request header (the MO sender) to
+   * the get-url/post-url call. Without it smsbox sends X-Kannel-To but NOT
+   * X-Kannel-From — gw/smsbox.c only adds the From header behind
+   * urltrans_send_sender().
+   */
+  sendSender?: boolean;
 }
 
 export interface EngineDlrStorage {
@@ -172,6 +191,16 @@ export interface EngineConfiguration {
   logLevel: 0 | 1 | 2 | 3 | 4;
   sqlbox?: {
     enabled: boolean;
+    /**
+     * The SQLBox process's own network name — the host an smsbox must dial to
+     * reach bearerbox THROUGH SQLBox. This is not cosmetic: SQLBox sits between
+     * smsbox and bearerbox, and it is what writes `sent_sms`. An smsbox pointed
+     * straight at bearerbox still sends every message successfully and simply
+     * stops producing history, which is why this is a required field rather
+     * than a defaulted one (see validate()).
+     */
+    serviceHost: string;
+    /** PostgreSQL host backing the SQLBox tables (the pgsql-connection group). */
     host: string;
     port: number;
     database: string;
@@ -262,6 +291,7 @@ export class ConfigurationGeneratorService {
     if (model.sqlbox?.enabled) {
       if (!model.sqlbox.host || !model.sqlbox.database)
         errors.push('SQLBox host and database are required');
+      if (!model.sqlbox.serviceHost) errors.push('SQLBox serviceHost is required');
       if (
         !/^[A-Z][A-Z0-9_]+$/.test(model.sqlbox.usernameEnv) ||
         !/^[A-Z][A-Z0-9_]+$/.test(model.sqlbox.passwordEnv)
@@ -399,6 +429,7 @@ export class ConfigurationGeneratorService {
         model.smsbox.sendsmsPort === model.smsboxPort
       )
         errors.push('smsbox.sendsmsPort must differ from adminPort and smsboxPort');
+      errors.push(...this.validateSmsboxUpstream(model));
     }
     const usernames = new Set<string>();
     for (const user of users) {
@@ -422,6 +453,30 @@ export class ConfigurationGeneratorService {
           errors.push(
             `sms-service ${service.keyword} must declare exactly one of text, getUrl or postUrl`,
           );
+        // gwlib/http.c parse_url() only accepts http:// and https://; anything
+        // else makes smsbox log "URL <...> doesn't start with ..." once per
+        // inbound message and drop the callback. Catch it here instead.
+        for (const [field, value] of [
+          ['getUrl', service.getUrl],
+          ['postUrl', service.postUrl],
+        ] as const) {
+          if (value === undefined) continue;
+          if (!/^https?:\/\/[^\s"]+$/.test(value))
+            errors.push(
+              `sms-service ${service.keyword} ${field} must be an absolute http:// or https:// URL`,
+            );
+        }
+        if (
+          (service.getUrl || service.postUrl) &&
+          service.maxMessages !== 0 &&
+          service.keyword === 'default'
+        )
+          // The default service catches everything, so its reply goes to every
+          // subscriber who texts in. See EngineSmsService.maxMessages.
+          errors.push(
+            'sms-service default forwards to a URL, so it must set maxMessages: 0; otherwise ' +
+              "the callback's response body is sent back to the sender as an SMS",
+          );
       }
     }
     if (model.dlrStorage) {
@@ -441,6 +496,37 @@ export class ConfigurationGeneratorService {
       }
     }
     return errors;
+  }
+
+  /**
+   * THE SMSBOX MUST NOT BE ABLE TO BYPASS SQLBOX.
+   *
+   * `bearerbox-host` in the smsbox group is misleadingly named: it is "the host
+   * this smsbox connects to", and in a SQLBox topology that host is SQLBox, not
+   * bearerbox. SQLBox is a transparent proxy — it speaks the boxc protocol on
+   * both sides — so an smsbox wired straight to bearerbox works perfectly:
+   * messages are accepted, sent and delivered. The only thing that changes is
+   * that nothing writes `sent_sms` any more, because SQLBox is what writes it.
+   * Message history stops accumulating and NOTHING reports an error. The MO
+   * ingest sweep (messaging-depth/mo-inbound.service.ts) reads that same table,
+   * so inbound ingestion silently dies with it.
+   *
+   * A failure that is invisible cannot be defended by a better default, so it
+   * is not defended by one: when the model says SQLBox is deployed, a
+   * `bearerboxHost` that is not SQLBox is a validation ERROR and generate()
+   * refuses to render. The wrong answer is unreachable, not merely unlikely.
+   */
+  private validateSmsboxUpstream(model: EngineConfiguration): string[] {
+    const smsbox = model.smsbox;
+    const sqlbox = model.sqlbox;
+    if (!smsbox || !sqlbox?.enabled || !sqlbox.serviceHost) return [];
+    if (smsbox.bearerboxHost === sqlbox.serviceHost) return [];
+    return [
+      `smsbox.bearerboxHost is "${smsbox.bearerboxHost}" but SQLBox ("${sqlbox.serviceHost}") ` +
+        'is deployed between smsbox and bearerbox: this configuration would bypass SQLBox, ' +
+        'and message history (sent_sms) plus MO ingest would stop without any error. ' +
+        `Set it to "${sqlbox.serviceHost}".`,
+    ];
   }
 
   /** Every `secret://` reference the model carries, in render order. */
@@ -543,6 +629,9 @@ export class ConfigurationGeneratorService {
     if (model.smsbox) {
       lines.push('');
       lines.push('group = smsbox');
+      // "bearerbox-host" = the host this smsbox dials. With SQLBox deployed
+      // that is SQLBox, which then relays to bearerbox; validateSmsboxUpstream()
+      // refuses to render anything else.
       push('bearerbox-host', model.smsbox.bearerboxHost);
       push('sendsms-port', model.smsbox.sendsmsPort);
       push('smsbox-id', model.smsbox.smsboxId);
@@ -586,6 +675,7 @@ export class ConfigurationGeneratorService {
       push('catch-all', service.catchAll);
       push('omit-empty', service.omitEmpty);
       push('accept-x-kannel-headers', service.acceptXKannelHeaders);
+      push('send-sender', service.sendSender);
     }
 
     if (model.sqlbox?.enabled) {

@@ -1,4 +1,5 @@
 import { EngineConfiguration } from '../configuration-generator.service';
+import { MO_PUSH_QUERY } from '../configuration-model.builder';
 
 /**
  * Golden-file render inputs. Each fixture pairs with a `.conf` file in this
@@ -23,7 +24,9 @@ export const MINIMAL_GATEWAY: EngineConfiguration = {
   ],
   smsbox: { bearerboxHost: 'kamex-bearerbox', sendsmsPort: 13013, logLevel: 1 },
   sendsmsUsers: [{ username: 'jkannel', passwordSecretRef: 'secret://kamex/sendsms-password' }],
-  smsServices: [{ keyword: 'default', text: 'No service specified' }],
+  // `maxMessages: 0` is not cosmetic: without it Kannel sends this `text` back
+  // to every subscriber who texts in, as a real billable MT.
+  smsServices: [{ keyword: 'default', text: 'No service specified', maxMessages: 0 }],
   dlrStorage: { type: 'internal' },
 };
 
@@ -59,7 +62,11 @@ export const SMPP_CARRIER: EngineConfiguration = {
       useTls: true,
     },
   ],
-  smsbox: { bearerboxHost: 'kamex-bearerbox', sendsmsPort: 13013, logLevel: 1 },
+  // `kamex-sqlbox`, NOT `kamex-bearerbox`. This fixture has SQLBox deployed, so
+  // pointing the smsbox at bearerbox would step over it — the exact bypass that
+  // stops `sent_sms` being written and silently kills MO ingest. The generator
+  // now rejects that combination, and this fixture used to encode it.
+  smsbox: { bearerboxHost: 'kamex-sqlbox', sendsmsPort: 13013, logLevel: 1 },
   sendsmsUsers: [
     {
       username: 'jkannel',
@@ -69,10 +76,11 @@ export const SMPP_CARRIER: EngineConfiguration = {
       maxMessages: 10,
     },
   ],
-  smsServices: [{ keyword: 'default', text: 'No service specified' }],
+  smsServices: [{ keyword: 'default', text: 'No service specified', maxMessages: 0 }],
   dlrStorage: { type: 'pgsql', connectionId: 'jkannel-sqlbox', table: 'dlr' },
   sqlbox: {
     enabled: true,
+    serviceHost: 'kamex-sqlbox',
     host: 'postgres',
     port: 5432,
     database: 'jkannel',
@@ -140,7 +148,9 @@ export const PARALLEL_CARRIER: EngineConfiguration = {
   ],
   smsbox: { bearerboxHost: 'kamex-bearerbox', sendsmsPort: 13013, logLevel: 1 },
   sendsmsUsers: [{ username: 'jkannel', passwordSecretRef: 'secret://kamex/sendsms-password' }],
-  smsServices: [{ keyword: 'default', text: 'No service specified' }],
+  // `maxMessages: 0` is not cosmetic: without it Kannel sends this `text` back
+  // to every subscriber who texts in, as a real billable MT.
+  smsServices: [{ keyword: 'default', text: 'No service specified', maxMessages: 0 }],
   dlrStorage: { type: 'internal' },
 };
 
@@ -218,12 +228,17 @@ export const MULTI_SMSC: EngineConfiguration = {
     },
   ],
   smsServices: [
-    { keyword: 'default', text: 'No service specified' },
+    { keyword: 'default', text: 'No service specified', maxMessages: 0 },
     {
+      // Was `get-url = …/api/v1/engine/mo?sender=%p&text=%a` — wrong twice
+      // over: there is no `engine` controller, so that route 404s, and `%a`
+      // rejoins the body's words with '+', losing runs of spaces. The real
+      // route is /api/v1/mo/inbound and the body code is %b.
       keyword: 'mo',
-      getUrl: 'http://jkannel-backend:3000/api/v1/engine/mo?sender=%p&text=%a',
+      postUrl: 'http://jkannel-backend:3000/api/v1/mo/inbound?' + MO_PUSH_QUERY,
       maxMessages: 0,
       acceptXKannelHeaders: true,
+      sendSender: true,
       catchAll: true,
     },
   ],

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -43,17 +43,66 @@ const GATEWAY_SETTINGS = {
   smsboxPort: { key: 'gateway.smsbox_port', env: 'KAMEX_SMSBOX_PORT', fallback: 13001 },
   sendsmsPort: { key: 'gateway.sendsms_port', env: 'KAMEX_SENDSMS_PORT', fallback: 13013 },
   logLevel: { key: 'gateway.log_level', env: 'KAMEX_LOG_LEVEL', fallback: 1 },
+  /**
+   * Only consulted when SQLBox is NOT part of the topology. With SQLBox
+   * deployed the smsbox upstream is DERIVED, not configured — see
+   * {@link ConfigurationModelBuilder.smsboxUpstream}.
+   */
   bearerboxHost: {
     key: 'gateway.bearerbox_host',
     env: 'KAMEX_BEARERBOX_HOST',
     fallback: 'kamex-bearerbox',
+  },
+  /** SQLBox's own network name (docker-compose service `kamex-sqlbox`). */
+  sqlboxHost: {
+    key: 'gateway.sqlbox_host',
+    env: 'KAMEX_SQLBOX_HOST',
+    fallback: 'kamex-sqlbox',
   },
   sendsmsUsername: {
     key: 'gateway.sendsms_username',
     env: 'KAMEX_SENDSMS_USERNAME',
     fallback: 'jkannel',
   },
+  /**
+   * Base URL of the platform's MO push endpoint. Empty (the default) means no
+   * `post-url` is rendered and inbound messages are picked up by the engine
+   * sweep instead. Never a guessed default: a wrong callback URL produces one
+   * failed HTTP request per inbound message, forever, in silence.
+   */
+  moPushUrl: {
+    key: 'gateway.mo_push_url',
+    env: 'KAMEX_MO_PUSH_URL',
+    fallback: '',
+  },
 } as const;
+
+/**
+ * The query string the MO `sms-service` appends to the operator's base URL.
+ *
+ * Every code here was read out of the Kamex 1.8.3 source that this project
+ * pins (gw/urltrans.c urltrans_fill_escape_codes_ex), NOT out of documentation:
+ *
+ *   %p  sms.receiver  -> the ORIGINAL SENDER. gw/smsbox.c swaps sender and
+ *                        receiver before calling the service (it is building
+ *                        the reply message), and urltrans.c says so in a
+ *                        comment: "the sender and receiver is already switched
+ *                        in message". So %p, not %P, is who texted in.
+ *   %P  sms.sender    -> the ORIGINAL RECEIVER (the short code / MSISDN dialled).
+ *   %b  msgdata, URL-encoded. %a is the wrong choice for a message body: it
+ *       splits on whitespace and rejoins the words with '+', so runs of spaces
+ *       and leading/trailing spaces do not survive.
+ *   %i  smsc-id of the bind the message arrived on.
+ *   %I  the engine's own message UUID — a natural idempotency handle, which is
+ *       exactly what MoInboundService's `externalRef` -> `dedupe_key` wants.
+ *   %T  sms.time as a unix timestamp. %t also exists but renders
+ *       "YYYY-MM-DD+HH:MM:SS" in GMT with no zone marker, which a JS `new Date`
+ *       would read as local time.
+ *
+ * (%q and %Q are NOT "the same without a +". They are %p and %Q's values with a
+ * leading "00" rewritten to "%2B"; %q pairs with %p, %Q pairs with %P.)
+ */
+export const MO_PUSH_QUERY = 'sender=%p&receiver=%P&text=%b&smscId=%i&externalRef=%I&receivedAt=%T';
 
 interface SmscRow {
   engine_id: string;
@@ -192,6 +241,26 @@ export class ConfigurationModelBuilder {
     return spec.fallback;
   }
 
+  /**
+   * The stored or environment value if the operator actually set one, else
+   * undefined — deliberately WITHOUT falling back.
+   *
+   * {@link setting} cannot answer "did someone choose this?", because its
+   * fallback is indistinguishable from a deliberate choice of the same value.
+   * The smsbox-upstream conflict check needs that distinction: silently
+   * overriding a stated intent and silently accepting an unstated default are
+   * different acts, and only the first deserves an error.
+   */
+  private explicitSetting(
+    settings: Map<string, unknown>,
+    spec: { key: string; env: string },
+  ): string | undefined {
+    const stored = settings.get(spec.key);
+    if (stored !== undefined && stored !== null && String(stored) !== '') return String(stored);
+    const fromEnv = process.env[spec.env];
+    return fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined;
+  }
+
   private compose(
     rows: SmscRow[],
     settings: Map<string, unknown>,
@@ -225,6 +294,10 @@ export class ConfigurationModelBuilder {
     const logLevel = ([0, 1, 2, 3, 4].includes(logLevelValue) ? logLevelValue : 1) as
       0 | 1 | 2 | 3 | 4;
 
+    // SQLBox must resolve BEFORE the smsbox group is built: with SQLBox in the
+    // topology the smsbox upstream is derived from it rather than defaulted.
+    const sqlbox = this.sqlboxFromEnvironment(settings, settingsApplied);
+
     const model: EngineConfiguration = {
       adminPort,
       smsboxPort,
@@ -237,7 +310,7 @@ export class ConfigurationModelBuilder {
       // and a default sms-service is required for inbound messages. Shapes match
       // runtime/kamex/kamex.conf.
       smsbox: {
-        bearerboxHost: this.setting(settings, settingsApplied, GATEWAY_SETTINGS.bearerboxHost),
+        bearerboxHost: this.smsboxUpstream(sqlbox, settings, settingsApplied),
         sendsmsPort,
         logLevel,
       },
@@ -247,14 +320,98 @@ export class ConfigurationModelBuilder {
           passwordSecretRef: 'secret://kamex/sendsms-password',
         },
       ],
-      smsServices: [{ keyword: 'default', text: 'No service specified' }],
+      smsServices: this.moServices(settings, settingsApplied),
       dlrStorage: { type: 'internal' },
     };
 
-    const sqlbox = this.sqlboxFromEnvironment();
     if (sqlbox) model.sqlbox = sqlbox;
 
     return { model, sources: { smscCount: smsc.length, excluded, settingsApplied } };
+  }
+
+  /**
+   * Which host the smsbox connects to — and the reason this is derived rather
+   * than defaulted.
+   *
+   * SQLBox is a transparent boxc proxy that sits BETWEEN smsbox and bearerbox.
+   * Point the smsbox straight at bearerbox while SQLBox is deployed and
+   * everything still appears to work: messages send normally, and the only
+   * symptom is that `sent_sms` stops being written. That table is the engine's
+   * message history AND the table MO ingest sweeps, so inbound delivery dies
+   * with it — silently, with no error anywhere.
+   *
+   * The previous code defaulted this to `kamex-bearerbox`, which is exactly
+   * that bypass. Replacing one default with a better default would leave the
+   * same class of bug one environment variable away, so instead: when SQLBox is
+   * present the answer comes from the topology, and an operator who has
+   * EXPLICITLY set a conflicting host gets a loud failure rather than a silent
+   * override of what they asked for.
+   */
+  private smsboxUpstream(
+    sqlbox: EngineConfiguration['sqlbox'] | undefined,
+    settings: Map<string, unknown>,
+    applied: string[],
+  ): string {
+    if (!sqlbox?.enabled) return this.setting(settings, applied, GATEWAY_SETTINGS.bearerboxHost);
+
+    const explicit = this.explicitSetting(settings, GATEWAY_SETTINGS.bearerboxHost);
+    if (explicit !== undefined && explicit !== sqlbox.serviceHost)
+      throw new BadRequestException(
+        `smsbox upstream conflict: SQLBox is deployed at "${sqlbox.serviceHost}", but ` +
+          `${GATEWAY_SETTINGS.bearerboxHost.key} / ${GATEWAY_SETTINGS.bearerboxHost.env} is set ` +
+          `to "${explicit}". Sending the smsbox straight to bearerbox bypasses SQLBox, which ` +
+          'stops sent_sms being written and silently kills message history and MO ingest. ' +
+          'Clear the override, or point it at the SQLBox host.',
+      );
+    // No `applied` entry here: sqlboxFromEnvironment already recorded whichever
+    // source supplied serviceHost. Pushing again would double-report it.
+    return sqlbox.serviceHost;
+  }
+
+  /**
+   * The inbound (`sms-service`) groups.
+   *
+   * `maxMessages: 0` is on BOTH branches and is the point of this method. With
+   * no matching service Kannel answers every inbound message with a canned MT
+   * (`gw/smsbox.c:1909`) — a real, billable message sent to any subscriber who
+   * texts in. `max-messages = 0` is the documented kill switch for that
+   * (`gw/smsbox.c:322`). It matters even more on the push branch, where the
+   * "reply" would otherwise be the HTTP response body: a JSON API answering a
+   * callback would SMS its own response envelope back to the subscriber.
+   *
+   * The push URL has no default. A guessed callback address produces one failed
+   * HTTP request per inbound message, forever, in silence — so absent means
+   * absent, and inbound is picked up by the engine sweep instead.
+   */
+  private moServices(
+    settings: Map<string, unknown>,
+    applied: string[],
+  ): EngineConfiguration['smsServices'] {
+    const base = String(this.setting(settings, applied, GATEWAY_SETTINGS.moPushUrl) ?? '').trim();
+    if (!base) return [{ keyword: 'default', text: 'No service specified', maxMessages: 0 }];
+
+    if (!/^https?:\/\/[^\s"'\\]+$/.test(base))
+      throw new BadRequestException(
+        `${GATEWAY_SETTINGS.moPushUrl.key} must be an absolute http(s) URL, got "${base}"`,
+      );
+    // The builder owns the query string so the escape codes cannot be got
+    // wrong by hand; a caller-supplied one would be silently appended to ours.
+    if (base.includes('?'))
+      throw new BadRequestException(
+        `${GATEWAY_SETTINGS.moPushUrl.key} must not contain a query string; JKANNEL appends its ` +
+          `own (${MO_PUSH_QUERY})`,
+      );
+    return [
+      {
+        keyword: 'default',
+        catchAll: true,
+        postUrl: `${base}?${MO_PUSH_QUERY}`,
+        maxMessages: 0,
+        omitEmpty: true,
+        acceptXKannelHeaders: true,
+        sendSender: true,
+      },
+    ];
   }
 
   private toEngineSmsc(row: SmscRow): EngineSmsc {
@@ -312,7 +469,10 @@ export class ConfigurationModelBuilder {
    * hands the backend. Absent or unparseable, the pgsql-connection group is
    * omitted rather than guessed.
    */
-  private sqlboxFromEnvironment(): EngineConfiguration['sqlbox'] | undefined {
+  private sqlboxFromEnvironment(
+    settings: Map<string, unknown>,
+    applied: string[],
+  ): EngineConfiguration['sqlbox'] | undefined {
     const raw = process.env.KAMEX_SQLBOX_DATABASE_URL;
     if (!raw) return undefined;
     try {
@@ -321,6 +481,11 @@ export class ConfigurationModelBuilder {
       if (!url.hostname || !database) return undefined;
       return {
         enabled: true,
+        // `host` is where SQLBox's POSTGRES lives; `serviceHost` is SQLBox
+        // itself on the container network. Two different machines in a real
+        // deployment, and conflating them is what produced the bypass bug —
+        // so they are separate fields rather than one reused value.
+        serviceHost: this.setting(settings, applied, GATEWAY_SETTINGS.sqlboxHost),
         host: url.hostname,
         port: url.port ? Number(url.port) : 5432,
         database,
