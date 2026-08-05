@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import MessagePriority from '../components/MessagePriority.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import {
+  PRIORITY_RESEND_CAVEAT,
+  PRIORITY_UNSET,
+  priorityCellLabel,
+  priorityFields,
+  type PriorityChoice,
+} from '../utils/message-priority';
 
 type RecordValue = Record<string, unknown>;
 
@@ -69,6 +77,8 @@ interface ResendResult {
   requested?: number;
   resent?: number;
   skipped?: number;
+  /** Echoed by the API: the level written onto every new spool row, or null. */
+  priority?: number | null;
   results?: ResendResultRow[];
 }
 /** Per-id spool outcome: `{ sqlId, rerouted|cancelled, code?, reason? }`. */
@@ -205,6 +215,12 @@ const logQuery = ref('');
 const logSmscFilter = ref('');
 const logSelection = ref<string[]>([]);
 const resendTarget = ref('');
+/**
+ * '' omits the key entirely. The API deliberately does NOT reuse the original
+ * message's priority — a resend is a new decision about urgency — so this
+ * starts unset on every visit rather than inheriting anything.
+ */
+const resendPriority = ref<PriorityChoice>(PRIORITY_UNSET);
 const resendNotice = ref('');
 const resendError = ref('');
 const resendResults = ref<ResendResultRow[]>([]);
@@ -444,11 +460,21 @@ async function postResend(body: RecordValue) {
   try {
     const result = await apiRequest<ResendResult>('/queue-console/resend', {
       method: 'POST',
-      body: JSON.stringify({ ...body, targetSmscId: resendTarget.value }),
+      body: JSON.stringify({
+        ...body,
+        targetSmscId: resendTarget.value,
+        // Absent unless a level was chosen — 0 is a real level, not a default.
+        ...priorityFields(resendPriority.value),
+      }),
     });
     const skipped = num(result.skipped);
     resendNotice.value =
       `${num(result.resent)} of ${num(result.requested)} message(s) re-queued on ${resendTarget.value}.` +
+      // The API echoes the level it actually wrote, so this reports what
+      // happened rather than what was asked for.
+      (result.priority === null || result.priority === undefined
+        ? ' No send priority was requested for the replay.'
+        : ` Each new spool row carries priority ${result.priority}.`) +
       (skipped ? ` ${skipped} skipped — see the per-message reasons below.` : '');
     resendResults.value = Array.isArray(result.results) ? result.results : [];
     logSelection.value = [];
@@ -475,7 +501,13 @@ function resendMatching() {
   if (!matching) return;
   if (
     !window.confirm(
-      `Resend every message matching the “${logStatus.value}” filter (${matching}) to ${resendTarget.value}?\n\nEach one is submitted again as a new message; at most 500 are sent per batch.`,
+      `Resend every message matching the “${logStatus.value}” filter (${matching}) to ${resendTarget.value}?\n\n` +
+        `Each one is submitted again as a new message; at most 500 are sent per batch.\n` +
+        `Send priority: ${
+          resendPriority.value === PRIORITY_UNSET
+            ? 'none requested'
+            : `${resendPriority.value} on every new spool row`
+        }.`,
     )
   )
     return;
@@ -529,6 +561,15 @@ function spoolForeignId(row: RecordValue): string {
 }
 function spoolSender(row: RecordValue): string {
   return text(row.sender ?? rawOf(row).sender);
+}
+/**
+ * The spool is the one grid where priority is not academic: these are the
+ * messages that are actually queued, which is the only condition under which
+ * the engine's max-heap ordering is observable.
+ */
+function spoolPriority(row: RecordValue): string {
+  const raw = rawOf(row);
+  return priorityCellLabel(row.priority ?? raw.priority);
 }
 function spoolReceiver(row: RecordValue): string {
   return text(row.receiver ?? rawOf(row).receiver);
@@ -1045,6 +1086,15 @@ onMounted(() => {
           row is left untouched.
         </span>
       </div>
+      <div v-if="canOperate" class="resend-priority" data-testid="log-resend-priority-block">
+        <MessagePriority
+          v-model="resendPriority"
+          testid="log-resend-priority"
+          label="Replay priority"
+          :caveat="PRIORITY_RESEND_CAVEAT"
+          :busy="actionBusy"
+        />
+      </div>
       <p v-else class="source-note" data-testid="log-readonly">
         Resending messages requires the messages.send permission.
       </p>
@@ -1283,6 +1333,14 @@ onMounted(() => {
               <th scope="col">Receiver</th>
               <th scope="col">Text</th>
               <th scope="col">Target bind</th>
+              <!--
+                No sort control: GET /queue-console/spool takes limit, cursor,
+                smscId and query only — it has no `sort` parameter at all and
+                orders by sql_id DESC. `unset` is a real value here, not a gap.
+              -->
+              <th scope="col" title="Not sortable: the spool endpoint takes no sort parameter.">
+                Priority
+              </th>
               <th scope="col">Age</th>
               <th scope="col">SQL ID</th>
             </tr>
@@ -1306,6 +1364,9 @@ onMounted(() => {
               <td class="mono">{{ spoolReceiver(row) }}</td>
               <td>{{ bodyText(row) }}</td>
               <td class="mono">{{ spoolSmscId(row) }}</td>
+              <td class="mono" :data-testid="`spool-priority-${spoolId(row)}`">
+                {{ spoolPriority(row) }}
+              </td>
               <td>{{ ageFromEpoch(spoolEpoch(row)) }}</td>
               <td class="mono">
                 {{ spoolId(row) }}
@@ -1322,7 +1383,7 @@ onMounted(() => {
               link to where the traffic actually is.
             -->
             <tr v-if="spoolState === 'ok' && !spoolRows.length">
-              <td colspan="7" class="empty-cell" data-testid="spool-empty">
+              <td colspan="8" class="empty-cell" data-testid="spool-empty">
                 <strong>An empty spool is healthy.</strong>
                 It means the engine is accepting messages as fast as they arrive; messages queue
                 here only when submissions outpace the engine or a bind is paused.
@@ -1345,7 +1406,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="spoolState === 'loading'">
-              <td colspan="7" class="empty-cell">Loading pending messages…</td>
+              <td colspan="8" class="empty-cell">Loading pending messages…</td>
             </tr>
           </tbody>
         </table>
@@ -1374,3 +1435,12 @@ onMounted(() => {
 </template>
 
 <style src="./workspace-extras.css"></style>
+
+<style scoped>
+/* The priority control is a stacked block (select + hints + caveat), so it does
+   not belong inside the single-row .grid-toolbar flex line above it. */
+.resend-priority {
+  margin: 8px 0 4px;
+  max-width: 640px;
+}
+</style>

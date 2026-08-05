@@ -10,7 +10,12 @@ import { uniqueName } from '../fixtures/env';
  */
 test.describe('Analytics & Reports', () => {
   const panelStates: Record<string, string[]> = {
-    'smsc-success': ['smsc-success-chart', 'smsc-success-table', 'smsc-success-empty', 'smsc-success-unavailable'],
+    'smsc-success': [
+      'smsc-success-chart',
+      'smsc-success-table',
+      'smsc-success-empty',
+      'smsc-success-unavailable',
+    ],
     'route-performance': [
       'route-performance-chart',
       'route-performance-table',
@@ -26,9 +31,7 @@ test.describe('Analytics & Reports', () => {
     await expect(page.getByTestId('analytics-view')).toBeVisible();
 
     for (const [panel, states] of Object.entries(panelStates)) {
-      const anyState = states
-        .map((id) => page.getByTestId(id))
-        .reduce((acc, loc) => acc.or(loc));
+      const anyState = states.map((id) => page.getByTestId(id)).reduce((acc, loc) => acc.or(loc));
       await expect(anyState, `panel "${panel}" reached a terminal render state`).toBeVisible();
     }
   });
@@ -67,8 +70,7 @@ test.describe('Analytics & Reports', () => {
 
       const [resp] = await Promise.all([
         page.waitForResponse(
-          (r) =>
-            r.url().includes('/reports/definitions') && r.request().method() === 'POST',
+          (r) => r.url().includes('/reports/definitions') && r.request().method() === 'POST',
         ),
         page.getByTestId('definition-submit').click(),
       ]);
@@ -84,9 +86,7 @@ test.describe('Analytics & Reports', () => {
       page.once('dialog', (d) => d.accept());
       await Promise.all([
         page.waitForResponse(
-          (r) =>
-            r.url().includes('/reports/definitions/') &&
-            r.request().method() === 'DELETE',
+          (r) => r.url().includes('/reports/definitions/') && r.request().method() === 'DELETE',
         ),
         page.getByTestId(`definition-delete-${createdId}`).click(),
       ]);

@@ -70,8 +70,36 @@ const MESSAGE_COLUMNS =
   'id::text,source,dedupe_key,engine_message_id,external_ref,smsc_id,sender,receiver,' +
   'sender_digits,receiver_digits,body,received_at,matched_rule_ids,fanout_count,status,created_at';
 
+/**
+ * `config` is a fan-out-time SNAPSHOT of the destination's settings, and for a
+ * webhook destination that includes `secret` — the value sent verbatim as the
+ * `x-jkannel-signature` header (see mo-delivery.service.ts). Selecting the
+ * column raw handed that credential to every caller of `GET /mo/deliveries`
+ * and `GET /mo/messages/:id`, which any `messages.view` holder can reach.
+ *
+ * The redaction is done in SQL rather than by deleting the key in TypeScript
+ * after the query, because the column is read from more than one place and a
+ * future third reader would silently leak again. Here the raw value cannot
+ * leave the database through this constant at all.
+ *
+ * The key is REPLACED rather than removed so the console can still show that a
+ * secret is configured — "no secret set" and "secret set, not shown to you" are
+ * different facts, and collapsing them would have an operator re-enter a secret
+ * that was already there.
+ *
+ * The delivery worker does not read through this constant; it loads the row for
+ * its own use and still sees the real value.
+ */
+// `config->'secret' IS NOT NULL` rather than the `?` containment operator:
+// `?` is a placeholder in several client libraries, and this string is spliced
+// into a grid query builder. Avoiding it keeps the constant safe to reuse.
+const REDACTED_CONFIG =
+  `CASE WHEN config->'secret' IS NOT NULL ` +
+  `THEN jsonb_set(config, '{secret}', '"__redacted__"'::jsonb) ELSE config END AS config`;
+
 const DELIVERY_COLUMNS =
-  'id::text,mo_message_id::text,rule_id::text,rule_name,destination_id::text,kind,target,config,' +
+  'id::text,mo_message_id::text,rule_id::text,rule_name,destination_id::text,kind,target,' +
+  `${REDACTED_CONFIG},` +
   'status,attempts,max_attempts,manual_retries,last_error,response_code,response_detail,' +
   'job_id::text,delivered_at,created_at,updated_at';
 

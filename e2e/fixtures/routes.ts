@@ -26,6 +26,8 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Queues', path: '/queues', root: 'module-workspace' },
   { label: 'Delivery Reports', path: '/delivery-reports', root: 'module-workspace' },
   { label: 'Bulk Send', path: '/bulk-send', root: 'bulk-send-view' },
+  { label: 'Content Filtering', path: '/content-rules', root: 'content-rules-view' },
+  { label: 'Inbound Routing', path: '/mo-routing', root: 'mo-routing-view' },
   { label: 'SMSC Connections', path: '/smsc', root: 'module-workspace' },
   { label: 'Routing', path: '/routing', root: 'module-workspace' },
   { label: 'Advanced Routing', path: '/routing-advanced', root: 'routing-depth-view' },

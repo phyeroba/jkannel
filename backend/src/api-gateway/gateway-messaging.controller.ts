@@ -26,6 +26,19 @@ const text = (value: unknown, name: string): string => {
 const optionalText = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
+/**
+ * Returns null rather than undefined: the value is passed straight to a
+ * `$n::uuid IS NULL` guard, and an explicit null is what makes that guard mean
+ * "no filter" without depending on how the driver coerces undefined.
+ */
+const optionalUuid = (value: unknown, name: string): string | null => {
+  const candidate = optionalText(value);
+  if (candidate === undefined) return null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate))
+    throw new BadRequestException(`${name} must be a UUID`);
+  return candidate;
+};
+
 const boundedInt = (value: unknown, name: string, min: number, max: number, fallback: number) => {
   if (value === undefined || value === null || value === '') return fallback;
   const parsed = Number(value);
@@ -154,6 +167,10 @@ export class GatewayMessagingController {
    * Why a message went out on the carrier it did — the recorded routing
    * decision, including the strategy, whether the fallback was taken and the
    * full selector trace.
+   *
+   * Also why a message did NOT go out: when a content rule blocked it, the
+   * decision carries `content_rule_id` / `content_rule_name`. Pass
+   * `?contentRuleId=` to list everything one rule stopped.
    */
   @Get('routing-decisions')
   @RequirePermissions(GATEWAY_SCOPES.routingRead)
@@ -161,17 +178,27 @@ export class GatewayMessagingController {
     const limit = boundedInt(query.limit, 'limit', 1, 200, 50);
     const offset = boundedInt(query.offset, 'offset', 0, 5_000_000, 0);
     const messageRef = optionalText(query.messageRef) ?? null;
+    const contentRuleId = optionalUuid(query.contentRuleId, 'contentRuleId');
     const customerId = request.gatewayClient!.customerId;
     return this.database.tenantTransaction(this.tenantId(request), async (db) => {
       const result = await db.query(
+        // content_rule_id / content_rule_name are selected because a content
+        // rule is one of the reasons a message does NOT go out, and this is the
+        // only read over this table. Without them the rule that blocked a
+        // message could only be recovered by parsing the prose `reason`, which
+        // is exactly the string-scraping this table exists to replace.
+        // `contentRuleId` is also filterable, so "everything rule X blocked" is
+        // a query rather than a scan.
         `SELECT id::text, message_ref, foreign_id, channel, sender, destination, route_id::text,
                 route_name, strategy, smsc_id, requested_smsc_id, fallback_used, outcome, reason,
+                content_rule_id::text, content_rule_name,
                 candidates_considered, trace, created_at, count(*) OVER() AS __total
            FROM message_route_decisions
           WHERE ($1::text IS NULL OR message_ref = $1)
             AND ($2::uuid IS NULL OR customer_id = $2::uuid)
+            AND ($5::uuid IS NULL OR content_rule_id = $5::uuid)
           ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
-        [messageRef, customerId, limit, offset],
+        [messageRef, customerId, limit, offset, contentRuleId],
       );
       const total = result.rows.length ? Number(result.rows[0].__total) : 0;
       return {

@@ -12,6 +12,19 @@ export interface DeliveryAttemptResult {
   detail: string;
 }
 
+/**
+ * Deliberately NOT the constant of the same name in mo-inbound.service.ts.
+ *
+ * That one redacts `config.secret`, because it feeds the API read paths and the
+ * secret must never reach a console caller. This one selects `config` RAW,
+ * because the worker below sends `config.secret` as the `x-jkannel-signature`
+ * header and a redacted value would silently sign every webhook with the
+ * literal string `__redacted__` — a failure that looks like a receiver-side
+ * auth bug rather than ours.
+ *
+ * Two same-named constants with opposite meanings is a trap, so: if you are
+ * about to replace this with an import, don't. The divergence is the point.
+ */
 const DELIVERY_COLUMNS =
   'id::text,mo_message_id::text,rule_id::text,rule_name,destination_id::text,kind,target,config,' +
   'status,attempts,max_attempts,manual_retries,last_error,response_code,response_detail,' +

@@ -35,11 +35,13 @@ describe('primary navigation contract', () => {
         '/alert-lifecycle',
         '/log-explorer',
         '/routing-advanced',
+        '/content-rules',
+        '/mo-routing',
         '/roles',
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(30);
+    expect(navigation).toHaveLength(32);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(

@@ -10,6 +10,8 @@ import AlertResponseView from '../views/AlertResponseView.vue';
 import AlertLifecycleView from '../views/AlertLifecycleView.vue';
 import LogExplorerView from '../views/LogExplorerView.vue';
 import RoutingDepthView from '../views/RoutingDepthView.vue';
+import ContentRulesView from '../views/ContentRulesView.vue';
+import MoRoutingView from '../views/MoRoutingView.vue';
 import RolesView from '../views/RolesView.vue';
 import ApiReferenceView from '../views/ApiReferenceView.vue';
 import { canAccess, session } from '../stores/session';
@@ -231,6 +233,32 @@ const routes: RouteRecordRaw[] = [
         'Prefix, country, operator and weighted routes, selection strategies, version history, and a resolve preview.',
       breadcrumb: ['Routing', 'Advanced'],
       permission: 'routes.view',
+    },
+  },
+  {
+    // messages.view, matching the read permission on the content-rule
+    // controller; mutations additionally need messages.send and the view says so.
+    path: '/content-rules',
+    name: 'content-rules',
+    component: ContentRulesView,
+    meta: {
+      title: 'Content Filtering',
+      description:
+        'Block or allow outbound traffic by body, sender or recipient, see which rule decides a message first, and find the rules that can never fire.',
+      breadcrumb: ['Messaging', 'Content Filtering'],
+      permission: 'messages.view',
+    },
+  },
+  {
+    path: '/mo-routing',
+    name: 'mo-routing',
+    component: MoRoutingView,
+    meta: {
+      title: 'Inbound Routing',
+      description:
+        'Fan an inbound message out to webhook, email or SMS destinations, and see which ingest path is actually delivering them.',
+      breadcrumb: ['Messaging', 'Inbound Routing'],
+      permission: 'messages.view',
     },
   },
   {

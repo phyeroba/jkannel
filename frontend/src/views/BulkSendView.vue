@@ -3,9 +3,17 @@ import { computed, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { canAccess, session } from '../stores/session';
+import MessagePriority from '../components/MessagePriority.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import { describeComposerText } from '../utils/message-segments';
+import {
+  PRIORITY_BULK_CAVEAT,
+  PRIORITY_UNSET,
+  priorityCellLabel,
+  priorityFields,
+  type PriorityChoice,
+} from '../utils/message-priority';
 import {
   SCHEDULING_SUPPORTED,
   emptySchedule,
@@ -124,6 +132,16 @@ const jobColumns: GridColumn[] = [
     label: 'Sender',
     sort: 'sender',
     value: (raw) => text(raw.sender, ''),
+    mono: true,
+  },
+  // `priority` is selected by JOB_COLUMNS but is in neither BULK_JOB_GRID
+  // sortColumns nor filterColumns, so this column carries no sort control. It
+  // is also absent from JOB_EXPORT_COLUMNS, which the footnote says out loud.
+  {
+    key: 'priority',
+    label: 'Priority',
+    note: 'Not sortable: the API’s bulk-job sort whitelist does not include priority.',
+    value: (raw) => priorityCellLabel(raw.priority),
     mono: true,
   },
   {
@@ -299,6 +317,8 @@ const recipientsRaw = ref('');
 const formError = ref('');
 const sendLater = ref(false);
 const schedule = ref<ScheduleDraft>(emptySchedule());
+/** '' = the key is omitted from the request; see utils/message-priority.ts. */
+const campaignPriority = ref<PriorityChoice>(PRIORITY_UNSET);
 
 /** Splits pasted recipients on newlines, commas, semicolons, or whitespace. */
 const parsedRecipients = computed(() =>
@@ -336,6 +356,10 @@ async function submitCampaign() {
       message: campaignMessage.value,
       recipients: parsedRecipients.value,
     };
+    // Absent, not 0, when no level was chosen: bulk_send_jobs.priority is
+    // nullable with no default and every recipient inherits whatever is stored,
+    // so a `?? 0` here would demote the entire campaign.
+    Object.assign(body, priorityFields(campaignPriority.value));
     if (scheduled) Object.assign(body, scheduledSendFields(schedule.value));
     const job = await apiRequest<RecordValue>('/bulk-send', {
       method: 'POST',
@@ -346,12 +370,16 @@ async function submitCampaign() {
     notice.value =
       `Bulk send job “${text(job.name, campaignName.value)}” ${scheduled ? 'scheduled' : 'queued'}: ` +
       `${recipientCount.value} recipient(s) × ${campaignSegments.value} segment(s) = ${campaignCost.value} SMS.` +
+      (campaignPriority.value === PRIORITY_UNSET
+        ? ' No send priority was requested.'
+        : ` Every recipient inherits priority ${campaignPriority.value}, which reorders the bind’s queue only while a backlog exists.`) +
       (scheduled && when !== '—' ? ` Requested delivery ${when}.` : '');
     campaignName.value = '';
     campaignMessage.value = '';
     recipientsRaw.value = '';
     sendLater.value = false;
     schedule.value = emptySchedule();
+    campaignPriority.value = PRIORITY_UNSET;
     applyJobFilters();
     if (createdJobId.value) await openJob({ id: createdJobId.value });
   } catch (reason) {
@@ -658,6 +686,15 @@ onMounted(() => {
         </template>
       </p>
 
+      <h3>Send priority</h3>
+      <MessagePriority
+        v-model="campaignPriority"
+        testid="bulk-priority"
+        label="Campaign priority (inherited by every recipient)"
+        :caveat="PRIORITY_BULK_CAVEAT"
+        :busy="busy"
+      />
+
       <h3>When to send</h3>
       <SendSchedule
         v-model:later="sendLater"
@@ -738,7 +775,8 @@ onMounted(() => {
           {{ jobsExporting ? 'Exporting…' : 'Export CSV' }}
         </button>
         <small class="source-note" data-testid="bulk-jobs-csv-only"
-          >CSV only — the API has no PDF route for this export.</small
+          >CSV only — the API has no PDF route for this export, and its column set does not include
+          priority.</small
         >
       </div>
 
@@ -888,6 +926,10 @@ onMounted(() => {
           <dd class="mono">{{ text(jobDetail.smsc_id ?? jobDetail.smscId, 'routed') }}</dd>
           <dt>Total</dt>
           <dd>{{ text(jobDetail.total, '0') }}</dd>
+          <dt>Priority</dt>
+          <dd data-testid="bulk-detail-priority">
+            {{ priorityCellLabel(jobDetail.priority) }}
+          </dd>
           <dt>Scheduled for</dt>
           <dd data-testid="bulk-detail-scheduled">
             {{ text(jobDetail.scheduled_at ?? jobDetail.scheduledAt, 'immediate') }}

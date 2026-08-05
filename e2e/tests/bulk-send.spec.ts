@@ -34,9 +34,7 @@ test.describe('Bulk Send', () => {
 
     // Recipient counter reflects parsing (newline / comma / whitespace split).
     await expect(page.getByTestId('bulk-recipient-count')).toContainText('0 recipient');
-    await page
-      .getByTestId('bulk-recipients')
-      .fill('+256700000001\n+256700000002, +256700000003');
+    await page.getByTestId('bulk-recipients').fill('+256700000001\n+256700000002, +256700000003');
     await expect(page.getByTestId('bulk-recipient-count')).toContainText('3 recipient');
 
     await page.getByTestId('bulk-recipients').fill('+256700000009');

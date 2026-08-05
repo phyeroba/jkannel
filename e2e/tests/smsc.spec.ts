@@ -56,9 +56,7 @@ test.describe('SMSC connections', () => {
     await page.getByTestId('draft-name').fill(name);
 
     const [createResp] = await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes('/smscs') && r.request().method() === 'POST',
-      ),
+      page.waitForResponse((r) => r.url().includes('/smscs') && r.request().method() === 'POST'),
       page.getByTestId('save-draft').click(),
     ]);
     expect(createResp.ok()).toBeTruthy();
@@ -92,8 +90,7 @@ test.describe('SMSC connections', () => {
     page.once('dialog', (d) => d.accept());
     const [deleteResp] = await Promise.all([
       page.waitForResponse(
-        (r) =>
-          r.url().includes(`/smscs/${createdId}`) && r.request().method() === 'DELETE',
+        (r) => r.url().includes(`/smscs/${createdId}`) && r.request().method() === 'DELETE',
       ),
       page.getByTestId('smsc-archive').click(),
     ]);

@@ -62,6 +62,7 @@ function makeController(overrides: { send?: jest.Mock; rows?: any[] } = {}) {
     controller: new GatewayMessagingController({ send } as never, sqlbox, database),
     send,
     sqlbox,
+    client,
   };
 }
 
@@ -195,5 +196,32 @@ describe('GatewayMessagingController — submit', () => {
     const { controller } = makeController({ rows: [] });
     const result = await controller.decisions(gatewayRequest(['routing.read']) as never, {});
     expect(result).toMatchObject({ items: [], total: 0, limit: 50, offset: 0 });
+  });
+
+  /**
+   * The content-rule columns were written by the send path and indexed, but no
+   * read selected them — so the rule that blocked a message could only be
+   * recovered by parsing the prose `reason`. String-scraping a human sentence is
+   * exactly what this table exists to eliminate, which makes a write-only
+   * column a silent gap rather than a missing nicety.
+   */
+  it('returns the content rule that blocked a message, and can filter by it', async () => {
+    const { controller, client } = makeController({ rows: [] });
+    await controller.decisions(gatewayRequest(['routing.read']) as never, {
+      contentRuleId: '11111111-1111-4111-8111-111111111111',
+    });
+    const sql = client.query.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(sql).toContain('content_rule_id');
+    expect(sql).toContain('content_rule_name');
+    expect(sql).toMatch(/content_rule_id = \$5::uuid/);
+  });
+
+  it('rejects a malformed contentRuleId rather than silently returning everything', async () => {
+    const { controller } = makeController({ rows: [] });
+    await expect(
+      controller.decisions(gatewayRequest(['routing.read']) as never, {
+        contentRuleId: 'not-a-uuid',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

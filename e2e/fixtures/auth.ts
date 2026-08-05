@@ -1,11 +1,5 @@
 import fs from 'node:fs';
-import {
-  test as base,
-  expect,
-  request,
-  type APIRequestContext,
-  type Page,
-} from '@playwright/test';
+import { test as base, expect, request, type APIRequestContext, type Page } from '@playwright/test';
 import { API_BASE, OPERATOR, STORAGE_STATE, TOKEN_KEYS } from './env';
 
 /**

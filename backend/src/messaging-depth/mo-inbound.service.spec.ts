@@ -463,3 +463,68 @@ describe('MO ingest — polling and manual retry', () => {
     await expect(service.retryDelivery(actor, id(999))).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+/**
+ * `mo_deliveries.config` is a fan-out-time snapshot of the destination's
+ * settings, and for a webhook that includes `secret` — the value sent verbatim
+ * as the `x-jkannel-signature` header. Every read path over that table is
+ * reachable by any `messages.view` holder, so selecting the column raw handed
+ * an outbound credential to callers who have no business seeing it.
+ *
+ * These assert on the emitted SQL rather than on returned rows because the
+ * redaction is done IN SQL, deliberately: the column is read from four places
+ * and a TypeScript-side delete would leave the next reader to leak again. The
+ * SQL text is therefore where the invariant actually lives.
+ */
+describe('MO deliveries — the webhook secret must not leave through a read path', () => {
+  const configSelects = (client: { query: jest.Mock }) =>
+    client.query.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => /FROM mo_deliveries|RETURNING/.test(sql) && sql.includes('config'));
+
+  it('redacts the secret on the deliveries grid and never selects it raw', async () => {
+    const { service, client } = makeStack();
+    await service.listDeliveries(actor, {});
+    const selects = configSelects(client);
+    expect(selects.length).toBeGreaterThan(0);
+    for (const sql of selects) {
+      expect(sql).toContain('__redacted__');
+      expect(sql).not.toMatch(/,\s*config\s*,/);
+    }
+  });
+
+  it('redacts on the per-message detail read as well', async () => {
+    const { service, state, client } = makeStack();
+    state.messages.push({ id: id(400) } as never);
+    await service.getMessage(actor, id(400)).catch(() => undefined);
+    for (const sql of configSelects(client)) expect(sql).toContain('__redacted__');
+  });
+
+  it('REPLACES the secret rather than dropping the key, so "set" stays distinguishable from "unset"', async () => {
+    // Removing the key (`config - 'secret'`) would render identically to a
+    // destination that never had a secret, and an operator reading "no secret"
+    // would re-enter one that was already there. jsonb_set keeps the fact.
+    const { service, client } = makeStack();
+    await service.listDeliveries(actor, {});
+    const [sql] = configSelects(client);
+    expect(sql).toContain('jsonb_set');
+    expect(sql).not.toMatch(/config\s*-\s*'secret'/);
+  });
+
+  it('redacts on the retry path too, which reads and returns the row', async () => {
+    const { service, state, client } = makeStack();
+    state.deliveries.push({
+      id: id(401),
+      status: 'failed',
+      kind: 'webhook',
+      target: 'https://x',
+      max_attempts: 5,
+      attempts: 5,
+      manual_retries: 0,
+    } as never);
+    await service.retryDelivery(actor, id(401)).catch(() => undefined);
+    const selects = configSelects(client);
+    expect(selects.length).toBeGreaterThan(0);
+    for (const sql of selects) expect(sql).toContain('__redacted__');
+  });
+});

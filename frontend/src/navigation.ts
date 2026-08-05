@@ -179,6 +179,20 @@ export const navigation: NavigationItem[] = [
     group: 'Messaging',
   },
   {
+    label: 'Content Filtering',
+    to: '/content-rules',
+    icon: 'shield',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Inbound Routing',
+    to: '/mo-routing',
+    icon: 'route',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
     label: 'SMSC Connections',
     to: '/smsc',
     icon: 'server',

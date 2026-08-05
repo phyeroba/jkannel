@@ -4,9 +4,16 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import MessagePriority from '../components/MessagePriority.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import { describeComposerText } from '../utils/message-segments';
+import {
+  PRIORITY_UNSET,
+  priorityCellLabel,
+  priorityFields,
+  type PriorityChoice,
+} from '../utils/message-priority';
 import {
   SCHEDULING_SUPPORTED,
   emptySchedule,
@@ -220,6 +227,14 @@ const definitions: Record<string, Workspace> = {
         hint: (raw) => (raw.udhData ? 'concatenated (UDH present)' : ''),
       },
       { header: 'Encoding', value: (raw) => codingLabel(raw) },
+      /*
+        Display only, deliberately. The engine row carries `priority`, but
+        SQLBOX_SORT_COLUMNS has no entry for it (a `?sort=priority` here is a
+        400) and parseMessageFilters drops an unknown query key, so there is no
+        sort or filter control the API would honour. `unset` is printed rather
+        than `—` because an absent priority is a real state, not missing data.
+      */
+      { header: 'Priority', value: (raw) => priorityCellLabel(raw.priority), mono: true },
       { header: 'SMSC', value: (raw) => text(raw.smscId ?? raw.smsc_id), mono: true },
       {
         header: 'DLR',
@@ -861,6 +876,8 @@ const sendText = ref('');
 const sendSmscId = ref('');
 const sendLater = ref(false);
 const sendSchedule = ref<ScheduleDraft>(emptySchedule());
+/** '' = the key is omitted from the request; see utils/message-priority.ts. */
+const sendPriority = ref<PriorityChoice>(PRIORITY_UNSET);
 const smscOptions = ref<Array<{ value: string; label: string }>>([]);
 const smscOptionsError = ref('');
 
@@ -2736,6 +2753,9 @@ async function sendMessage() {
       text: sendText.value,
       smscId: sendSmscId.value,
     };
+    // Adds nothing at all when the operator expressed no preference: `priority`
+    // must be ABSENT, not 0, because 0 is the lowest real SMPP level.
+    Object.assign(body, priorityFields(sendPriority.value));
     // Only attached when the API can honour it — see utils/send-scheduling.ts.
     if (sendLater.value && SCHEDULING_SUPPORTED)
       Object.assign(body, scheduledSendFields(sendSchedule.value));
@@ -2748,6 +2768,7 @@ async function sendMessage() {
     sendSmscId.value = '';
     sendLater.value = false;
     sendSchedule.value = emptySchedule();
+    sendPriority.value = PRIORITY_UNSET;
     // Say where it went: a submitted message leaves the spool immediately, so
     // "it is not in the queue" is the expected, healthy outcome.
     notice.value =
@@ -4842,6 +4863,9 @@ onUnmounted(() => {
         ></textarea>
       </label>
       <SegmentCounter :text="sendText" testid="send-segment" />
+
+      <h3>Send priority</h3>
+      <MessagePriority v-model="sendPriority" testid="send-priority" :busy="loading" />
 
       <h3>When to send</h3>
       <SendSchedule
