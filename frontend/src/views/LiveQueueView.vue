@@ -1179,7 +1179,8 @@ onMounted(() => {
       </header>
       <p class="source-note">
         Messages that have been accepted but not yet handed to a bind. A healthy engine drains this
-        in under a second, so an empty grid here is the normal, healthy state.
+        in under a second, so an empty grid here is the normal, healthy state — this panel shows
+        only the <em>pending</em> tier, never traffic that has already been dispatched.
       </p>
 
       <div class="grid-toolbar">
@@ -1313,10 +1314,34 @@ onMounted(() => {
                 </span>
               </td>
             </tr>
+            <!--
+              An empty spool is the single most misread screen in the console:
+              an operator who has just queued a bulk send looks here, sees
+              nothing, and concludes the campaign vanished. It did not — it went
+              spool → engine → history in under a second. Say that plainly and
+              link to where the traffic actually is.
+            -->
             <tr v-if="spoolState === 'ok' && !spoolRows.length">
               <td colspan="7" class="empty-cell" data-testid="spool-empty">
-                Spool is empty — the engine is accepting messages as fast as they arrive. Messages
-                appear here only when submissions outpace the engine or a bind is paused.
+                <strong>An empty spool is healthy.</strong>
+                It means the engine is accepting messages as fast as they arrive; messages queue
+                here only when submissions outpace the engine or a bind is paused.
+                <span class="empty-cell-hint">
+                  Traffic you have already sent — including a bulk send campaign — will
+                  <strong>not</strong> appear here. It is in the message log and the delivery
+                  reports:
+                </span>
+                <span class="followup-links">
+                  <RouterLink to="/messages" data-testid="spool-empty-messages"
+                    >Message log</RouterLink
+                  >
+                  <RouterLink to="/delivery-reports" data-testid="spool-empty-delivery"
+                    >Delivery Reports</RouterLink
+                  >
+                  <RouterLink to="/bulk-send" data-testid="spool-empty-bulk"
+                    >Bulk send jobs</RouterLink
+                  >
+                </span>
               </td>
             </tr>
             <tr v-if="spoolState === 'loading'">

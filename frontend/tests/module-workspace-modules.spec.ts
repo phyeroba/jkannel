@@ -18,7 +18,14 @@ import ModuleWorkspace from '../src/views/ModuleWorkspace.vue';
 const mountWorkspace = async (path: string, title: string) => {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path, name: path.slice(1), component: ModuleWorkspace, meta: { title } }],
+    routes: [
+      { path, name: path.slice(1), component: ModuleWorkspace, meta: { title } },
+      // Cross-links the workspace renders (e.g. the delivery-report note that
+      // points outcome filtering at the message log) need a resolvable target.
+      ...(path === '/messages'
+        ? []
+        : [{ path: '/messages', name: 'messages', component: { template: '<div />' } }]),
+    ],
   });
   await router.push(path);
   await router.isReady();
@@ -266,7 +273,9 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.get('[data-testid="dlr-total"]').text()).toBe('12');
+    // The tile counts what is on the page. In keyset mode the API pays for no
+    // row count, so claiming a global total here would be inventing one.
+    expect(wrapper.get('[data-testid="dlr-total"]').text()).toBe('1');
     expect(wrapper.get('[data-testid="dlr-row-0"]').text()).toContain('delivered');
 
     await wrapper.get('[data-testid="dlr-smsc-filter"]').setValue('primary');
@@ -282,6 +291,230 @@ describe('module workspace per-module enhancements', () => {
       fetchMock.mock.calls.some((call) => String(call[0]).includes('/reports/delivery/export.csv')),
     ).toBe(true);
     click.mockRestore();
+  });
+
+  /**
+   * Delivery Reports used to offer "all" and nothing else. These cover the real
+   * vocabulary (`deliveryStatus`, plus the `resendable` / `in-flight` groups as
+   * the SQLBox repository defines them), the date range, the page size, and the
+   * requirement that the CSV export carries the SAME filters as the grid.
+   */
+  const dlrRow = (id: string, deliveryStatus: string, receiver = '+256700') => ({
+    id,
+    receiver,
+    deliveryStatus,
+    smscId: 'primary',
+    sender: 'JKANNEL',
+    segments: 1,
+    timestamp: '2026-08-04T09:00:00Z',
+  });
+  const dlrMock = (rows: unknown[], extra: (url: string) => unknown = () => undefined) =>
+    vi.fn().mockImplementation((url: string) => {
+      const custom = extra(String(url));
+      if (custom) return custom;
+      if (String(url).includes('/reports/delivery/export.csv'))
+        return Promise.resolve(
+          new Response('id,status', {
+            status: 200,
+            headers: {
+              'content-disposition': 'attachment; filename="dlr.csv"',
+              'x-jkannel-export-row-count': '7',
+            },
+          }),
+        );
+      return apiResponse({
+        items: rows,
+        nextCursor: null,
+        summary: { total: rows.length },
+        source: { status: 'available', type: 'kamex-sqlbox' },
+      });
+    });
+
+  it('filters delivery reports by the deliveryStatus vocabulary and its groups', async () => {
+    const fetchMock = dlrMock([dlrRow('d1', 'delivered'), dlrRow('d2', 'failed', '+256701')]);
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // The rows classify into the vocabulary, so the chips stay usable.
+    expect(wrapper.find('[data-testid="dlr-status-unsupported"]').exists()).toBe(false);
+    expect(
+      wrapper.get('[data-testid="dlr-status-delivered"]').attributes('disabled'),
+    ).toBeUndefined();
+
+    await wrapper.get('[data-testid="dlr-status-failed"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('deliveryStatus=failed'),
+    );
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // Adding a second status sends both, comma-separated.
+    await wrapper.get('[data-testid="dlr-status-rejected"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
+        'deliveryStatus=failed%2Crejected',
+      ),
+    );
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // A group replaces the individual selections — it IS a set of them.
+    await wrapper.get('[data-testid="dlr-group-in-flight"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('deliveryStatus=in-flight'),
+    );
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain('failed');
+  });
+
+  it('carries the active delivery filters into the CSV export', async () => {
+    const click = stubDownloads();
+    const fetchMock = dlrMock([dlrRow('d1', 'delivered')]);
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-group-resendable"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="dlr-smsc-filter"]').setValue('primary');
+    await wrapper.get('[data-testid="dlr-smsc-filter"]').trigger('change');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-export"]').trigger('click');
+    await vi.waitFor(() => expect(click).toHaveBeenCalled());
+    const exportUrl = String(
+      fetchMock.mock.calls.find((call) => String(call[0]).includes('export.csv'))?.[0],
+    );
+    expect(exportUrl).toContain('deliveryStatus=resendable');
+    expect(exportUrl).toContain('smscId=primary');
+    // The export must not inherit the grid's cursor — it is the whole answer.
+    expect(exportUrl).not.toContain('cursor=');
+    expect(wrapper.get('[data-testid="dlr-applied-filters"]').text()).toContain(
+      'status resendable',
+    );
+    click.mockRestore();
+  });
+
+  it('sends the date range as ISO and the page size', async () => {
+    const fetchMock = dlrMock([
+      dlrRow('d1', 'delivered', '+256999'),
+      dlrRow('d2', 'failed', '+256111'),
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-from"]').setValue('2026-08-01T00:00');
+    await wrapper.get('[data-testid="dlr-from"]').trigger('change');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
+        `from=${encodeURIComponent(new Date('2026-08-01T00:00').toISOString())}`,
+      ),
+    );
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-limit"]').setValue('250');
+    await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('limit=250'));
+  });
+
+  /**
+   * Sorting is a SERVER parameter here (`SQLBOX_SORT_COLUMNS`), and asking for
+   * one takes the API out of keyset paging into offset paging with a row count —
+   * so the pager has to switch with it rather than keep offering "Load more".
+   */
+  it('sorts delivery reports server-side and switches the pager to offset mode', async () => {
+    const fetchMock = dlrMock([dlrRow('d1', 'delivered', '+256999')]);
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // Default: no sort parameter at all, which is the keyset path.
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain('sort=');
+    expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset');
+
+    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('sort=receiver'),
+    );
+    // A sort has no keyset, so the request pages by offset instead of cursor.
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('offset=0');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('pages this by offset');
+
+    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('sort=-receiver'),
+    );
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    // A third click returns to the API's own ordering — the only one the
+    // `sql_id` cursor can page — so the operator can get the keyset back.
+    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain('sort='));
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset'),
+    );
+  });
+
+  it('pages by offset once sorted, using the row count the API then returns', async () => {
+    const rows = Array.from({ length: 3 }, (_, index) =>
+      dlrRow(`d${index}`, 'delivered', `+2567000000${index}`),
+    );
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      apiResponse({
+        items: rows,
+        nextCursor: null,
+        total: 120,
+        summary: { total: 120, returned: rows.length },
+        source: { status: 'available', type: 'kamex-sqlbox' },
+        __echo: String(url),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-sort-timestamp"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    expect(wrapper.get('[data-testid="dlr-matching"]').text()).toBe('120');
+    expect(wrapper.get('[data-testid="dlr-range"]').text()).toContain('Showing 1–3 of 120');
+
+    await wrapper.get('[data-testid="cursor-next"]').trigger('click');
+    await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('offset=50'));
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="dlr-range"]').text()).toContain('Showing 51–53 of 120'),
+    );
+  });
+
+  it('rejects an inverted range locally and shows the API 400 verbatim', async () => {
+    const fetchMock = dlrMock([dlrRow('d1', 'delivered')], (url) =>
+      url.includes('deliveryStatus=unknown')
+        ? apiResponse('deliveryStatus contains unsupported value(s): nope.', 400)
+        : undefined,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    await wrapper.get('[data-testid="dlr-from"]').setValue('2026-08-05T10:00');
+    await wrapper.get('[data-testid="dlr-from"]').trigger('change');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="dlr-to"]').setValue('2026-08-01T10:00');
+    await wrapper.get('[data-testid="dlr-to"]').trigger('change');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="dlr-filter-error"]').text()).toContain(
+        '“From” must not be after “To”',
+      ),
+    );
+
+    await wrapper.get('[data-testid="dlr-clear-filters"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="dlr-status-unknown"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="dlr-filter-error"]').text()).toBe(
+        'deliveryStatus contains unsupported value(s): nope.',
+      ),
+    );
+    // A rejected filter is not an outage: the workspace error panel stays shut.
+    expect(wrapper.find('[data-testid="workspace-error"]').exists()).toBe(false);
   });
 
   /**

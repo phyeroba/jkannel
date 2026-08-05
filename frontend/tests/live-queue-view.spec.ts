@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -192,6 +193,37 @@ describe('Live queue console', () => {
     expect(wrapper.get('[data-testid="bind-status-local-fake"]').text()).toContain('connecting');
     expect(wrapper.get('[data-testid="bind-status-local-fake"]').classes()).toContain('warn');
     expect(wrapper.find('[data-testid="live-source-banner"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  /**
+   * The reported failure: "I queued a bulk send and it never appeared in the
+   * queue." The spool shows only the pending tier, so a healthy engine leaves it
+   * empty — the empty state has to say so, and point at where the traffic is.
+   */
+  it('explains that an empty spool is healthy and links to where traffic lands', async () => {
+    stubApi({ '/queue-console/spool': { items: [], nextCursor: null, total: 0 } });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: { template: '<div />' } },
+        { path: '/messages', name: 'messages', component: { template: '<div />' } },
+        { path: '/delivery-reports', name: 'dlr', component: { template: '<div />' } },
+        { path: '/bulk-send', name: 'bulk-send', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/');
+    await router.isReady();
+    const wrapper = mount(LiveQueueView, { global: { plugins: [router] } });
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="spool-empty"]').exists()).toBe(true));
+    const empty = wrapper.get('[data-testid="spool-empty"]');
+    expect(empty.text()).toContain('An empty spool is healthy');
+    expect(empty.text()).toContain('will not appear here');
+    expect(empty.get('[data-testid="spool-empty-messages"]').attributes('href')).toBe('/messages');
+    expect(empty.get('[data-testid="spool-empty-delivery"]').attributes('href')).toBe(
+      '/delivery-reports',
+    );
+    expect(empty.get('[data-testid="spool-empty-bulk"]').attributes('href')).toBe('/bulk-send');
     wrapper.unmount();
   });
 

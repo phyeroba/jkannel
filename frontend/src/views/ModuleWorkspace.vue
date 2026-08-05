@@ -4,6 +4,16 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import SegmentCounter from '../components/SegmentCounter.vue';
+import SendSchedule from '../components/SendSchedule.vue';
+import { describeComposerText } from '../utils/message-segments';
+import {
+  SCHEDULING_SUPPORTED,
+  emptySchedule,
+  scheduleError as sendScheduleValidationError,
+  scheduledSendFields,
+  type ScheduleDraft,
+} from '../utils/send-scheduling';
 import './workspace-extras.css';
 
 type RecordValue = Record<string, unknown>;
@@ -60,6 +70,11 @@ const BOOLEAN_OPTIONS = ['true', 'false'];
 
 function text(value: unknown, fallback = '—') {
   return value === null || value === undefined || value === '' ? fallback : String(value);
+}
+
+function num(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function list(value: unknown, fallback = '—') {
@@ -792,6 +807,8 @@ const sendSender = ref('');
 const sendReceiver = ref('');
 const sendText = ref('');
 const sendSmscId = ref('');
+const sendLater = ref(false);
+const sendSchedule = ref<ScheduleDraft>(emptySchedule());
 const smscOptions = ref<Array<{ value: string; label: string }>>([]);
 const smscOptionsError = ref('');
 
@@ -835,6 +852,55 @@ const cursorSource = ref<RecordValue | string | null>(null);
 const cursorCurrent = ref<string | null>(null);
 const cursorHistory = ref<Array<string | null>>([]);
 const dlrSmscId = ref('');
+
+/*
+ * Delivery report filters.
+ *
+ * `GET /reports/delivery` is parsed by `parseMessageFilters`
+ * (backend/src/messaging-depth/message-filters.ts). Accepted parameters:
+ * limit (1–500, default 100), cursor, offset, query, status, deliveryStatus,
+ * smscId, direction, from, to, sort. `direction` is force-set to 'DLR' by the
+ * controller (the report IS the receipt rows) so it is not offered here.
+ *
+ * TWO PAGING MODES, chosen by the query rather than by a flag — see
+ * `KamexSqlboxRepository.list`:
+ *   default sort  -> keyset on `sql_id DESC`; `nextCursor`, no row count.
+ *   any other sort (or an explicit `offset`) -> OFFSET paging with a `total`,
+ *   because a `sql_id` cursor cannot express a page boundary in someone else's
+ *   ordering. The pager below follows the mode the query put it in.
+ *
+ * The outcome vocabulary and the group aliases come from `DELIVERY_STATUSES` /
+ * `DELIVERY_STATUS_GROUPS` in backend/src/engine/kamex-sqlbox.repository.ts. On
+ * this route the rows are classified in `receipts` mode, so `deliveryStatus`
+ * carries the receipt's OWN decoded outcome (delivered / failed / …) rather
+ * than the literal `delivery_report`, which is what makes filtering meaningful.
+ */
+const DELIVERY_STATUSES = [
+  'delivered',
+  'failed',
+  'rejected',
+  'buffered',
+  'accepted',
+  'pending',
+  'unknown',
+] as const;
+/** Server-side aliases: `resendable` = failed+rejected, `in-flight` = pending+buffered. */
+const DELIVERY_STATUS_GROUPS = [
+  { token: 'resendable', label: 'Resendable', members: ['failed', 'rejected'] },
+  { token: 'in-flight', label: 'In flight', members: ['pending', 'buffered'] },
+] as const;
+
+const dlrStatuses = ref<string[]>([]);
+const dlrGroup = ref('');
+const dlrFrom = ref('');
+const dlrTo = ref('');
+const dlrLimit = ref(50);
+/** '' = the API's own default order (newest first), which is the keyset path. */
+const dlrSortField = ref('');
+const dlrSortDir = ref<'asc' | 'desc'>('desc');
+const dlrOffset = ref(0);
+const dlrTotal = ref(0);
+const dlrFilterError = ref('');
 
 /* Runtime containers. */
 const containers = ref<RecordValue[]>([]);
@@ -1192,6 +1258,12 @@ async function load(preserveNotice = false) {
     if (key.value === 'messages' && reason instanceof ApiError && reason.status === 400) {
       messageFilterError.value = detail;
       error.value = '';
+    } else if (isDlr.value && reason instanceof ApiError && reason.status === 400) {
+      // A rejected filter, not an outage. The API's 400 names the offending
+      // value (e.g. "deliveryStatus contains unsupported value(s): …"), so it
+      // is shown verbatim beside the controls that caused it.
+      dlrFilterError.value = detail;
+      error.value = '';
     } else {
       error.value = detail;
     }
@@ -1203,14 +1275,82 @@ async function load(preserveNotice = false) {
   if (key.value === 'backup') void loadBackupSchedules();
 }
 
-async function loadCursorPage() {
-  const endpoint = isDlr.value ? '/reports/delivery' : '/queues';
+/** The active delivery-status tokens, as the API's comma list. */
+const dlrStatusTokens = computed(() =>
+  dlrGroup.value ? [dlrGroup.value] : [...dlrStatuses.value].sort(),
+);
+const dlrFiltered = computed(
+  () =>
+    Boolean(dlrStatusTokens.value.length) ||
+    Boolean(dlrSmscId.value.trim()) ||
+    Boolean(dlrFrom.value) ||
+    Boolean(dlrTo.value) ||
+    Boolean(query.value.trim()),
+);
+/** Caught here so an inverted range is not a round trip that returns a 400. */
+const dlrRangeInverted = computed(() => {
+  const from = dlrFrom.value ? Date.parse(dlrFrom.value) : NaN;
+  const to = dlrTo.value ? Date.parse(dlrTo.value) : NaN;
+  return Number.isFinite(from) && Number.isFinite(to) && from > to;
+});
+
+/**
+ * True while the report is in OFFSET mode. A non-default sort has no `sql_id`
+ * keyset, so the API pages it by offset and returns a `total` instead of a
+ * cursor; the pager has to follow, not guess.
+ */
+const dlrOffsetMode = computed(() => Boolean(dlrSortField.value));
+
+/**
+ * ONE query builder for the grid and for the export, so an export is
+ * structurally the same question as the screen rather than a promise that it
+ * is. Only the paging keys and the row cap differ.
+ */
+function dlrParams(options: { limit?: number; withPaging?: boolean } = {}) {
   const params = new URLSearchParams();
   if (query.value.trim()) params.set('query', query.value.trim());
-  if (isDlr.value && dlrSmscId.value.trim()) params.set('smscId', dlrSmscId.value.trim());
+  if (dlrSmscId.value.trim()) params.set('smscId', dlrSmscId.value.trim());
+  if (dlrStatusTokens.value.length) params.set('deliveryStatus', dlrStatusTokens.value.join(','));
+  const from = dlrFrom.value ? Date.parse(dlrFrom.value) : NaN;
+  const to = dlrTo.value ? Date.parse(dlrTo.value) : NaN;
+  if (Number.isFinite(from)) params.set('from', new Date(from).toISOString());
+  if (Number.isFinite(to)) params.set('to', new Date(to).toISOString());
+  if (dlrSortField.value)
+    params.set('sort', `${dlrSortDir.value === 'desc' ? '-' : ''}${dlrSortField.value}`);
+  if (options.withPaging !== false) {
+    if (dlrOffsetMode.value) params.set('offset', String(dlrOffset.value));
+    else if (cursorCurrent.value) params.set('cursor', cursorCurrent.value);
+  }
+  params.set('limit', String(options.limit ?? dlrLimit.value));
+  return params;
+}
+
+async function loadCursorPage() {
+  if (isDlr.value) {
+    dlrFilterError.value = '';
+    if (dlrRangeInverted.value) {
+      dlrFilterError.value = '“From” must not be after “To”.';
+      cursorItems.value = [];
+      cursorNext.value = null;
+      dlrTotal.value = 0;
+      return;
+    }
+    const payload = await apiRequest<RecordValue>(`/reports/delivery?${dlrParams().toString()}`);
+    const items = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
+    cursorItems.value = items;
+    cursorNext.value = (payload.nextCursor as string | null) ?? null;
+    cursorSummary.value = (payload.summary as RecordValue) ?? null;
+    cursorSource.value = (payload.source as RecordValue | string) ?? null;
+    // `total` is only paid for in offset mode; a keyset page deliberately has none.
+    dlrTotal.value = num(payload.total ?? (payload.summary as RecordValue | null)?.total);
+    detectUnavailableSource(payload);
+    return;
+  }
+  const params = new URLSearchParams();
+  if (query.value.trim()) params.set('query', query.value.trim());
   if (cursorCurrent.value) params.set('cursor', cursorCurrent.value);
   params.set('limit', '50');
-  const payload = await apiRequest<RecordValue>(`${endpoint}?${params.toString()}`);
+  const payload = await apiRequest<RecordValue>(`/queues?${params.toString()}`);
   cursorItems.value = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
   cursorNext.value = (payload.nextCursor as string | null) ?? null;
   cursorSummary.value = (payload.summary as RecordValue) ?? null;
@@ -1314,25 +1454,79 @@ const queueColumns = [
   },
 ];
 
-const dlrColumns = [
+/**
+ * Delivery report columns. The outcome pill is driven by `deliveryStatus` and
+ * `badgeTone()` — the same treatment the message log uses — so the vocabulary
+ * reads identically across the console. `dlrEvent` is shown beside it because
+ * on a receipt row it carries the actual Kannel event mask.
+ */
+const dlrColumns: Array<{
+  key: string;
+  label: string;
+  value: (raw: RecordValue) => string;
+  /** API sort field (`SQLBOX_SORT_COLUMNS`); omitted where the API cannot sort. */
+  sort?: string;
+  mono?: boolean;
+  badge?: boolean;
+  hint?: (raw: RecordValue) => string;
+}> = [
   {
+    key: 'id',
     label: 'Message ID',
-    value: (raw: RecordValue) => text(raw.id ?? raw.message_id ?? raw.messageId, ''),
+    sort: 'id',
+    value: (raw) => text(raw.id ?? raw.message_id ?? raw.messageId, ''),
+    mono: true,
+    hint: (raw) => text(raw.externalRef ?? raw.foreign_id, ''),
   },
   {
+    key: 'receiver',
     label: 'Recipient',
-    value: (raw: RecordValue) => text(raw.recipient ?? raw.receiver ?? raw.to, ''),
+    sort: 'receiver',
+    value: (raw) => text(raw.recipient ?? raw.receiver ?? raw.to, ''),
+    mono: true,
   },
   {
-    label: 'Status',
-    value: (raw: RecordValue) => text(raw.status ?? raw.dlr_status ?? raw.state, ''),
+    key: 'deliveryStatus',
+    label: 'Delivery',
+    sort: 'deliveryStatus',
+    value: (raw) => text(raw.deliveryStatus ?? raw.delivery_status ?? raw.status ?? raw.state, ''),
+    badge: true,
+    hint: (raw) => dlrEventLabel(raw),
   },
-  { label: 'SMSC', value: (raw: RecordValue) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, '') },
   {
+    key: 'smscId',
+    label: 'SMSC',
+    sort: 'smscId',
+    value: (raw) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, ''),
+    mono: true,
+  },
+  {
+    key: 'sender',
+    label: 'Sender',
+    sort: 'sender',
+    value: (raw) => text(raw.sender, ''),
+    mono: true,
+  },
+  // `segments` is derived in the read model, not a sortable SQL column.
+  {
+    key: 'segments',
+    label: 'Segments',
+    value: (raw) => segmentCount(raw),
+    hint: (raw) => codingLabel(raw),
+  },
+  {
+    key: 'timestamp',
     label: 'Timestamp',
-    value: (raw: RecordValue) => text(raw.timestamp ?? raw.created_at ?? raw.updated_at, ''),
+    sort: 'timestamp',
+    value: (raw) => text(raw.timestamp ?? raw.created_at ?? raw.updated_at, ''),
+    hint: (raw) => text(raw.dlrAt ?? raw.dlr_at, ''),
   },
 ];
+
+function dlrAriaSort(field: string | undefined) {
+  if (!field || dlrSortField.value !== field) return 'none';
+  return dlrSortDir.value === 'asc' ? 'ascending' : 'descending';
+}
 
 const cursorSourceUnavailable = computed(() => {
   const source = cursorSource.value;
@@ -2221,18 +2415,34 @@ function exportQueueCsv() {
   downloadClientCsv('jkannel-queues.csv', queueColumns, cursorItems.value);
   notice.value = `Exported ${cursorItems.value.length} loaded queued rows as CSV.`;
 }
+/** Human summary of the filter set, so the export notice can name what it carried. */
+const dlrAppliedFilters = computed(() => {
+  const parts: string[] = [];
+  if (query.value.trim()) parts.push(`search “${query.value.trim()}”`);
+  if (dlrStatusTokens.value.length) parts.push(`status ${dlrStatusTokens.value.join(', ')}`);
+  if (dlrSmscId.value.trim()) parts.push(`SMSC ${dlrSmscId.value.trim()}`);
+  if (dlrFrom.value) parts.push(`from ${dlrFrom.value}`);
+  if (dlrTo.value) parts.push(`to ${dlrTo.value}`);
+  return parts.join(' · ');
+});
+
+/**
+ * The export is built from `dlrParams()` — the SAME builder the grid uses,
+ * minus the cursor — so it carries every active filter rather than only the
+ * two it used to. The server caps it at `SQLBOX_EXPORT_MAX_ROWS` (5000).
+ */
 async function exportDlrCsv() {
   loading.value = true;
   error.value = '';
   notice.value = '';
   try {
-    const params = new URLSearchParams();
-    if (query.value.trim()) params.set('query', query.value.trim());
-    if (dlrSmscId.value.trim()) params.set('smscId', dlrSmscId.value.trim());
-    params.set('limit', '5000');
+    const params = dlrParams({ limit: 5000, withPaging: false });
     const exported = await apiDownloadFile(`/reports/delivery/export.csv?${params.toString()}`);
     saveDownloadedFile(exported.blob, exported.filename);
-    notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'} delivery reports.`;
+    const rows = exported.headers.get('x-jkannel-export-row-count') ?? 'filtered';
+    notice.value = dlrAppliedFilters.value
+      ? `Exported ${rows} delivery reports matching ${dlrAppliedFilters.value}.`
+      : `Exported ${rows} delivery reports (no filters applied).`;
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'The export failed.';
   } finally {
@@ -2253,10 +2463,78 @@ async function exportSimple(base: string, format: 'csv' | 'pdf') {
     loading.value = false;
   }
 }
+/** Any change to the question invalidates both the keyset and the offset. */
 function applyDlrFilter() {
   resetCursor();
+  dlrOffset.value = 0;
   void load();
 }
+/** A group IS a set of statuses, so the two selections are mutually exclusive. */
+function toggleDlrStatus(status: string) {
+  dlrGroup.value = '';
+  dlrStatuses.value = dlrStatuses.value.includes(status)
+    ? dlrStatuses.value.filter((entry) => entry !== status)
+    : [...dlrStatuses.value, status];
+  applyDlrFilter();
+}
+function toggleDlrGroup(token: string) {
+  dlrStatuses.value = [];
+  dlrGroup.value = dlrGroup.value === token ? '' : token;
+  applyDlrFilter();
+}
+function clearDlrFilters() {
+  dlrStatuses.value = [];
+  dlrGroup.value = '';
+  dlrSmscId.value = '';
+  dlrFrom.value = '';
+  dlrTo.value = '';
+  query.value = '';
+  applyDlrFilter();
+}
+/**
+ * Server-side sort. A third click on the same column returns to the API's own
+ * ordering, which is also the only ordering the `sql_id` keyset can page —
+ * so it is worth being able to get back to.
+ */
+function sortDlrBy(field: string) {
+  if (dlrSortField.value !== field) {
+    dlrSortField.value = field;
+    dlrSortDir.value = 'asc';
+  } else if (dlrSortDir.value === 'asc') {
+    dlrSortDir.value = 'desc';
+  } else {
+    dlrSortField.value = '';
+    dlrSortDir.value = 'desc';
+  }
+  applyDlrFilter();
+}
+/** Offset paging, used only in the mode a non-default sort puts the API into. */
+function turnDlrOffsetPage(direction: number) {
+  const next = Math.max(0, dlrOffset.value + direction * dlrLimit.value);
+  if (direction > 0 && dlrOffset.value + dlrLimit.value >= dlrTotal.value) return;
+  if (next === dlrOffset.value) return;
+  dlrOffset.value = next;
+  void load();
+}
+/** One control for both modes, so the operator never has to know which is live. */
+function turnDlrPage(direction: number) {
+  if (dlrOffsetMode.value) turnDlrOffsetPage(direction);
+  else turnCursor(direction);
+}
+const dlrHasPrev = computed(() =>
+  dlrOffsetMode.value ? dlrOffset.value > 0 : cursorHistory.value.length > 0,
+);
+const dlrHasNext = computed(() =>
+  dlrOffsetMode.value
+    ? dlrOffset.value + dlrLimit.value < dlrTotal.value
+    : Boolean(cursorNext.value),
+);
+const dlrRangeLabel = computed(() => {
+  if (!cursorItems.value.length) return 'No delivery reports on this page';
+  if (!dlrOffsetMode.value)
+    return `${cursorItems.value.length} receipt(s) · page ${cursorHistory.value.length + 1} (keyset)`;
+  return `Showing ${dlrOffset.value + 1}–${dlrOffset.value + cursorItems.value.length} of ${dlrTotal.value}`;
+});
 
 async function loadDeliverySummary() {
   deliveryUnavailable.value = false;
@@ -2306,34 +2584,53 @@ async function openSendForm() {
   }
 }
 
+/** Rejected in the UI before submitting; '' when the schedule is fine or unused. */
+const sendScheduleError = computed(() =>
+  sendLater.value && SCHEDULING_SUPPORTED ? sendScheduleValidationError(sendSchedule.value) : '',
+);
+/** Live segment accounting for the composed body — see SegmentCounter.vue. */
+const sendSegments = computed(() => describeComposerText(sendText.value).segments);
+const canSubmitSend = computed(
+  () =>
+    !loading.value &&
+    Boolean(sendSmscId.value) &&
+    Boolean(sendSender.value.trim()) &&
+    Boolean(sendReceiver.value.trim()) &&
+    Boolean(sendText.value.trim()) &&
+    !sendScheduleError.value,
+);
+
 async function sendMessage() {
-  if (
-    !sendSmscId.value ||
-    !sendSender.value.trim() ||
-    !sendReceiver.value.trim() ||
-    !sendText.value.trim()
-  )
-    return;
+  if (!canSubmitSend.value) return;
   loading.value = true;
   error.value = '';
   try {
-    await apiRequest('/messages', {
-      method: 'POST',
-      body: JSON.stringify({
-        sender: sendSender.value.trim(),
-        receiver: sendReceiver.value.trim(),
-        text: sendText.value,
-        smscId: sendSmscId.value,
-      }),
-    });
+    const body: Record<string, unknown> = {
+      sender: sendSender.value.trim(),
+      receiver: sendReceiver.value.trim(),
+      text: sendText.value,
+      smscId: sendSmscId.value,
+    };
+    // Only attached when the API can honour it — see utils/send-scheduling.ts.
+    if (sendLater.value && SCHEDULING_SUPPORTED)
+      Object.assign(body, scheduledSendFields(sendSchedule.value));
+    await apiRequest('/messages', { method: 'POST', body: JSON.stringify(body) });
+    const segments = sendSegments.value;
     showSendForm.value = false;
     sendSender.value = '';
     sendReceiver.value = '';
     sendText.value = '';
     sendSmscId.value = '';
-    notice.value = 'Message submitted for delivery.';
+    sendLater.value = false;
+    sendSchedule.value = emptySchedule();
+    // Say where it went: a submitted message leaves the spool immediately, so
+    // "it is not in the queue" is the expected, healthy outcome.
+    notice.value =
+      `Message submitted for delivery (${segments} segment${segments === 1 ? '' : 's'}). ` +
+      'It is already past the pending spool — track it in this message log and in Delivery Reports.';
     await load(true);
   } catch (reason) {
+    // The API's 400 is surfaced verbatim; it names the field it rejected.
     error.value = reason instanceof Error ? reason.message : 'The message could not be sent.';
   } finally {
     loading.value = false;
@@ -2843,6 +3140,16 @@ watch(
     restoreRow.value = null;
     restoreReason.value = '';
     dlrSmscId.value = '';
+    dlrStatuses.value = [];
+    dlrGroup.value = '';
+    dlrFrom.value = '';
+    dlrTo.value = '';
+    dlrLimit.value = 50;
+    dlrSortField.value = '';
+    dlrSortDir.value = 'desc';
+    dlrOffset.value = 0;
+    dlrTotal.value = 0;
+    dlrFilterError.value = '';
     deliverySummary.value = null;
     deliveryUnavailable.value = false;
     sourceUnavailable.value = false;
@@ -4339,15 +4646,28 @@ onUnmounted(() => {
       </label>
       <label>
         Message text
-        <input v-model="sendText" data-testid="send-text" placeholder="Message body" />
+        <textarea
+          v-model="sendText"
+          data-testid="send-text"
+          rows="3"
+          placeholder="Message body"
+        ></textarea>
       </label>
+      <SegmentCounter :text="sendText" testid="send-segment" />
+
+      <h3>When to send</h3>
+      <SendSchedule
+        v-model:later="sendLater"
+        v-model:draft="sendSchedule"
+        testid="send-schedule"
+        :busy="loading"
+      />
+
       <div>
         <button
           class="primary-button"
           data-testid="send-submit"
-          :disabled="
-            loading || !sendSmscId || !sendSender.trim() || !sendReceiver.trim() || !sendText.trim()
-          "
+          :disabled="!canSubmitSend"
           @click="sendMessage"
         >
           Send
@@ -5142,16 +5462,14 @@ onUnmounted(() => {
           </p>
         </div>
         <div class="pager-buttons">
-          <label class="filter-select">
-            <span>SMSC</span>
-            <input
-              v-model="dlrSmscId"
-              data-testid="dlr-smsc-filter"
-              placeholder="SMSC id"
-              @change="applyDlrFilter"
-              @keyup.enter="applyDlrFilter"
-            />
-          </label>
+          <button
+            class="secondary-button"
+            data-testid="dlr-clear-filters"
+            :disabled="loading || !dlrFiltered"
+            @click="clearDlrFilters"
+          >
+            Clear filters
+          </button>
           <button
             class="secondary-button"
             data-testid="dlr-export"
@@ -5162,10 +5480,90 @@ onUnmounted(() => {
           </button>
         </div>
       </header>
+
+      <!-- Status vocabulary, as chips. Same tokens the API accepts. -->
+      <div class="status-chips" role="group" aria-label="Filter by delivery status">
+        <button
+          v-for="status in DELIVERY_STATUSES"
+          :key="status"
+          type="button"
+          :data-testid="`dlr-status-${status}`"
+          :aria-pressed="dlrStatuses.includes(status)"
+          :disabled="loading"
+          @click="toggleDlrStatus(status)"
+        >
+          {{ status }}
+        </button>
+        <button
+          v-for="group in DELIVERY_STATUS_GROUPS"
+          :key="group.token"
+          type="button"
+          :data-testid="`dlr-group-${group.token}`"
+          :aria-pressed="dlrGroup === group.token"
+          :disabled="loading"
+          :title="`${group.label}: ${group.members.join(' + ')}`"
+          @click="toggleDlrGroup(group.token)"
+        >
+          {{ group.label }}
+        </button>
+      </div>
+
+      <div class="grid-toolbar">
+        <label class="filter-select">
+          <span>SMSC</span>
+          <input
+            v-model="dlrSmscId"
+            data-testid="dlr-smsc-filter"
+            placeholder="SMSC id"
+            @change="applyDlrFilter"
+            @keyup.enter="applyDlrFilter"
+          />
+        </label>
+        <label class="filter-select">
+          <span>From</span>
+          <input
+            v-model="dlrFrom"
+            type="datetime-local"
+            data-testid="dlr-from"
+            @change="applyDlrFilter"
+          />
+        </label>
+        <label class="filter-select">
+          <span>To</span>
+          <input
+            v-model="dlrTo"
+            type="datetime-local"
+            data-testid="dlr-to"
+            @change="applyDlrFilter"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Per page</span>
+          <select v-model.number="dlrLimit" data-testid="dlr-limit" @change="applyDlrFilter">
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+            <option :value="250">250</option>
+            <option :value="500">500</option>
+          </select>
+        </label>
+      </div>
+
+      <p v-if="dlrFilterError" class="form-error" role="alert" data-testid="dlr-filter-error">
+        {{ dlrFilterError }}
+      </p>
+      <p v-if="dlrAppliedFilters" class="source-note" data-testid="dlr-applied-filters">
+        Filters applied to this grid and to the CSV export: {{ dlrAppliedFilters }}.
+      </p>
+
       <div class="summary-strip">
         <div class="metric">
-          <strong data-testid="dlr-total">{{ (cursorSummary?.total as number) ?? 0 }}</strong>
-          <small>Delivery receipts</small>
+          <strong data-testid="dlr-total">{{ cursorItems.length }}</strong>
+          <small>Receipts on this page</small>
+        </div>
+        <div v-if="dlrOffsetMode" class="metric">
+          <strong data-testid="dlr-matching">{{ dlrTotal }}</strong>
+          <small>Matching the filters</small>
         </div>
       </div>
       <p v-if="cursorSourceUnavailable" class="source-note" data-testid="dlr-source-note">
@@ -5176,8 +5574,25 @@ onUnmounted(() => {
         <table>
           <thead>
             <tr>
-              <th v-for="column in dlrColumns" :key="column.label" scope="col">
-                {{ column.label }}
+              <th
+                v-for="column in dlrColumns"
+                :key="column.key"
+                scope="col"
+                :aria-sort="dlrAriaSort(column.sort)"
+              >
+                <button
+                  v-if="column.sort"
+                  type="button"
+                  class="column-sort"
+                  :data-testid="`dlr-sort-${column.key}`"
+                  @click="sortDlrBy(column.sort)"
+                >
+                  {{ column.label }}
+                  <span v-if="dlrSortField === column.sort">{{
+                    dlrSortDir === 'asc' ? '▲' : '▼'
+                  }}</span>
+                </button>
+                <template v-else>{{ column.label }}</template>
               </th>
             </tr>
           </thead>
@@ -5189,33 +5604,62 @@ onUnmounted(() => {
               :data-testid="`dlr-row-${index}`"
               @click="openDlrDetail(item)"
             >
-              <td v-for="column in dlrColumns" :key="column.label">{{ column.value(item) }}</td>
+              <td v-for="column in dlrColumns" :key="column.key" :class="{ mono: column.mono }">
+                <span
+                  v-if="column.badge"
+                  class="status-badge"
+                  :class="badgeTone(column.value(item))"
+                  >{{ column.value(item) || '—' }}</span
+                >
+                <template v-else>{{ column.value(item) || '—' }}</template>
+                <small v-if="column.hint && column.hint(item)" class="row-id">{{
+                  column.hint(item)
+                }}</small>
+              </td>
             </tr>
             <tr v-if="!loading && !cursorItems.length">
-              <td :colspan="dlrColumns.length" class="empty-cell">No delivery reports.</td>
+              <td :colspan="dlrColumns.length" class="empty-cell" data-testid="dlr-empty">
+                {{
+                  dlrFiltered
+                    ? 'No delivery reports match these filters. Clear them to see the whole report.'
+                    : 'No delivery reports.'
+                }}
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p v-if="cursorItems.length" class="source-note">
-        Select a delivery report to view the full receipt.
+      <p class="source-note" data-testid="dlr-paging-note">
+        <template v-if="cursorItems.length"
+          >Select a delivery report to view the full receipt.
+        </template>
+        <template v-if="dlrOffsetMode">
+          Sorted by {{ dlrSortField }} ({{ dlrSortDir }}). A custom sort has no keyset, so the API
+          pages this by offset and returns a row count; click the column a third time to return to
+          newest-first keyset paging.
+        </template>
+        <template v-else>
+          Newest first, paged by keyset — no row count is computed, which is what keeps a
+          continuously growing receipt table cheap to page.
+        </template>
       </p>
       <footer class="cursor-pager">
+        <span class="source-note" data-testid="dlr-range">{{ dlrRangeLabel }}</span>
         <button
           class="secondary-button"
           data-testid="cursor-prev"
-          :disabled="loading || !cursorHistory.length"
-          @click="turnCursor(-1)"
+          :disabled="loading || !dlrHasPrev"
+          @click="turnDlrPage(-1)"
         >
           Previous
         </button>
         <button
           class="secondary-button"
           data-testid="cursor-next"
-          :disabled="loading || !cursorNext"
-          @click="turnCursor(1)"
+          :disabled="loading || !dlrHasNext"
+          @click="turnDlrPage(1)"
         >
-          Load more
+          {{ dlrOffsetMode ? 'Next' : 'Load more' }}
         </button>
       </footer>
     </section>

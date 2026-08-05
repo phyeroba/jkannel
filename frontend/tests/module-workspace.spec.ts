@@ -451,4 +451,103 @@ describe('module workspace behavior', () => {
       });
     });
   });
+
+  const sendMock = () =>
+    vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/smscs'))
+        return apiResponse(
+          gridPage([{ id: 'uuid-1', engine_id: 'primary-smpp', name: 'Primary SMPP' }]),
+        );
+      return apiResponse({ items: records, nextCursor: null, source: 'kamex-sqlbox' });
+    });
+
+  it('counts segments live in the single-message composer', async () => {
+    vi.stubGlobal('fetch', sendMock());
+    const wrapper = await mountWorkspace('/messages', 'Messages');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
+
+    const body = wrapper.get('[data-testid="send-text"]');
+    await body.setValue('a'.repeat(160));
+    expect(wrapper.get('[data-testid="send-segment-segments"]').text()).toBe('1');
+    expect(wrapper.get('[data-testid="send-segment-remaining"]').text()).toBe('0');
+    expect(wrapper.find('[data-testid="send-segment-multipart-warning"]').exists()).toBe(false);
+
+    await body.setValue('a'.repeat(161));
+    expect(wrapper.get('[data-testid="send-segment-segments"]').text()).toBe('2');
+    expect(wrapper.find('[data-testid="send-segment-multipart-warning"]').exists()).toBe(true);
+
+    // A single emoji is one character, two UCS-2 units, and collapses the limit.
+    await body.setValue('Thanks 🙂');
+    expect(wrapper.get('[data-testid="send-segment-characters"]').text()).toBe('8');
+    expect(wrapper.get('[data-testid="send-segment-alphabet"]').text()).toBe('UCS-2');
+    expect(wrapper.get('[data-testid="send-segment-remaining"]').text()).toBe('61');
+    expect(wrapper.get('[data-testid="send-segment-ucs2-warning"]').text()).toContain('160 to 70');
+  });
+
+  it('schedules a single message as scheduledAt + validityMinutes, rejecting the past', async () => {
+    const fetchMock = sendMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/messages', 'Messages');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
+    await wrapper.get('[data-testid="send-sender"]').setValue('JKANNEL');
+    await wrapper.get('[data-testid="send-receiver"]').setValue('+256700000001');
+    await wrapper.get('[data-testid="send-text"]').setValue('Balance due');
+    await wrapper.get('[data-testid="send-smsc"]').setValue('primary-smpp');
+
+    // Send now is the default and posts no schedule.
+    expect(wrapper.find('[data-testid="send-schedule-datetime"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="send-schedule-later"]').trigger('click');
+    // Committing to Send later with no time chosen blocks submission.
+    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain(
+      'Choose the date and time',
+    );
+    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
+
+    // A past instant is rejected in the UI, before any request is made.
+    const past = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const local = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+        date.getDate(),
+      ).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(
+        date.getMinutes(),
+      ).padStart(2, '0')}`;
+    await wrapper.get('[data-testid="send-schedule-datetime"]').setValue(local(past));
+    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain('in the past');
+    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
+
+    const future = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    await wrapper.get('[data-testid="send-schedule-datetime"]').setValue(local(future));
+    // Validity must outlast the wait, or the message expires before delivery.
+    await wrapper.get('[data-testid="send-schedule-validity"]').setValue('5');
+    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain(
+      'must be longer than',
+    );
+    await wrapper.get('[data-testid="send-schedule-validity"]').setValue('240');
+    expect(wrapper.find('[data-testid="send-schedule-error"]').exists()).toBe(false);
+    // The honest caveat about what deferral actually is.
+    expect(wrapper.get('[data-testid="send-schedule-caveat"]').text()).toContain(
+      'request to the carrier',
+    );
+
+    await wrapper.get('[data-testid="send-submit"]').trigger('click');
+    await vi.waitFor(() => {
+      const submit = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]).endsWith('/messages') &&
+          (call[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(submit).toBeTruthy();
+      expect(JSON.parse(String((submit?.[1] as RequestInit | undefined)?.body))).toEqual({
+        sender: 'JKANNEL',
+        receiver: '+256700000001',
+        text: 'Balance due',
+        smscId: 'primary-smpp',
+        scheduledAt: new Date(local(future)).toISOString(),
+        validityMinutes: 240,
+      });
+    });
+  });
 });

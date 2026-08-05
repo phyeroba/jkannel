@@ -1,7 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { ApiError, apiRequest } from '../api';
+import { RouterLink } from 'vue-router';
+import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { canAccess, session } from '../stores/session';
+import SegmentCounter from '../components/SegmentCounter.vue';
+import SendSchedule from '../components/SendSchedule.vue';
+import { describeComposerText } from '../utils/message-segments';
+import {
+  SCHEDULING_SUPPORTED,
+  emptySchedule,
+  scheduleError,
+  scheduledSendFields,
+  type ScheduleDraft,
+} from '../utils/send-scheduling';
 
 type RecordValue = Record<string, unknown>;
 
@@ -18,37 +29,234 @@ function messageFrom(reason: unknown, fallback: string) {
 function isMissing(reason: unknown) {
   return reason instanceof ApiError && (reason.status === 404 || reason.status === 501);
 }
+/** Status string → the badge tone classes the message log and workspace grids use. */
+function badgeTone(value: unknown) {
+  const status = String(value ?? '').toLowerCase();
+  if (['delivered', 'completed', 'complete', 'submitted', 'ok', 'active'].includes(status))
+    return 'good';
+  if (['pending', 'queued', 'running', 'scheduled', 'buffered', 'accepted'].includes(status))
+    return 'warn';
+  if (['failed', 'rejected', 'partial', 'error'].includes(status)) return 'bad';
+  return '';
+}
 
 const canCreate = computed(() => canAccess(session.value, 'configuration.manage'));
 
+/**
+ * BOTH grids speak the shared grid vocabulary defined by
+ * `backend/src/platform/list-query.ts` + `cursor.ts` and wired up in
+ * `backend/src/messaging-depth/bulk-send.service.ts` (`BULK_JOB_GRID`,
+ * `BULK_RECIPIENT_GRID`):
+ *
+ *   search=…             free text over the grid's search columns
+ *   sort=field / -field  whitelisted; see JOB_SORT_FIELDS / RECIPIENT_SORT_FIELDS
+ *   filter.<field>=…     whitelisted exact match
+ *   limit=…              jobs max 200, recipients max 500
+ *   paginate=cursor      keyset pagination; `cursor=<opaque>` for later pages
+ *
+ * Cursor paging is used unconditionally here rather than offset, because these
+ * are precisely the two tables that grow without bound and a deep OFFSET over
+ * them degrades into scan-and-discard. The trade the backend documents is that
+ * a keyset page does not pay for a `count(*)`, so `total` is null — the pager
+ * says "page N" rather than inventing a total it was not given.
+ *
+ * CSV export is server-side, from the same parameters, at
+ *   GET /bulk-send/export.csv
+ *   GET /bulk-send/:id/recipients/export.csv
+ */
+const JOB_PAGE_SIZES = [25, 50, 100, 200];
+const RECIPIENT_PAGE_SIZES = [25, 50, 100, 250, 500];
+
+/** `scheduled` is a queued campaign carrying a future `scheduled_at`. */
+const JOB_STATUSES = ['queued', 'scheduled', 'running', 'completed', 'partial', 'failed'];
+const RECIPIENT_STATUSES = ['pending', 'submitted', 'failed'];
+
+type SortDirection = 'asc' | 'desc';
+
+interface GridColumn {
+  key: string;
+  label: string;
+  value: (raw: RecordValue) => string;
+  /** API sort field name; omitted when the column is not sortable server-side. */
+  sort?: string;
+  mono?: boolean;
+  badge?: boolean;
+  hint?: (raw: RecordValue) => string;
+}
+
+/** `sort` query value for a column key + direction. */
+function sortParam(field: string, direction: SortDirection) {
+  return `${direction === 'desc' ? '-' : ''}${field}`;
+}
+
 // --- Jobs grid --------------------------------------------------------------
+const jobColumns: GridColumn[] = [
+  {
+    key: 'name',
+    label: 'Campaign',
+    sort: 'name',
+    value: (raw) => text(raw.name, ''),
+    hint: (raw) => text(raw.detail, ''),
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    sort: 'status',
+    value: (raw) => text(raw.status, ''),
+    badge: true,
+  },
+  { key: 'total', label: 'Total', sort: 'total', value: (raw) => String(num(raw.total)) },
+  {
+    key: 'submitted',
+    label: 'Submitted',
+    sort: 'submitted',
+    value: (raw) => String(num(raw.submitted)),
+  },
+  { key: 'failed', label: 'Failed', sort: 'failed', value: (raw) => String(num(raw.failed)) },
+  {
+    key: 'sender',
+    label: 'Sender',
+    sort: 'sender',
+    value: (raw) => text(raw.sender, ''),
+    mono: true,
+  },
+  {
+    key: 'smscId',
+    label: 'SMSC',
+    sort: 'smscId',
+    value: (raw) => text(raw.smsc_id ?? raw.smscId, 'routed'),
+    mono: true,
+  },
+  {
+    key: 'scheduledAt',
+    label: 'Scheduled for',
+    sort: 'scheduledAt',
+    value: (raw) => text(raw.scheduled_at ?? raw.scheduledAt, ''),
+    hint: (raw) => {
+      const validity = raw.validity_minutes ?? raw.validityMinutes;
+      return validity === null || validity === undefined || validity === ''
+        ? ''
+        : `valid ${validity} min`;
+    },
+  },
+  {
+    key: 'createdAt',
+    label: 'Created',
+    sort: 'createdAt',
+    value: (raw) => text(raw.created_at ?? raw.createdAt, ''),
+  },
+];
+
 const jobsState = ref<'loading' | 'ok' | 'error'>('loading');
 const jobsMissing = ref(false);
 const jobsError = ref('');
 const jobs = ref<RecordValue[]>([]);
-const jobsTotal = ref(0);
+const jobsLimit = ref(50);
+const jobsCursor = ref('');
+const jobsNextCursor = ref('');
+const jobsCursorHistory = ref<string[]>([]);
+const jobsSearch = ref('');
+const jobsStatusFilter = ref('');
+const jobsSortField = ref('createdAt');
+const jobsSortDir = ref<SortDirection>('desc');
+const jobsExporting = ref(false);
 const notice = ref('');
+/** The job the last successful create produced, so the notice can link to it. */
+const createdJobId = ref('');
 const busy = ref(false);
+
+const jobsPage = computed(() => jobsCursorHistory.value.length + 1);
+const jobsFiltered = computed(() => Boolean(jobsSearch.value.trim() || jobsStatusFilter.value));
+
+/**
+ * ONE builder for the grid and the export, so both ask the same question.
+ *
+ * `forExport` drops the paging keys entirely. That matters: `exportJobsCsv`
+ * defaults `limit` to the grid's `maxLimit` only when the caller sends none, so
+ * passing the screen's page size would silently cap the file at 50 rows.
+ */
+function jobsQuery(options: { forExport?: boolean } = {}) {
+  const params = new URLSearchParams();
+  if (jobsSearch.value.trim()) params.set('search', jobsSearch.value.trim());
+  if (jobsStatusFilter.value) params.set('filter.status', jobsStatusFilter.value);
+  params.set('sort', sortParam(jobsSortField.value, jobsSortDir.value));
+  if (options.forExport) return params;
+  params.set('limit', String(jobsLimit.value));
+  params.set('paginate', 'cursor');
+  if (jobsCursor.value) params.set('cursor', jobsCursor.value);
+  return params;
+}
 
 async function loadJobs() {
   jobsState.value = 'loading';
   jobsMissing.value = false;
   jobsError.value = '';
   try {
-    const data = await apiRequest<{ items?: RecordValue[]; total?: number }>(
-      '/bulk-send?limit=50&offset=0',
+    const data = await apiRequest<{ items?: RecordValue[]; nextCursor?: string | null }>(
+      `/bulk-send?${jobsQuery().toString()}`,
     );
     jobs.value = Array.isArray(data.items)
       ? data.items.filter((item): item is RecordValue => Boolean(item) && typeof item === 'object')
       : [];
-    jobsTotal.value = num(data.total);
+    jobsNextCursor.value = data.nextCursor ?? '';
     jobsState.value = 'ok';
   } catch (reason) {
     jobs.value = [];
-    jobsTotal.value = 0;
+    jobsNextCursor.value = '';
     jobsMissing.value = isMissing(reason);
+    // A 400 here is a rejected sort/filter and the API names the field.
     jobsError.value = messageFrom(reason, 'Bulk send jobs could not be loaded.');
     jobsState.value = 'error';
+  }
+}
+
+/** Any change to the question invalidates the keyset, so paging restarts. */
+function applyJobFilters() {
+  jobsCursor.value = '';
+  jobsCursorHistory.value = [];
+  void loadJobs();
+}
+function sortJobsBy(field: string) {
+  if (jobsSortField.value === field)
+    jobsSortDir.value = jobsSortDir.value === 'asc' ? 'desc' : 'asc';
+  else {
+    jobsSortField.value = field;
+    jobsSortDir.value = 'asc';
+  }
+  applyJobFilters();
+}
+function turnJobsPage(direction: number) {
+  if (direction > 0) {
+    if (!jobsNextCursor.value) return;
+    jobsCursorHistory.value = [...jobsCursorHistory.value, jobsCursor.value];
+    jobsCursor.value = jobsNextCursor.value;
+  } else {
+    if (!jobsCursorHistory.value.length) return;
+    const history = [...jobsCursorHistory.value];
+    jobsCursor.value = history.pop() ?? '';
+    jobsCursorHistory.value = history;
+  }
+  void loadJobs();
+}
+
+async function exportJobs() {
+  jobsExporting.value = true;
+  jobsError.value = '';
+  notice.value = '';
+  try {
+    // No paging keys: the export is the whole filtered set, not the page in view.
+    const exported = await apiDownloadFile(
+      `/bulk-send/export.csv?${jobsQuery({ forExport: true }).toString()}`,
+    );
+    saveDownloadedFile(exported.blob, exported.filename);
+    const rows = exported.headers.get('x-jkannel-export-row-count') ?? 'the filtered';
+    notice.value = jobsFiltered.value
+      ? `Exported ${rows} bulk send jobs matching the active filters.`
+      : `Exported ${rows} bulk send jobs.`;
+  } catch (reason) {
+    jobsError.value = messageFrom(reason, 'The jobs export failed.');
+  } finally {
+    jobsExporting.value = false;
   }
 }
 
@@ -83,6 +291,8 @@ const campaignSmscId = ref('');
 const campaignMessage = ref('');
 const recipientsRaw = ref('');
 const formError = ref('');
+const sendLater = ref(false);
+const schedule = ref<ScheduleDraft>(emptySchedule());
 
 /** Splits pasted recipients on newlines, commas, semicolons, or whitespace. */
 const parsedRecipients = computed(() =>
@@ -92,13 +302,18 @@ const parsedRecipients = computed(() =>
     .filter(Boolean),
 );
 const recipientCount = computed(() => parsedRecipients.value.length);
+/** The number the operator is actually billed for: segments × recipients. */
+const campaignSegments = computed(() => describeComposerText(campaignMessage.value).segments);
+const campaignCost = computed(() => campaignSegments.value * recipientCount.value);
+const scheduleInvalid = computed(() => (sendLater.value ? scheduleError(schedule.value) : ''));
 const canSubmit = computed(
   () =>
     !busy.value &&
     Boolean(campaignName.value.trim()) &&
     Boolean(campaignSmscId.value) &&
     Boolean(campaignMessage.value.trim()) &&
-    recipientCount.value > 0,
+    recipientCount.value > 0 &&
+    !scheduleInvalid.value,
 );
 
 async function submitCampaign() {
@@ -106,22 +321,36 @@ async function submitCampaign() {
   busy.value = true;
   formError.value = '';
   notice.value = '';
+  createdJobId.value = '';
+  const scheduled = sendLater.value && SCHEDULING_SUPPORTED;
   try {
+    const body: Record<string, unknown> = {
+      name: campaignName.value.trim(),
+      smscId: campaignSmscId.value,
+      message: campaignMessage.value,
+      recipients: parsedRecipients.value,
+    };
+    if (scheduled) Object.assign(body, scheduledSendFields(schedule.value));
     const job = await apiRequest<RecordValue>('/bulk-send', {
       method: 'POST',
-      body: JSON.stringify({
-        name: campaignName.value.trim(),
-        smscId: campaignSmscId.value,
-        message: campaignMessage.value,
-        recipients: parsedRecipients.value,
-      }),
+      body: JSON.stringify(body),
     });
-    notice.value = `Bulk send job “${text(job.name, campaignName.value)}” queued for ${recipientCount.value} recipients.`;
+    createdJobId.value = text(job.id, '');
+    const when = text(job.scheduled_at ?? job.scheduledAt, '');
+    notice.value =
+      `Bulk send job “${text(job.name, campaignName.value)}” ${scheduled ? 'scheduled' : 'queued'}: ` +
+      `${recipientCount.value} recipient(s) × ${campaignSegments.value} segment(s) = ${campaignCost.value} SMS.` +
+      (scheduled && when !== '—' ? ` Requested delivery ${when}.` : '');
     campaignName.value = '';
     campaignMessage.value = '';
     recipientsRaw.value = '';
-    await loadJobs();
+    sendLater.value = false;
+    schedule.value = emptySchedule();
+    applyJobFilters();
+    if (createdJobId.value) await openJob({ id: createdJobId.value });
   } catch (reason) {
+    // The API's 400 is surfaced verbatim: it names the field it rejected, and
+    // for a schedule it says exactly why (past instant, validity too short).
     formError.value = messageFrom(reason, 'The bulk send job could not be created.');
   } finally {
     busy.value = false;
@@ -129,11 +358,59 @@ async function submitCampaign() {
 }
 
 // --- Job drill-down ---------------------------------------------------------
+const recipientColumns: GridColumn[] = [
+  {
+    key: 'receiver',
+    label: 'Receiver',
+    sort: 'receiver',
+    value: (raw) => text(raw.receiver, ''),
+    mono: true,
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    sort: 'status',
+    value: (raw) => text(raw.status, ''),
+    badge: true,
+  },
+  {
+    key: 'foreignId',
+    label: 'Foreign ID',
+    sort: 'foreignId',
+    value: (raw) => text(raw.foreign_id ?? raw.foreignId, ''),
+    mono: true,
+  },
+  // `error` is a search column but not a sort column on BULK_RECIPIENT_GRID.
+  { key: 'error', label: 'Error', value: (raw) => text(raw.error, '') },
+  {
+    key: 'createdAt',
+    label: 'Created',
+    sort: 'createdAt',
+    value: (raw) => text(raw.created_at ?? raw.createdAt, ''),
+  },
+];
+
 const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detailError = ref('');
+const detailNotice = ref('');
 const jobDetail = ref<RecordValue | null>(null);
+const currentJobId = ref('');
 const recipients = ref<RecordValue[]>([]);
+const recipientsLimit = ref(50);
+const recipientsCursor = ref('');
+const recipientsNextCursor = ref('');
+const recipientsCursorHistory = ref<string[]>([]);
+const recipientsSearch = ref('');
+const recipientsStatusFilter = ref('');
+const recipientsSortField = ref('createdAt');
+const recipientsSortDir = ref<SortDirection>('asc');
+const recipientsExporting = ref(false);
+
+const recipientsPage = computed(() => recipientsCursorHistory.value.length + 1);
+const recipientsFiltered = computed(() =>
+  Boolean(recipientsSearch.value.trim() || recipientsStatusFilter.value),
+);
 
 const recipientCounts = computed<Array<{ status: string; count: number }>>(() => {
   const counts = jobDetail.value?.recipientCounts;
@@ -144,21 +421,48 @@ const recipientCounts = computed<Array<{ status: string; count: number }>>(() =>
   }));
 });
 
+/** Same shape, and the same `forExport` reasoning, as {@link jobsQuery}. */
+function recipientsQuery(options: { forExport?: boolean } = {}) {
+  const params = new URLSearchParams();
+  if (recipientsSearch.value.trim()) params.set('search', recipientsSearch.value.trim());
+  if (recipientsStatusFilter.value) params.set('filter.status', recipientsStatusFilter.value);
+  params.set('sort', sortParam(recipientsSortField.value, recipientsSortDir.value));
+  if (options.forExport) return params;
+  params.set('limit', String(recipientsLimit.value));
+  params.set('paginate', 'cursor');
+  if (recipientsCursor.value) params.set('cursor', recipientsCursor.value);
+  return params;
+}
+
+async function loadRecipients() {
+  if (!currentJobId.value) return;
+  const page = await apiRequest<{ items?: RecordValue[]; nextCursor?: string | null }>(
+    `/bulk-send/${currentJobId.value}/recipients?${recipientsQuery().toString()}`,
+  );
+  recipients.value = Array.isArray(page.items) ? page.items : [];
+  recipientsNextCursor.value = page.nextCursor ?? '';
+}
+
 async function openJob(job: RecordValue) {
   const id = text(job.id, '');
   if (!id || id === '—') return;
   detailOpen.value = true;
   detailLoading.value = true;
   detailError.value = '';
+  detailNotice.value = '';
   jobDetail.value = null;
+  currentJobId.value = id;
   recipients.value = [];
+  recipientsCursor.value = '';
+  recipientsCursorHistory.value = [];
+  recipientsSearch.value = '';
+  recipientsStatusFilter.value = '';
   try {
-    const [detail, recipientPage] = await Promise.all([
+    const [detail] = await Promise.all([
       apiRequest<RecordValue>(`/bulk-send/${id}`),
-      apiRequest<{ items?: RecordValue[] }>(`/bulk-send/${id}/recipients?limit=100&offset=0`),
+      loadRecipients(),
     ]);
     jobDetail.value = detail;
-    recipients.value = Array.isArray(recipientPage.items) ? recipientPage.items : [];
   } catch (reason) {
     detailError.value = messageFrom(reason, 'The job detail could not be loaded.');
   } finally {
@@ -168,7 +472,73 @@ async function openJob(job: RecordValue) {
 function closeJob() {
   detailOpen.value = false;
   jobDetail.value = null;
+  currentJobId.value = '';
   recipients.value = [];
+}
+
+async function reloadRecipients() {
+  detailError.value = '';
+  detailLoading.value = true;
+  try {
+    await loadRecipients();
+  } catch (reason) {
+    detailError.value = messageFrom(reason, 'The recipients could not be loaded.');
+  } finally {
+    detailLoading.value = false;
+  }
+}
+function applyRecipientFilters() {
+  recipientsCursor.value = '';
+  recipientsCursorHistory.value = [];
+  void reloadRecipients();
+}
+function sortRecipientsBy(field: string) {
+  if (recipientsSortField.value === field)
+    recipientsSortDir.value = recipientsSortDir.value === 'asc' ? 'desc' : 'asc';
+  else {
+    recipientsSortField.value = field;
+    recipientsSortDir.value = 'asc';
+  }
+  applyRecipientFilters();
+}
+function turnRecipientsPage(direction: number) {
+  if (direction > 0) {
+    if (!recipientsNextCursor.value) return;
+    recipientsCursorHistory.value = [...recipientsCursorHistory.value, recipientsCursor.value];
+    recipientsCursor.value = recipientsNextCursor.value;
+  } else {
+    if (!recipientsCursorHistory.value.length) return;
+    const history = [...recipientsCursorHistory.value];
+    recipientsCursor.value = history.pop() ?? '';
+    recipientsCursorHistory.value = history;
+  }
+  void reloadRecipients();
+}
+
+async function exportRecipients() {
+  if (!currentJobId.value) return;
+  recipientsExporting.value = true;
+  detailError.value = '';
+  detailNotice.value = '';
+  try {
+    const exported = await apiDownloadFile(
+      `/bulk-send/${currentJobId.value}/recipients/export.csv?${recipientsQuery({ forExport: true }).toString()}`,
+    );
+    saveDownloadedFile(exported.blob, exported.filename);
+    const rows = exported.headers.get('x-jkannel-export-row-count') ?? 'the filtered';
+    detailNotice.value = recipientsFiltered.value
+      ? `Exported ${rows} recipients matching the active filters.`
+      : `Exported ${rows} recipients.`;
+  } catch (reason) {
+    detailError.value = messageFrom(reason, 'The recipients export failed.');
+  } finally {
+    recipientsExporting.value = false;
+  }
+}
+
+function ariaSort(active: boolean, direction: SortDirection) {
+  if (!active) return 'none';
+  return direction === 'asc' ? 'ascending' : 'descending';
 }
 
 onMounted(() => {
@@ -178,7 +548,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div data-testid="bulk-send-view">
+  <div class="bulk-send-page" data-testid="bulk-send-view">
     <div class="dashboard-actions">
       <button
         class="secondary-button"
@@ -190,7 +560,35 @@ onMounted(() => {
       </button>
     </div>
 
-    <p v-if="notice" class="notice" role="status" data-testid="bulk-send-notice">{{ notice }}</p>
+    <!--
+      "I queued a bulk send and it never appeared in the queue." The traffic went
+      spool → engine → history in under a second, and the Live Queue spool only
+      shows the PENDING tier, so a healthy system shows it empty. Say where the
+      traffic actually lands, and link there, instead of leaving the operator to
+      go looking — they found it in Delivery Reports eventually, by themselves.
+    -->
+    <section v-if="notice" class="panel notice-panel" data-testid="bulk-send-notice-panel">
+      <p class="notice" role="status" data-testid="bulk-send-notice">{{ notice }}</p>
+      <p class="form-hint">
+        Dispatched traffic does <strong>not</strong> sit in the Live Queue spool. A healthy engine
+        drains the spool in under a second, so it will usually look empty — that is normal, not a
+        lost campaign. Follow the campaign here:
+      </p>
+      <nav class="followup-links" aria-label="Where to follow this campaign">
+        <a
+          v-if="createdJobId"
+          href="#bulk-detail-panel"
+          data-testid="followup-job"
+          @click.prevent="openJob({ id: createdJobId })"
+          >This job’s recipients</a
+        >
+        <RouterLink to="/messages" data-testid="followup-messages">Message log</RouterLink>
+        <RouterLink to="/delivery-reports" data-testid="followup-delivery"
+          >Delivery Reports</RouterLink
+        >
+        <RouterLink to="/live-queue" data-testid="followup-queue">Live Queue</RouterLink>
+      </nav>
+    </section>
 
     <!-- Create campaign ---------------------------------------------------- -->
     <section v-if="canCreate" class="panel composer" aria-label="Create bulk send campaign">
@@ -228,6 +626,7 @@ onMounted(() => {
           placeholder="Message body sent to every recipient"
         ></textarea>
       </label>
+      <SegmentCounter :text="campaignMessage" testid="bulk-segment" />
       <label>
         Recipients
         <textarea
@@ -239,7 +638,21 @@ onMounted(() => {
       </label>
       <p class="form-hint" data-testid="bulk-recipient-count">
         {{ recipientCount }} recipient(s) parsed.
+        <template v-if="recipientCount">
+          This campaign costs
+          <strong data-testid="bulk-total-cost">{{ campaignCost }}</strong>
+          SMS ({{ recipientCount }} × {{ campaignSegments }} segment(s)).
+        </template>
       </p>
+
+      <h3>When to send</h3>
+      <SendSchedule
+        v-model:later="sendLater"
+        v-model:draft="schedule"
+        testid="bulk-schedule"
+        :busy="busy"
+      />
+
       <p v-if="formError" class="form-error" role="alert" data-testid="bulk-form-error">
         {{ formError }}
       </p>
@@ -250,21 +663,69 @@ onMounted(() => {
           :disabled="!canSubmit"
           @click="submitCampaign"
         >
-          {{ busy ? 'Queuing…' : 'Queue campaign' }}
+          {{ busy ? 'Queuing…' : sendLater ? 'Schedule campaign' : 'Queue campaign' }}
         </button>
       </div>
     </section>
 
     <!-- Jobs grid ---------------------------------------------------------- -->
-    <section class="panel">
+    <section class="panel" data-testid="bulk-jobs-panel">
       <header class="panel-header">
         <div>
           <h2>Bulk send jobs</h2>
-          <p aria-live="polite">
-            {{ jobsState === 'loading' ? 'Loading jobs…' : `${jobs.length} of ${jobsTotal} jobs` }}
+          <p aria-live="polite" data-testid="bulk-jobs-range">
+            {{
+              jobsState === 'loading' ? 'Loading jobs…' : `${jobs.length} job(s) · page ${jobsPage}`
+            }}
           </p>
         </div>
       </header>
+
+      <div class="grid-toolbar">
+        <label class="filter-select filter-search">
+          <span>Search</span>
+          <input
+            v-model="jobsSearch"
+            type="search"
+            data-testid="bulk-jobs-search"
+            placeholder="Campaign, SMSC, sender, or detail"
+            @change="applyJobFilters"
+            @keyup.enter="applyJobFilters"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Status</span>
+          <select
+            v-model="jobsStatusFilter"
+            data-testid="bulk-jobs-status"
+            @change="applyJobFilters"
+          >
+            <option value="">All statuses</option>
+            <option v-for="status in JOB_STATUSES" :key="status" :value="status">
+              {{ status }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Per page</span>
+          <select
+            v-model.number="jobsLimit"
+            data-testid="bulk-jobs-limit"
+            @change="applyJobFilters"
+          >
+            <option v-for="size in JOB_PAGE_SIZES" :key="size" :value="size">{{ size }}</option>
+          </select>
+        </label>
+        <button
+          class="secondary-button"
+          data-testid="bulk-jobs-export"
+          :disabled="jobsExporting || jobsState === 'error'"
+          @click="exportJobs"
+        >
+          {{ jobsExporting ? 'Exporting…' : 'Export CSV' }}
+        </button>
+      </div>
+
       <p
         v-if="jobsState === 'error'"
         class="chart-empty"
@@ -277,12 +738,28 @@ onMounted(() => {
         <table>
           <thead>
             <tr>
-              <th scope="col">Campaign</th>
-              <th scope="col">Status</th>
-              <th scope="col">Total</th>
-              <th scope="col">Submitted</th>
-              <th scope="col">Failed</th>
-              <th scope="col">Created</th>
+              <th
+                v-for="column in jobColumns"
+                :key="column.key"
+                scope="col"
+                :aria-sort="
+                  column.sort ? ariaSort(jobsSortField === column.sort, jobsSortDir) : undefined
+                "
+              >
+                <button
+                  v-if="column.sort"
+                  type="button"
+                  class="column-sort"
+                  :data-testid="`bulk-jobs-sort-${column.key}`"
+                  @click="sortJobsBy(column.sort)"
+                >
+                  {{ column.label }}
+                  <span v-if="jobsSortField === column.sort">{{
+                    jobsSortDir === 'asc' ? '▲' : '▼'
+                  }}</span>
+                </button>
+                <template v-else>{{ column.label }}</template>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -293,65 +770,124 @@ onMounted(() => {
               :data-testid="`bulk-job-${text(job.id)}`"
               @click="openJob(job)"
             >
-              <td>
-                <strong>{{ text(job.name) }}</strong>
+              <td v-for="column in jobColumns" :key="column.key" :class="{ mono: column.mono }">
+                <span
+                  v-if="column.badge"
+                  class="status-badge"
+                  :class="badgeTone(column.value(job))"
+                >
+                  {{ column.value(job) || '—' }}
+                </span>
+                <strong v-else-if="column.key === 'name'">{{ column.value(job) || '—' }}</strong>
+                <template v-else>{{ column.value(job) || '—' }}</template>
+                <small v-if="column.hint && column.hint(job)" class="row-id">{{
+                  column.hint(job)
+                }}</small>
               </td>
-              <td>
-                <span class="status-badge">{{ text(job.status) }}</span>
-              </td>
-              <td>{{ text(job.total, '0') }}</td>
-              <td>{{ text(job.submitted, '0') }}</td>
-              <td>{{ text(job.failed, '0') }}</td>
-              <td>{{ text(job.created_at ?? job.createdAt) }}</td>
             </tr>
             <tr v-if="jobsState === 'ok' && !jobs.length">
-              <td colspan="6" class="empty-cell" data-testid="bulk-jobs-empty">
-                No bulk send jobs yet.
+              <td :colspan="jobColumns.length" class="empty-cell" data-testid="bulk-jobs-empty">
+                {{
+                  jobsFiltered ? 'No bulk send jobs match these filters.' : 'No bulk send jobs yet.'
+                }}
               </td>
             </tr>
             <tr v-if="jobsState === 'loading'">
-              <td colspan="6" class="empty-cell">Loading jobs…</td>
+              <td :colspan="jobColumns.length" class="empty-cell">Loading jobs…</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p v-if="jobsState === 'ok' && jobs.length" class="source-note">
-        Select a job to view per-recipient status.
+
+      <footer class="pager">
+        <span data-testid="bulk-jobs-pager-label">
+          Page {{ jobsPage }} · {{ jobs.length }} row(s)
+        </span>
+        <div class="pager-buttons">
+          <button
+            class="secondary-button"
+            data-testid="bulk-jobs-prev"
+            :disabled="!jobsCursorHistory.length || jobsState === 'loading'"
+            @click="turnJobsPage(-1)"
+          >
+            Previous
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="bulk-jobs-next"
+            :disabled="!jobsNextCursor || jobsState === 'loading'"
+            @click="turnJobsPage(1)"
+          >
+            Next
+          </button>
+        </div>
+      </footer>
+      <p class="source-note">
+        Select a job to view per-recipient status. Search, status filter, sort, page size and the
+        CSV export are all applied by the API. Paging is keyset (cursor) rather than offset, which
+        is what keeps a campaign list that grows without bound from degrading — the cost is that a
+        keyset page carries no total row count, so this pager counts pages, not rows.
       </p>
     </section>
 
     <!-- Job drill-down ----------------------------------------------------- -->
     <section
       v-if="detailOpen"
+      id="bulk-detail-panel"
       class="panel detail-panel"
       data-testid="bulk-detail-panel"
       aria-label="Bulk send job detail"
     >
       <header class="panel-header">
         <div>
-          <h2>Job detail</h2>
+          <h2>Job details</h2>
         </div>
         <button class="secondary-button" data-testid="bulk-detail-close" @click="closeJob">
           Close
         </button>
       </header>
-      <p v-if="detailLoading" class="chart-empty" data-testid="bulk-detail-loading">Loading…</p>
-      <p v-else-if="detailError" class="chart-empty" role="alert" data-testid="bulk-detail-error">
+      <p v-if="detailError" class="form-error" role="alert" data-testid="bulk-detail-error">
         {{ detailError }}
+      </p>
+      <p v-if="detailNotice" class="notice" role="status" data-testid="bulk-detail-notice">
+        {{ detailNotice }}
+      </p>
+      <p v-if="detailLoading && !jobDetail" class="chart-empty" data-testid="bulk-detail-loading">
+        Loading…
       </p>
       <template v-else-if="jobDetail">
         <dl class="detail-grid">
           <dt>Campaign</dt>
           <dd>{{ text(jobDetail.name) }}</dd>
           <dt>Status</dt>
-          <dd data-testid="bulk-detail-status">{{ text(jobDetail.status) }}</dd>
+          <dd data-testid="bulk-detail-status">
+            <span class="status-badge" :class="badgeTone(jobDetail.status)">{{
+              text(jobDetail.status)
+            }}</span>
+          </dd>
           <dt>SMSC</dt>
-          <dd class="mono">{{ text(jobDetail.smsc_id ?? jobDetail.smscId) }}</dd>
+          <dd class="mono">{{ text(jobDetail.smsc_id ?? jobDetail.smscId, 'routed') }}</dd>
           <dt>Total</dt>
           <dd>{{ text(jobDetail.total, '0') }}</dd>
+          <dt>Scheduled for</dt>
+          <dd data-testid="bulk-detail-scheduled">
+            {{ text(jobDetail.scheduled_at ?? jobDetail.scheduledAt, 'immediate') }}
+          </dd>
+          <dt>Validity</dt>
+          <dd>
+            {{ text(jobDetail.validity_minutes ?? jobDetail.validityMinutes, 'carrier default') }}
+          </dd>
           <dt>Detail</dt>
           <dd>{{ text(jobDetail.detail) }}</dd>
         </dl>
+
+        <p class="form-hint">
+          Submitted recipients leave the spool immediately. Trace them in the
+          <RouterLink to="/messages">message log</RouterLink> or
+          <RouterLink to="/delivery-reports">Delivery Reports</RouterLink> — the Live Queue spool
+          shows only messages still waiting to be handed to a bind.
+        </p>
+
         <h3>Status counts</h3>
         <div class="summary-strip" data-testid="bulk-status-counts">
           <div v-for="entry in recipientCounts" :key="entry.status" class="metric">
@@ -363,15 +899,83 @@ onMounted(() => {
             <small>no recipients</small>
           </div>
         </div>
+
         <h3>Recipients</h3>
+        <div class="grid-toolbar">
+          <label class="filter-select filter-search">
+            <span>Search</span>
+            <input
+              v-model="recipientsSearch"
+              type="search"
+              data-testid="bulk-recipients-search"
+              placeholder="Receiver, foreign ID, or error"
+              @change="applyRecipientFilters"
+              @keyup.enter="applyRecipientFilters"
+            />
+          </label>
+          <label class="filter-select">
+            <span>Status</span>
+            <select
+              v-model="recipientsStatusFilter"
+              data-testid="bulk-recipients-status"
+              @change="applyRecipientFilters"
+            >
+              <option value="">All statuses</option>
+              <option v-for="status in RECIPIENT_STATUSES" :key="status" :value="status">
+                {{ status }}
+              </option>
+            </select>
+          </label>
+          <label class="filter-select">
+            <span>Per page</span>
+            <select
+              v-model.number="recipientsLimit"
+              data-testid="bulk-recipients-limit"
+              @change="applyRecipientFilters"
+            >
+              <option v-for="size in RECIPIENT_PAGE_SIZES" :key="size" :value="size">
+                {{ size }}
+              </option>
+            </select>
+          </label>
+          <button
+            class="secondary-button"
+            data-testid="bulk-recipients-export"
+            :disabled="recipientsExporting"
+            @click="exportRecipients"
+          >
+            {{ recipientsExporting ? 'Exporting…' : 'Export CSV' }}
+          </button>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th scope="col">Receiver</th>
-                <th scope="col">Status</th>
-                <th scope="col">Foreign ID</th>
-                <th scope="col">Error</th>
+                <th
+                  v-for="column in recipientColumns"
+                  :key="column.key"
+                  scope="col"
+                  :aria-sort="
+                    column.sort
+                      ? ariaSort(recipientsSortField === column.sort, recipientsSortDir)
+                      : undefined
+                  "
+                >
+                  <button
+                    v-if="column.sort"
+                    type="button"
+                    class="column-sort"
+                    :data-testid="`bulk-recipients-sort-${column.key}`"
+                    @click="sortRecipientsBy(column.sort)"
+                  >
+                    {{ column.label }}
+                    <span v-if="recipientsSortField === column.sort">{{
+                      recipientsSortDir === 'asc' ? '▲' : '▼'
+                    }}</span>
+                  </button>
+                  <template v-else>{{ column.label }}</template>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -380,20 +984,88 @@ onMounted(() => {
                 :key="text(recipient.id, String(index))"
                 :data-testid="`bulk-recipient-${index}`"
               >
-                <td class="mono">{{ text(recipient.receiver) }}</td>
-                <td>{{ text(recipient.status) }}</td>
-                <td class="mono">{{ text(recipient.foreign_id ?? recipient.foreignId) }}</td>
-                <td>{{ text(recipient.error) }}</td>
+                <td
+                  v-for="column in recipientColumns"
+                  :key="column.key"
+                  :class="{ mono: column.mono }"
+                >
+                  <span
+                    v-if="column.badge"
+                    class="status-badge"
+                    :class="badgeTone(column.value(recipient))"
+                  >
+                    {{ column.value(recipient) || '—' }}
+                  </span>
+                  <template v-else>{{ column.value(recipient) || '—' }}</template>
+                </td>
               </tr>
               <tr v-if="!recipients.length">
-                <td colspan="4" class="empty-cell">No recipients recorded for this job.</td>
+                <td :colspan="recipientColumns.length" class="empty-cell">
+                  {{
+                    recipientsFiltered
+                      ? 'No recipients match these filters.'
+                      : 'No recipients recorded for this job.'
+                  }}
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <footer class="pager">
+          <span data-testid="bulk-recipients-range">
+            Page {{ recipientsPage }} · {{ recipients.length }} row(s)
+          </span>
+          <div class="pager-buttons">
+            <button
+              class="secondary-button"
+              data-testid="bulk-recipients-prev"
+              :disabled="!recipientsCursorHistory.length || detailLoading"
+              @click="turnRecipientsPage(-1)"
+            >
+              Previous
+            </button>
+            <button
+              class="secondary-button"
+              data-testid="bulk-recipients-next"
+              :disabled="!recipientsNextCursor || detailLoading"
+              @click="turnRecipientsPage(1)"
+            >
+              Next
+            </button>
+          </div>
+        </footer>
       </template>
     </section>
   </div>
 </template>
 
 <style src="./workspace-extras.css"></style>
+
+<style scoped>
+/*
+  Every child here was a bare `.panel` (padding, no margin), so the campaign
+  grid ran straight into the jobs panel and the jobs panel into the job-details
+  panel with no seam at all. Same defect, and the same fix, as the Reports page:
+  one page-level grid supplies the 16px gap for every seam.
+*/
+.bulk-send-page {
+  display: grid;
+  /* minmax(0,1fr) rather than the implicit `auto`: an auto column is sized by
+     its widest content, which a wide recipients table would push past the
+     viewport instead of scrolling inside .table-wrap. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+/* Already spaced by its own negative top margin; its bottom margin would double
+   up against the grid gap. */
+.bulk-send-page > .dashboard-actions {
+  margin-bottom: 0;
+}
+.bulk-send-page > .detail-panel {
+  margin-bottom: 0;
+}
+.notice-panel .notice {
+  margin-top: 0;
+}
+</style>
