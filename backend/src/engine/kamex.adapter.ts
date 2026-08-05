@@ -12,6 +12,7 @@ import {
   UnsupportedCapabilityError,
 } from './engine-adapter.types';
 import { KamexSqlboxRepository } from './kamex-sqlbox.repository';
+import { classifyOutage, KamexRequestGate, OutageKind } from './kamex-request-gate';
 
 /** A single bearerbox SMSC connection (bind) as reported by /status.json. */
 export interface EngineBindSnapshot {
@@ -98,6 +99,13 @@ const unknownTotals = (): EngineQueueTotals => ({
 @Injectable()
 export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
   constructor(private readonly sqlbox?: KamexSqlboxRepository) {}
+  /**
+   * One gate for every authenticated call this adapter makes. Shared on
+   * purpose: the engine's auth-failure penalty is process-global on its side,
+   * so ours has to be process-global on this side or a single busy console tab
+   * defeats it. See kamex-request-gate.ts.
+   */
+  private readonly gate = new KamexRequestGate();
   private readonly identity: EngineIdentity = {
     instanceId: 'kamex-local',
     family: 'kamex',
@@ -172,14 +180,23 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
     ];
     return createManifest(this.identity, capabilities);
   }
+  /**
+   * Liveness only, and deliberately NOT gated.
+   *
+   * `/health` carries no password, so it cannot contribute to the engine's
+   * authentication-failure sleep counter and there is nothing to protect it
+   * from. Keeping it ungated is also what makes {@link classifyOutage} work:
+   * it stays available as the control probe when the authenticated endpoints
+   * are failing, which is how we tell a dead engine from a bad credential.
+   */
   async health(): Promise<CoreHealth> {
     const observedAt = new Date().toISOString();
     const base = process.env.KAMEX_BASE_URL;
     if (!base)
       return { adapter: 'healthy', transport: 'unreachable', engine: 'unknown', observedAt };
     try {
-      const started = Date.now();
       const response = await fetch(new URL('/health', base), { signal: AbortSignal.timeout(3000) });
+      this.lastHealthReachable = true;
       return {
         adapter: 'healthy',
         transport: 'reachable',
@@ -187,8 +204,67 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
         observedAt,
       };
     } catch {
+      this.lastHealthReachable = false;
       return { adapter: 'degraded', transport: 'unreachable', engine: 'unknown', observedAt };
     }
+  }
+
+  /**
+   * Did the last unauthenticated `/health` probe reach the engine? Null until
+   * one has been attempted. Feeds {@link classifyOutage} so an authenticated
+   * failure can be attributed to the credential rather than to reachability.
+   */
+  private lastHealthReachable: boolean | null = null;
+
+  /**
+   * Probes `/health` purely to classify why an authenticated call failed.
+   *
+   * Runs only on the failure path, so the ordinary case costs nothing, and it
+   * is safe to add there precisely because it is unauthenticated — it cannot
+   * make the sleep counter the caller just tripped any worse.
+   */
+  private async classifyFailure(): Promise<OutageKind> {
+    const base = process.env.KAMEX_BASE_URL;
+    if (!base) return 'unknown';
+    try {
+      // Shorter than the authenticated timeout on purpose: this runs AFTER a
+      // call has already failed, so a full-length second timeout would double
+      // the latency of every failure. /health is same-network and either
+      // answers immediately or is not there.
+      await fetch(new URL('/health', base), { signal: AbortSignal.timeout(1500) });
+      // ANY HTTP response counts as reachable, including a non-2xx: 503 is
+      // bearerbox's healthy-but-no-bind answer, and what is being established
+      // here is that the process is alive and serving, not that it is well.
+      this.lastHealthReachable = true;
+    } catch {
+      this.lastHealthReachable = false;
+    }
+    return classifyOutage(this.lastHealthReachable);
+  }
+
+  /** Gate state, for health reporting and the poller's alerting. */
+  gateState() {
+    return this.gate.state();
+  }
+
+  /**
+   * Appends the likely cause to a failure detail when we can tell.
+   *
+   * "SMS engine unreachable" for a wrong password sends an operator to debug
+   * the engine, which is both the wrong system and the one actively being
+   * damaged by the retries. Naming the variable is the whole difference
+   * between a five-minute fix and an outage investigation.
+   */
+  private withCause(detail: string): string {
+    const kind = classifyOutage(this.lastHealthReachable);
+    if (kind !== 'credentials') return detail;
+    return (
+      `${detail}. The engine ANSWERED its unauthenticated /health probe, so it is running and ` +
+      'reachable — the authenticated status endpoint is rejecting our credential. Check ' +
+      "KAMEX_STATUS_PASSWORD against the engine's status-password. Note that repeated bad " +
+      "authentications make the engine's admin port progressively slower until it is " +
+      'restarted, so JKANNEL has stopped retrying at full rate.'
+    );
   }
   async coreDiagnostics(): Promise<CoreDiagnostics> {
     const base = process.env.KAMEX_BASE_URL;
@@ -198,28 +274,36 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
         adapterName: this.identity.adapterName,
         messages: ['Kamex runtime endpoint is not configured'],
       };
+    const gate = this.gate.check();
+    if (!gate.allowed) return { adapterName: this.identity.adapterName, messages: [gate.detail!] };
     const started = Date.now();
     try {
       const url = new URL('/status.json', base);
       url.searchParams.set('password', password);
       const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (!response.ok)
+      if (!response.ok) {
+        const detail = `Kamex status returned HTTP ${response.status}`;
+        this.gate.recordFailure(detail, await this.classifyFailure());
         return {
           adapterName: this.identity.adapterName,
           transportLatencyMs: Date.now() - started,
-          messages: [`Kamex status returned HTTP ${response.status}`],
+          messages: [this.withCause(detail)],
         };
+      }
       const status = (await response.json()) as Record<string, unknown>;
+      this.gate.recordSuccess();
       return {
         adapterName: this.identity.adapterName,
         transportLatencyMs: Date.now() - started,
         messages: [JSON.stringify(status)],
       };
     } catch (error) {
+      const detail = `Kamex status unavailable: ${(error as Error).message}`;
+      this.gate.recordFailure(detail, await this.classifyFailure());
       return {
         adapterName: this.identity.adapterName,
         transportLatencyMs: Date.now() - started,
-        messages: [`Kamex status unavailable: ${(error as Error).message}`],
+        messages: [this.withCause(detail)],
       };
     }
   }
@@ -249,18 +333,30 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
       return unavailable(
         'Kamex runtime endpoint is not configured (KAMEX_BASE_URL / KAMEX_STATUS_PASSWORD)',
       );
+    // Suppressed rather than "unavailable because we asked and failed" — the
+    // distinction is reported verbatim so an operator is never told the engine
+    // is down when in fact we stopped asking.
+    const gate = this.gate.check();
+    if (!gate.allowed) return unavailable(gate.detail!);
     let body: Record<string, unknown>;
     try {
       const url = new URL('/status.json', base);
       url.searchParams.set('password', password);
       const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (!response.ok) return unavailable(`Kamex status returned HTTP ${response.status}`);
+      if (!response.ok) {
+        const detail = `Kamex status returned HTTP ${response.status}`;
+        this.gate.recordFailure(detail, await this.classifyFailure());
+        return unavailable(this.withCause(detail));
+      }
       const parsed = await response.json();
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         return unavailable('Kamex status returned a payload that is not a JSON object');
       body = parsed as Record<string, unknown>;
+      this.gate.recordSuccess();
     } catch (error) {
-      return unavailable(`Kamex status unavailable: ${(error as Error).message}`);
+      const detail = `Kamex status unavailable: ${(error as Error).message}`;
+      this.gate.recordFailure(detail, await this.classifyFailure());
+      return unavailable(this.withCause(detail));
     }
     const sms = (body.sms ?? {}) as Record<string, any>;
     const dlr = (body.dlr ?? {}) as Record<string, any>;
@@ -329,10 +425,22 @@ export class KamexAdapter implements EngineAdapterCore, SmscControlProvider {
     url.searchParams.set('smsc', engineId);
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
     const detail = await response.text();
-    if (!response.ok || /could not|not given|denied/i.test(detail))
-      throw new Error(
-        `Kamex SMSC ${operation} failed: ${detail.trim() || `HTTP ${response.status}`}`,
-      );
+    if (!response.ok || /could not|not given|denied/i.test(detail)) {
+      // NOT gated, and not recorded against the status gate, for two reasons.
+      // This is one request per operator click — bounded by human patience,
+      // not a runaway loop — and blocking it would deny a reconnect during
+      // exactly the outage an operator is trying to fix. It also uses the
+      // ADMIN password, a different credential from the status polling, so
+      // folding its failures into that gate would suppress monitoring over a
+      // fault in an unrelated secret.
+      const message = detail.trim() || `HTTP ${response.status}`;
+      const hint = /denied|not given/i.test(detail)
+        ? ' The engine rejected the credential — check KAMEX_ADMIN_PASSWORD against the ' +
+          "engine's admin-password. Repeated bad authentications make the admin port " +
+          'progressively slower until bearerbox is restarted.'
+        : '';
+      throw new Error(`Kamex SMSC ${operation} failed: ${message}.${hint}`);
+    }
     return detail;
   }
 

@@ -394,8 +394,21 @@ services:
     networks:
       - appnet
       - obsnet
+    # Liveness via the UNAUTHENTICATED /health endpoint. This used to call
+    # /status.json?password=..., six authenticated requests a minute, forever.
+    # Kamex answers a failed authentication by adding a second to a
+    # process-global sleep counter and sleeping the single thread that serves
+    # /health, /status, /shutdown AND /graceful-restart — so with a wrong
+    # status password this probe alone degraded the admin port until bearerbox
+    # was restarted, taking JKANNEL's monitoring and config-deploy path with it.
+    # A liveness probe must not be able to cause the outage it reports.
+    #
+    # 200 OR 503 both count as alive: 503 is bearerbox's answer when it is
+    # running but no SMSC is bound. That is a carrier problem, surfaced by
+    # JKANNEL's own alerting — not a reason to call the container unhealthy and
+    # have an orchestrator restart it, which would drop every remaining bind.
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:13000/status.json?password=$${KAMEX_STATUS_PASSWORD}\" >/dev/null"]
+      test: ["CMD-SHELL", "s=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/health); [ \"$$s\" = 200 ] || [ \"$$s\" = 503 ]"]
       interval: 10s
       timeout: 5s
       retries: 12

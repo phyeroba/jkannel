@@ -1,10 +1,52 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 @Injectable()
 export class ConfigurationDeploymentService {
   private readonly target = process.env.KAMEX_CONFIG_PATH ?? '/var/lib/jkannel/kamex.conf';
+
+  /**
+   * Writes `content` to `path` and does not return until it is durable.
+   *
+   * `writeFile` alone returns once the data is in the page cache. `rename` is
+   * atomic against a concurrent READER, but it is not a barrier against power
+   * loss: the rename can reach the disk while the file's contents have not,
+   * leaving a correctly-named, truncated configuration. The engine's parser
+   * panics on a malformed file and keeps panicking on every restart, so the
+   * cost of that window is a gateway that will not boot until someone edits
+   * the file by hand.
+   *
+   * The directory is synced as well as the file: the file's own fsync makes
+   * its CONTENTS durable, but the directory entry created by `rename` is
+   * separate metadata and needs its own barrier.
+   */
+  private async writeDurable(path: string, content: string | Buffer, mode: number) {
+    const handle = await open(path, 'w', mode);
+    try {
+      await handle.writeFile(content);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** fsyncs a directory so a rename into it survives a crash. */
+  private async syncDirectory(path: string) {
+    let handle;
+    try {
+      handle = await open(path, 'r');
+      await handle.sync();
+    } catch {
+      // Directory fsync is not portable — it fails with EISDIR/EPERM on some
+      // platforms and filesystems (notably Windows, where developers run this).
+      // The file's own sync has already happened by this point, so failing the
+      // whole deployment over the weaker of the two barriers would trade a real
+      // outage for a theoretical one.
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
   async validateNative(content: string) {
     const base = process.env.KAMEX_VALIDATOR_URL;
     const token = process.env.KAMEX_VALIDATOR_TOKEN;
@@ -53,8 +95,9 @@ export class ConfigurationDeploymentService {
     } catch {
       /* first deployment */
     }
-    await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 });
+    await this.writeDurable(temporary, content, 0o600);
     await rename(temporary, this.target);
+    await this.syncDirectory(dirname(this.target));
     try {
       const reloaded = await this.reload();
       return reloaded
@@ -68,8 +111,13 @@ export class ConfigurationDeploymentService {
           };
     } catch (error) {
       if (previous) {
-        await writeFile(temporary, previous, { mode: 0o600 });
+        // The rollback path is the one that must NOT be best-effort: it runs
+        // because a deployment already failed, so leaving a half-written
+        // previous configuration behind would turn a failed deploy into a
+        // gateway that cannot start.
+        await this.writeDurable(temporary, previous, 0o600);
         await rename(temporary, this.target);
+        await this.syncDirectory(dirname(this.target));
         try {
           await this.reload();
         } catch {

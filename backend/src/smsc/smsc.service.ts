@@ -1,4 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import {
+  collectConfigValueProblems,
+  formatConfigValueProblem,
+} from '../configuration/config-value-safety';
 export type SmscType = 'smpp' | 'http' | 'fake' | 'at';
 export type SmscBindMode = 'transceiver' | 'transmitter' | 'receiver';
 
@@ -128,6 +132,31 @@ export class SmscService {
     }
     if (value.allowedSmscIds?.length && value.deniedSmscIds?.length)
       errors.push('allowedSmscIds and deniedSmscIds are mutually exclusive');
+
+    // Every one of these is written verbatim into the generated engine
+    // configuration, most of them UNQUOTED, and until now none had any
+    // character restriction at all. A line break in `host` injects a
+    // directive; a trailing backslash in `sendUrl` escapes its own closing
+    // quote; and any value containing "include" makes bearerbox panic on
+    // start and keep panicking until the file is edited by hand.
+    //
+    // Caught here rather than only at deploy so the operator is told which
+    // field is wrong while they are looking at it. The native validator still
+    // runs before anything is written; this is what makes the failure legible.
+    const routingEntries = ROUTING_LIST_KEYS.flatMap((key) =>
+      (value[key] ?? []).map((entry, index) => [`${key}[${index}]`, entry] as [string, unknown]),
+    );
+    for (const problem of collectConfigValueProblems([
+      ['id', value.id],
+      ['host', value.host],
+      ['systemId', value.systemId],
+      ['systemType', value.systemType],
+      ['addressRange', value.addressRange],
+      ['altCharset', value.altCharset],
+      ['sendUrl', value.sendUrl],
+      ...routingEntries,
+    ]))
+      errors.push(formatConfigValueProblem(problem));
     return errors;
   }
   assertValid(value: SmscDefinition): SmscDefinition {

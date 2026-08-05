@@ -109,7 +109,16 @@ describe('reconnect actually cycles the bind', () => {
 
     // The commands still go out — an unobservable engine is not a reason to
     // refuse to act — but nothing is claimed about the result.
-    expect(commands).toEqual(['/stop-smsc', '/start-smsc']);
+    //
+    // /health is filtered out: a failed authenticated read now triggers one
+    // unauthenticated /health probe to tell "engine down" from "our password is
+    // wrong". It is deliberately excluded here because it carries no password
+    // and so cannot contribute to the engine's auth-failure penalty — this
+    // assertion is about which ADMIN commands were issued.
+    expect(commands.filter((url) => !url.includes('/health'))).toEqual([
+      '/stop-smsc',
+      '/start-smsc',
+    ]);
     expect(result.states?.cycleVerified).toBe(false);
     expect(result.detail).toContain('could NOT be verified');
   });

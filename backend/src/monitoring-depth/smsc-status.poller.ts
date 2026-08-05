@@ -355,11 +355,32 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
         // We did not observe the binds at all. Marking them dead would be a
         // guess; raise one honest engine-level alert instead.
         await this.sample(client, tenantId, ENGINE_METRIC_NAMES.engineUp, 0, {}, now);
+        // Two different failures used to read identically as "SMS engine
+        // unreachable". A rejected credential leaves the engine running and
+        // healthy while JKANNEL slowly degrades its admin port with retries —
+        // an entirely different fix from an engine that is down, in a different
+        // system. The adapter can tell them apart (the unauthenticated /health
+        // probe answers in one case and not the other), so the alert says which.
+        const gate = this.adapter.gateState?.() ?? {
+          kind: 'unknown' as const,
+          suppressed: false,
+          consecutiveFailures: 0,
+        };
+        const credentialFault = gate.kind === 'credentials';
         const unreachable = await this.openAlert(client, tenantId, {
           dedupKey: ENGINE_UNREACHABLE_DEDUP,
           severity: 'critical',
-          summary: `SMS engine unreachable: ${snapshot.source.detail}`,
-          details: { kind: 'engine_unreachable', detail: snapshot.source.detail },
+          summary: credentialFault
+            ? 'SMS engine is UP but rejecting our credential — check KAMEX_STATUS_PASSWORD. ' +
+              'Polling has been throttled because repeated bad authentications degrade the ' +
+              "engine's admin port until it is restarted."
+            : `SMS engine unreachable: ${snapshot.source.detail}`,
+          details: {
+            kind: credentialFault ? 'engine_credential_rejected' : 'engine_unreachable',
+            detail: snapshot.source.detail,
+            pollingSuppressed: gate.suppressed,
+            consecutiveFailures: gate.consecutiveFailures,
+          },
         });
         result.alertsOpened += unreachable.opened ? 1 : 0;
         result.alertsEscalated += unreachable.escalated ? 1 : 0;

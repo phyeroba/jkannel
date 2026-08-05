@@ -26,6 +26,10 @@ import { ConsoleRepository, Actor, GridPage } from './console.repository';
 import { ExportColumn, ExportService } from '../platform/export.service';
 import { KamexSqlboxRepository, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 import {
+  describeConfigValueProblem,
+  formatConfigValueProblem,
+} from '../configuration/config-value-safety';
+import {
   ConfigurationGeneratorService,
   EngineConfiguration,
 } from '../configuration/configuration-generator.service';
@@ -674,6 +678,17 @@ export class SettingsController {
     if (!/^[a-z][a-z0-9_.-]+$/.test(key)) throw new BadRequestException('Invalid setting key');
     if (!Object.prototype.hasOwnProperty.call(b, 'value'))
       throw new BadRequestException('value is required');
+    // The KEY was validated here; the VALUE never was. Several `gateway.*`
+    // settings are rendered straight into the engine configuration, unquoted —
+    // `gateway.bearerbox_host` and `gateway.sendsms_username` among them — so
+    // an unchecked value could inject a directive or, containing "include",
+    // stop bearerbox starting at all. Only `gateway.*` is screened: other
+    // settings never reach a configuration file, and rejecting characters in
+    // them would be a restriction with no reason behind it.
+    if (key.startsWith('gateway.')) {
+      const problem = describeConfigValueProblem(key, String(b.value ?? ''));
+      if (problem) throw new BadRequestException(formatConfigValueProblem(problem));
+    }
     return this.repository.putSetting(actor(r), key, b);
   }
 }
@@ -869,6 +884,46 @@ export class ConfigurationsController {
   ) {}
   @Get() @RequirePermissions('configuration.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listConfigurations(actor(r), q);
+  }
+
+  /**
+   * Reports stored values that the configuration-safety rules now reject.
+   *
+   * Those rules are applied when a record is SAVED, which does nothing about
+   * rows written before they existed. Without this, a pre-existing value
+   * containing "include" or a line break surfaces for the first time as a
+   * failed deployment with a bearerbox panic dump and no field named — at the
+   * worst possible moment, when someone is trying to push a change out.
+   *
+   * Read-only and non-mutating on purpose: it reports, it does not rewrite.
+   * Silently "fixing" an operator's carrier hostname is not this endpoint's
+   * decision to make.
+   */
+  @Get('value-audit') @RequirePermissions('configuration.view') async valueAudit(
+    @Req() r: Request,
+  ) {
+    if (!this.modelBuilder)
+      throw new BadRequestException('Configuration model builder is not available');
+    const built = await this.modelBuilder.build(actor(r), { includeInactive: true });
+    const problems = this.generator?.validate(built.model) ?? [];
+    // Only the value-safety findings; the rest of validate() reports modelling
+    // errors that are a different conversation.
+    const unsafe = problems.filter((problem) =>
+      /line break|control character|double quote|backslash|comment|"include"|maximum for a configuration value/.test(
+        problem,
+      ),
+    );
+    return {
+      checkedSmscCount: built.sources.smscCount,
+      problemCount: unsafe.length,
+      problems: unsafe,
+      note:
+        unsafe.length === 0
+          ? 'No stored value would be rejected by the engine configuration safety rules.'
+          : 'These values were stored before the safety rules existed, or by a path that ' +
+            'bypasses them. Each one would fail native validation at deploy time. Edit the ' +
+            'named field on the SMSC or setting to clear it.',
+    };
   }
   @Get('history') @RequirePermissions('configuration.view') history(
     @Req() r: Request,

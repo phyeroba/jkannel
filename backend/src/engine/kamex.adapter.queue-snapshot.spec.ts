@@ -212,10 +212,12 @@ describe('KamexAdapter.queueSnapshot', () => {
   it('reports unavailable on a non-2xx status response', async () => {
     restoreFetch = stubFetch(() => jsonResponse('Denied', false, 403));
     const snapshot = await new KamexAdapter().queueSnapshot();
-    expect(snapshot.source).toEqual({
-      status: 'unavailable',
-      detail: 'Kamex status returned HTTP 403',
-    });
+    expect(snapshot.source.status).toBe('unavailable');
+    // Substring rather than exact equality: this stub answers every URL,
+    // including the unauthenticated /health probe, so the adapter correctly
+    // concludes the engine is up and appends the credential diagnosis. Pinning
+    // the whole string here would make that a "failure" of an unrelated test.
+    expect(snapshot.source.detail).toContain('Kamex status returned HTTP 403');
   });
 
   it('reports unavailable when the body is not a JSON object', async () => {
@@ -237,5 +239,119 @@ describe('KamexAdapter.queueSnapshot', () => {
     restoreFetch = stubFetch(() => jsonResponse(liveStatus));
     const diagnostics = await new KamexAdapter().coreDiagnostics();
     expect(JSON.parse(diagnostics.messages[0]).version).toBe('1.8.3');
+  });
+});
+
+/**
+ * The gate has to stop requests being ISSUED, not merely change what is
+ * returned. Kamex penalises each failed authentication with a process-global,
+ * ever-growing sleep on the single thread that serves /health, /status,
+ * /shutdown and /graceful-restart — so a client that keeps asking is what turns
+ * a wrong password into an unreachable admin port. Counting the fetch calls is
+ * therefore the assertion that matters; asserting on the returned shape alone
+ * would pass even if every request still went out.
+ */
+describe('KamexAdapter — admin-port request gate', () => {
+  const env = { ...process.env };
+  let restoreFetch = () => {};
+  beforeEach(() => {
+    process.env.KAMEX_BASE_URL = 'http://kamex-bearerbox:13000';
+    process.env.KAMEX_STATUS_PASSWORD = 'status-secret';
+  });
+  afterEach(() => {
+    restoreFetch();
+    restoreFetch = () => {};
+    process.env = { ...env };
+  });
+
+  /** Counts calls and separates the authenticated endpoint from /health. */
+  function countingFetch(statusHandler: () => any, healthOk = true) {
+    const calls = { status: 0, health: 0 };
+    restoreFetch = stubFetch((url) => {
+      if (url.includes('/health')) {
+        calls.health += 1;
+        if (!healthOk) throw new Error('connect ECONNREFUSED');
+        return { ok: true, status: 200, json: async () => ({}) };
+      }
+      calls.status += 1;
+      return statusHandler();
+    });
+    return calls;
+  }
+
+  it('stops issuing authenticated requests once failures persist', async () => {
+    const calls = countingFetch(() => jsonResponse('Denied', false, 403));
+    const adapter = new KamexAdapter();
+
+    for (let i = 0; i < 3; i += 1) await adapter.queueSnapshot();
+    expect(calls.status).toBe(3);
+
+    // Everything from here must cost the engine nothing.
+    for (let i = 0; i < 10; i += 1) await adapter.queueSnapshot();
+    expect(calls.status).toBe(3);
+    expect(adapter.gateState().suppressed).toBe(true);
+  });
+
+  it('reports suppression honestly instead of claiming the engine is unavailable', async () => {
+    countingFetch(() => jsonResponse('Denied', false, 403));
+    const adapter = new KamexAdapter();
+    for (let i = 0; i < 3; i += 1) await adapter.queueSnapshot();
+    const snapshot = await adapter.queueSnapshot();
+    expect(snapshot.source.status).toBe('unavailable');
+    expect(snapshot.source.detail).toMatch(/suppressed/i);
+  });
+
+  it('names the credential when /health answers but the authenticated call does not', async () => {
+    countingFetch(() => jsonResponse('Denied', false, 403), true);
+    const adapter = new KamexAdapter();
+    const snapshot = await adapter.queueSnapshot();
+    // The engine is up; only our password is wrong. Saying "engine unreachable"
+    // here sends an operator to debug the wrong system.
+    expect(snapshot.source.detail).toMatch(/KAMEX_STATUS_PASSWORD/);
+    expect(adapter.gateState().kind).toBe('credentials');
+  });
+
+  it('does NOT blame the credential when the engine is genuinely unreachable', async () => {
+    countingFetch(() => {
+      throw new Error('connect ECONNREFUSED');
+    }, false);
+    const adapter = new KamexAdapter();
+    const snapshot = await adapter.queueSnapshot();
+    expect(snapshot.source.detail).not.toMatch(/KAMEX_STATUS_PASSWORD/);
+    expect(adapter.gateState().kind).toBe('unreachable');
+  });
+
+  it('shares one gate across queueSnapshot and coreDiagnostics', async () => {
+    // A per-method gate would be defeated by an open console tab: the Live
+    // Queue view and the Operations Overview drive different methods against
+    // the same single-threaded admin port.
+    const calls = countingFetch(() => jsonResponse('Denied', false, 403));
+    const adapter = new KamexAdapter();
+    for (let i = 0; i < 3; i += 1) await adapter.queueSnapshot();
+    const before = calls.status;
+    await adapter.coreDiagnostics();
+    expect(calls.status).toBe(before);
+  });
+
+  it('resumes at full rate once the engine answers again', async () => {
+    let deny = true;
+    const calls = countingFetch(() =>
+      deny ? jsonResponse('Denied', false, 403) : jsonResponse(liveStatus),
+    );
+    const adapter = new KamexAdapter({} as never);
+    for (let i = 0; i < 3; i += 1) await adapter.queueSnapshot();
+    expect(adapter.gateState().suppressed).toBe(true);
+
+    // Simulate the window elapsing, then a fixed password.
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000);
+    deny = false;
+    const recovered = await adapter.queueSnapshot();
+    jest.restoreAllMocks();
+
+    expect(recovered.source.status).toBe('ok');
+    expect(adapter.gateState().suppressed).toBe(false);
+    const after = calls.status;
+    await adapter.queueSnapshot();
+    expect(calls.status).toBe(after + 1);
   });
 });
