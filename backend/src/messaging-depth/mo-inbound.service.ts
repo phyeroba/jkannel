@@ -645,16 +645,30 @@ export class MoInboundService {
    * The "unless" is the whole point: without it, an operator toggling polling or
    * a retried job would leave two self-perpetuating chains running forever, each
    * spawning its own successor. The check and the insert are in one transaction.
+   *
+   * `excludeJobId` is what makes the poll chain survive its own first hop, and
+   * omitting it was a real bug rather than a theoretical one. `claimOn` sets
+   * `status='running'` BEFORE invoking the handler and only clears it after the
+   * handler returns, so a sweep calling this from inside its own handler saw
+   * ITSELF in the in-flight check, returned false, and never enqueued a
+   * successor. Polling therefore ran exactly once after being switched on and
+   * then stopped, with no error anywhere — the operator sees "polling enabled"
+   * and a watermark that stops moving.
+   *
+   * The existing unit test did not catch it because the fake job table contains
+   * only rows the test inserted, never the running row the real queue creates.
    */
   async ensurePollScheduled(
     client: PoolClient,
     actor: Actor,
     delaySeconds: number,
+    excludeJobId: string | null = null,
   ): Promise<boolean> {
     const inFlight = (
       await client.query(
-        "SELECT 1 FROM api_jobs WHERE type=$1 AND status IN ('queued','running') LIMIT 1",
-        [MO_INGEST_JOB_TYPE],
+        "SELECT 1 FROM api_jobs WHERE type=$1 AND status IN ('queued','running') " +
+          'AND ($2::uuid IS NULL OR id <> $2::uuid) LIMIT 1',
+        [MO_INGEST_JOB_TYPE, excludeJobId],
       )
     ).rows[0];
     if (inFlight) return false;
@@ -666,8 +680,14 @@ export class MoInboundService {
     return true;
   }
 
-  /** Runs one sweep and, while polling is enabled, schedules the next. */
-  async runScheduledSweep(actor: Actor) {
+  /**
+   * Runs one sweep and, while polling is enabled, schedules the next.
+   *
+   * `currentJobId` MUST be the id of the job running this sweep. Without it the
+   * chain stops dead after one hop — see {@link ensurePollScheduled}. It is
+   * optional only so a manual, non-job-driven sweep can still call this.
+   */
+  async runScheduledSweep(actor: Actor, currentJobId: string | null = null) {
     const state = await this.status(actor);
     if (!state.polling_enabled)
       return { skipped: true as const, reason: 'polling is disabled for this tenant' };
@@ -679,7 +699,12 @@ export class MoInboundService {
         )
       ).rows[0];
       if (!current?.polling_enabled) return false;
-      return this.ensurePollScheduled(client, actor, Number(current.poll_interval_seconds) || 30);
+      return this.ensurePollScheduled(
+        client,
+        actor,
+        Number(current.poll_interval_seconds) || 30,
+        currentJobId,
+      );
     });
     return { skipped: false as const, ...result, nextPollScheduled: scheduled };
   }

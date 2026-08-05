@@ -576,8 +576,7 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
         createdBy: job.created_by ?? 'bulk-send',
         // `?? null`, not `?? 0`: a campaign created before 045, or one that
         // simply expressed no preference, must not be demoted to the bulk level.
-        priority:
-          job.priority === null || job.priority === undefined ? null : Number(job.priority),
+        priority: job.priority === null || job.priority === undefined ? null : Number(job.priority),
         // Every recipient inherits the campaign's schedule. It travels as the
         // absolute instant, not as an offset. By the time a held campaign is
         // dispatched that instant has passed, so the per-recipient `deferred`

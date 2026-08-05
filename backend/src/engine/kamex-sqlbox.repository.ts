@@ -185,6 +185,48 @@ export const DLR_EVENT_STATUS: Readonly<Record<number, DeliveryStatus>> = {
 };
 
 /**
+ * The DLR events that mean the message did not get there, named so a caller
+ * cannot pass 31 (an MT row's requested mask) by accident.
+ */
+export const DLR_EVENT_FAILED = 2;
+export const DLR_EVENT_REJECTED = 16;
+/** The DLR event that means it did. A retry must never fire past one of these. */
+export const DLR_EVENT_DELIVERED = 1;
+
+/** Engine epoch seconds -> ISO instant, or null for an absent/unparseable value. */
+function epochToIso(value: unknown): string | null {
+  const epoch = Number(value);
+  return Number.isFinite(epoch) && epoch > 0 ? new Date(epoch * 1000).toISOString() : null;
+}
+
+/**
+ * One negative delivery report, joined to the message it reports on. Flat
+ * because the correlation is an inner join: a report whose MT row is gone is
+ * not returned at all (its body could not be re-sent anyway).
+ */
+export interface NegativeDeliveryReport {
+  /** sent_sms.sql_id of the RECEIPT. The scanner's watermark advances on this. */
+  dlrSqlId: string;
+  /** The receipt's foreign_id: the send_sms.sql_id of the message it reports on. */
+  foreignId: string;
+  /** The EVENT (2 failed / 16 rejected), read off the receipt's own mask. */
+  dlrEvent: number;
+  dlrAt: string | null;
+  /** The receipt body, which is where a carrier puts its own error text. */
+  detail: string | null;
+  sender: string;
+  receiver: string;
+  /** The original body, taken from the engine's row rather than reconstructed. */
+  text: string;
+  /** Bind the ORIGINAL message went out on; also how this row is tenant-scoped. */
+  smscId: string;
+  /** The mask the original send REQUESTED (a subscription, never a status). */
+  requestedDlrMask: number | null;
+  dlrUrl: string | null;
+  sentAt: string | null;
+}
+
+/**
  * Operator-facing groupings: "everything that needs resending" and "everything
  * still in flight", so the console can offer them as one click.
  */
@@ -414,6 +456,12 @@ const SENT_SMS_INDEX_STATEMENTS: Array<(create: string) => string> = [
   // scan of every receipt sharing the foreign_id.
   (create) =>
     `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_dlr_correlation_idx ON sent_sms(foreign_id, time DESC, sql_id DESC) WHERE momt = 'DLR'`,
+  // findNegativeDeliveryReports(): a watermarked forward scan over receipts only
+  // (`sql_id > watermark AND momt = 'DLR'`). Without the partial index the
+  // delivery-retry scanner walks every row written since the watermark —
+  // overwhelmingly MT rows — to find the handful of receipts among them.
+  (create) =>
+    `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_dlr_scan_idx ON sent_sms(sql_id) WHERE momt = 'DLR'`,
 ];
 
 export const SENT_SMS_INDEX_NAMES = [
@@ -421,6 +469,7 @@ export const SENT_SMS_INDEX_NAMES = [
   'jkannel_sqlbox_sent_sms_smsc_time_idx',
   'jkannel_sqlbox_sent_sms_foreign_id_idx',
   'jkannel_sqlbox_sent_sms_dlr_correlation_idx',
+  'jkannel_sqlbox_sent_sms_dlr_scan_idx',
 ] as const;
 
 /** Identifier quoting for the one place a name reaches SQL unbound (DROP INDEX). */
@@ -1100,6 +1149,123 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       [ids, allowedSmscIds],
     );
     return result.rows.map((row) => this.normalize(row, 'sent_sms'));
+  }
+
+  /**
+   * Delivery reports that say the message did NOT arrive, newest LAST, for the
+   * delivery-failure retry scanner.
+   *
+   * WHY THIS IS NOT `list({ deliveryReport: true })`. That grid pages newest
+   * first for a human. A retry scanner needs the opposite: a watermarked forward
+   * scan (`sql_id > watermark`, ascending) so every receipt is seen exactly once
+   * and in the order the engine wrote it, and it needs the ORIGINAL message's
+   * sender/receiver/body in the same row, because a retry that cannot reproduce
+   * the text is not a retry.
+   *
+   * THE MASK TRAP, which is the defect this query exists to avoid. `dlr_mask` on
+   * a DLR row is the EVENT (1 delivered / 2 failed / 4 buffered / 8 accepted /
+   * 16 rejected). On an MT row the same column is the mask the sender REQUESTED
+   * — commonly 31, "report everything" — which is a subscription, not a status.
+   * A query that did not carry `momt = 'DLR'` would match every MT row whose
+   * requested mask happened to equal 2 or 16 and would "retry" messages that
+   * never failed. Hence the predicate is on the receipt, and the MT row is
+   * reached only through the correlation.
+   *
+   * TENANT SCOPE is applied to the ORIGINAL MESSAGE's bind (`m.smsc_id`), not
+   * the receipt's. The MT row always carries the bind the message went out on,
+   * whereas a receipt's `smsc_id` can be unset depending on the driver; scoping
+   * on the receipt would silently drop actionable failures. It also makes the
+   * correlation an effective inner join: a report whose MT row is no longer in
+   * history yields nothing, which is correct — its body cannot be re-sent.
+   */
+  async findNegativeDeliveryReports(options: {
+    /** Exclusive lower bound on the RECEIPT's sql_id (the scanner watermark). */
+    afterSqlId?: string | number | bigint;
+    /** DLR events to treat as negative; normally [2] or [2, 16]. */
+    events: number[];
+    /** Engine ids of the tenant's binds. Empty = no rows, never unrestricted. */
+    allowedSmscIds: string[];
+    limit?: number;
+  }): Promise<NegativeDeliveryReport[]> {
+    const events = options.events.filter((event) => Number.isInteger(event));
+    if (!events.length || !options.allowedSmscIds.length) return [];
+    const limit = Math.min(Math.max(Number(options.limit ?? 200) || 200, 1), 1000);
+    const result = await this.required().query(
+      `SELECT r.sql_id::text dlr_sql_id, r.foreign_id, r.dlr_mask::int dlr_event,
+              r.time::bigint dlr_time, r.msgdata dlr_text,
+              m.sender, m.receiver, m.msgdata, m.smsc_id, m.dlr_mask::int requested_mask,
+              m.dlr_url, m.time::bigint sent_time
+         FROM sent_sms r
+         JOIN LATERAL (
+           SELECT o.sender, o.receiver, o.msgdata, o.smsc_id, o.dlr_mask, o.dlr_url, o.time
+             FROM sent_sms o
+            WHERE o.momt = 'MT' AND o.foreign_id = r.foreign_id
+            ORDER BY o.time ASC, o.sql_id ASC
+            LIMIT 1
+         ) m ON true
+        WHERE r.momt = 'DLR' AND r.foreign_id IS NOT NULL
+          AND r.sql_id > $1::bigint
+          AND r.dlr_mask = ANY($2::int[])
+          AND m.smsc_id = ANY($3)
+        ORDER BY r.sql_id ASC
+        LIMIT $4`,
+      [String(options.afterSqlId ?? 0), events, options.allowedSmscIds, limit],
+    );
+    return result.rows.map((row: any) => ({
+      dlrSqlId: String(row.dlr_sql_id),
+      foreignId: String(row.foreign_id),
+      dlrEvent: Number(row.dlr_event),
+      dlrAt: epochToIso(row.dlr_time),
+      detail: row.dlr_text ?? null,
+      sender: row.sender ?? '',
+      receiver: row.receiver ?? '',
+      text: row.msgdata ?? '',
+      smscId: String(row.smsc_id),
+      requestedDlrMask: KamexSqlboxRepository.number(row.requested_mask),
+      dlrUrl: row.dlr_url ?? null,
+      sentAt: epochToIso(row.sent_time),
+    }));
+  }
+
+  /**
+   * Most recent delivery EVENT for each of the given correlation ids, batched.
+   *
+   * The delivery-retry path calls this immediately before submitting a retry and
+   * again when settling a chain, because a positive report can land after a
+   * negative one — a carrier that reports `failed` and then `delivered`, or a
+   * buffered message that gets through while the retry is waiting out its
+   * delay. Re-sending then would double-deliver and double-bill, so this is the
+   * last check before the send.
+   *
+   * NOT SCOPED to a bind, deliberately: the safe failure mode here is seeing a
+   * positive report that stops a retry, and a receipt whose `smsc_id` is unset
+   * would be invisible under a strict filter. The correlation ids come from the
+   * caller's own RLS-scoped retry rows, which were themselves opened only from
+   * reports scoped to the tenant's binds, so nothing widens tenant scope.
+   */
+  async latestDeliveryEvents(
+    foreignIds: string[],
+  ): Promise<Map<string, { event: number; at: string | null }>> {
+    const ids = [...new Set(foreignIds.filter((id) => typeof id === 'string' && id))];
+    const found = new Map<string, { event: number; at: string | null }>();
+    if (!ids.length) return found;
+    const result = await this.required().query<{
+      foreign_id: string;
+      dlr_event: number;
+      dlr_time: string | null;
+    }>(
+      `SELECT DISTINCT ON (foreign_id) foreign_id, dlr_mask::int dlr_event, time::bigint dlr_time
+         FROM sent_sms
+        WHERE momt = 'DLR' AND foreign_id = ANY($1)
+        ORDER BY foreign_id, time DESC, sql_id DESC`,
+      [ids],
+    );
+    for (const row of result.rows)
+      found.set(String(row.foreign_id), {
+        event: Number(row.dlr_event),
+        at: epochToIso(row.dlr_time),
+      });
+    return found;
   }
 
   /**

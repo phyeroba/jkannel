@@ -81,10 +81,17 @@ export class MoJobHandlers implements OnModuleInit {
         maxAttempts: MO_INGEST_MAX_ATTEMPTS,
         handler: async (context) => {
           await context.progress(10);
-          const outcome = await this.inbound.runScheduledSweep({
-            tenantId: context.actor.tenantId,
-            userId: context.actor.userId,
-          });
+          // context.jobId is REQUIRED here, not decorative: this job is already
+          // `status='running'` while its own handler executes, so without
+          // excluding itself the successor check matches this row and the poll
+          // chain ends after one sweep.
+          const outcome = await this.inbound.runScheduledSweep(
+            {
+              tenantId: context.actor.tenantId,
+              userId: context.actor.userId,
+            },
+            context.jobId,
+          );
           await context.progress(100);
           return outcome;
         },

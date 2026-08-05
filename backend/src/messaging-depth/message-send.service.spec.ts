@@ -347,11 +347,15 @@ describe('MessageSendService — route selection on the send path (G2)', () => {
   });
 
   it('sends priority 0 as 0 and an unspecified priority as null, never conflating them', async () => {
-    const bulk = makeStack({ routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })] });
+    const bulk = makeStack({
+      routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })],
+    });
     await bulk.service.send(actor, { ...message, channel: 'console', priority: 0 });
     expect(bulk.sqlbox.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: 0 }));
 
-    const unset = makeStack({ routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })] });
+    const unset = makeStack({
+      routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })],
+    });
     await unset.service.send(actor, { ...message, channel: 'console' });
     expect(unset.sqlbox.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: null }));
   });

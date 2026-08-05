@@ -67,9 +67,12 @@ describe('MoJobHandlers', () => {
     const { registry, inbound } = setup();
     const result = await registry.get(MO_INGEST_JOB_TYPE)!.handler(context(MO_INGEST_JOB_TYPE, {}));
     expect(result).toMatchObject({ ingested: 2 });
-    expect(inbound.runScheduledSweep).toHaveBeenCalledWith({
-      tenantId: '7',
-      userId: 'operator-1',
-    });
+    // The job id must be forwarded: the sweep is itself `status='running'`
+    // while this handler executes, so without excluding its own row the
+    // successor check matches it and the poll chain dies after one hop.
+    expect(inbound.runScheduledSweep).toHaveBeenCalledWith(
+      { tenantId: '7', userId: 'operator-1' },
+      'job-1',
+    );
   });
 });

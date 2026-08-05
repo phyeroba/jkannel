@@ -26,6 +26,7 @@ import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.modul
 import { CustomersModule } from './customers/customers.module';
 import { CustomersDepthModule } from './customers-depth/customers-depth.module';
 import { MessagingDepthModule } from './messaging-depth/messaging-depth.module';
+import { DeliveryRetryModule } from './delivery-retry/delivery-retry.module';
 import { ReportingDepthModule } from './reporting-depth/reporting-depth.module';
 import { RoutingDepthModule } from './routing-depth/routing-depth.module';
 import { ApiGatewayModule } from './api-gateway/api-gateway.module';
@@ -57,6 +58,8 @@ import { LoggingModule } from './platform/logging.module';
     CustomersModule,
     CustomersDepthModule,
     MessagingDepthModule,
+    // Consumes MessagingDepthModule's send path, so it is registered after it.
+    DeliveryRetryModule,
     ReportingDepthModule,
     RoutingDepthModule,
     ApiGatewayModule,

@@ -184,7 +184,15 @@ function makeStack(fixture: Fixture = {}) {
       }
       if (text.includes('SELECT engine_id FROM smsc_definitions'))
         return { rows: (fixture.smscs ?? ['mtn-ug']).map((engine_id) => ({ engine_id })) };
-      if (text.includes('FROM api_jobs')) return { rows: state.jobs.length ? [{ exists: 1 }] : [] };
+      // Model the real in-flight predicate INCLUDING the self-exclusion. The
+      // old fake ignored it and answered from `state.jobs.length` alone, which
+      // is why a live bug — the poll job matching itself and never enqueueing a
+      // successor — passed its test for as long as it existed.
+      if (text.includes('FROM api_jobs')) {
+        const excluded = params[1] as string | null | undefined;
+        const others = state.jobs.filter((job) => !excluded || job.id !== excluded);
+        return { rows: others.length ? [{ exists: 1 }] : [] };
+      }
       if (text.includes('INSERT INTO audit_log')) {
         state.audits.push(String(params[2]));
         return { rows: [] };
@@ -417,6 +425,34 @@ describe('MO ingest — polling and manual retry', () => {
     const result = await service.runScheduledSweep(actor);
     expect(result).toMatchObject({ skipped: false, nextPollScheduled: true });
     expect(state.jobs.map((j) => j.type)).toEqual(['mo.ingest.poll']);
+  });
+
+  /**
+   * The poll chain is self-perpetuating: each sweep enqueues the next, so the
+   * queue IS the timer. `claimOn` marks a job `status='running'` before calling
+   * its handler and clears it only after the handler returns, which means a
+   * sweep asking "is a poll already in flight?" matches ITSELF unless it says
+   * otherwise. It returned false, enqueued nothing, and polling silently ran
+   * exactly once — no error, no dead-letter, just a watermark that stops.
+   */
+  it('does not mistake its own running job for a successor already queued', async () => {
+    const { service, state } = makeStack({ pollingEnabled: true, engineRows: [] });
+    // The row the real queue creates for the sweep currently executing.
+    state.jobs.push({ id: id(700), type: 'mo.ingest.poll', input: {} });
+
+    const result = await service.runScheduledSweep(actor, id(700));
+    expect(result).toMatchObject({ nextPollScheduled: true });
+    expect(state.jobs.filter((j) => j.type === 'mo.ingest.poll')).toHaveLength(2);
+  });
+
+  it('still refuses to start a SECOND chain when a different poll is in flight', async () => {
+    const { service, state } = makeStack({ pollingEnabled: true, engineRows: [] });
+    state.jobs.push({ id: id(700), type: 'mo.ingest.poll', input: {} });
+    state.jobs.push({ id: id(701), type: 'mo.ingest.poll', input: {} });
+
+    const result = await service.runScheduledSweep(actor, id(700));
+    expect(result).toMatchObject({ nextPollScheduled: false });
+    expect(state.jobs).toHaveLength(2);
   });
 
   it('refuses to retry a delivery that is still pending, which would deliver twice', async () => {

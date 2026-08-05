@@ -128,8 +128,15 @@ export class MessageOperationsService {
       smscId: source.smscId,
       dlrMask: source.dlrMask ?? undefined,
       dlrUrl: source.dlrUrl ?? undefined,
-      // New correlation id so the resubmission is independently traceable and
-      // its delivery reports do not collide with the original message.
+      // A resubmission does get its own delivery-report identity, but NOT from
+      // this UUID: sqlbox overwrites `foreign_id` with the new `send_sms.sql_id`
+      // on its way past (verified against a live stack — every `sent_sms` row
+      // carries the sql_id that produced it, never a value supplied here). The
+      // separation the old comment claimed is real and is delivered by that new
+      // sql_id; this value never reaches the engine's history.
+      //
+      // It is kept because `send()` echoes it back, so the caller still gets a
+      // stable handle on the resubmission before the engine assigns one.
       foreignId: randomUUID(),
     };
     // Re-submitting a message keeps its original bind, EXCEPT when that bind is
