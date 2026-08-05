@@ -34,12 +34,28 @@ export interface CreateBulkSendInput {
   customerId?: string | null;
   /**
    * Campaign-level deferred delivery + expiry, already validated by
-   * {@link parseMessageSchedule}. EVERY recipient inherits it: the offset is
-   * recomputed per recipient at the instant its `send_sms` row is inserted, so
-   * a campaign that takes ten minutes to drain still targets the one instant
-   * the operator picked rather than drifting with the dispatch.
+   * `parseMessageSchedule`.
+   *
+   * A FUTURE instant means the campaign is HELD: it is created with status
+   * `scheduled`, which is no longer dispatchable, and a
+   * `message.scheduled.release` job due at that instant moves it to `queued`.
+   * See scheduled-send.service.ts. `validityMinutes` still travels to every
+   * recipient's `send_sms.validity`, which real SMPP carriers do honour.
    */
   schedule?: MessageSchedule | null;
+
+  /**
+   * Invoked INSIDE the creation transaction with the freshly inserted job row.
+   * Throwing rolls the whole campaign back.
+   *
+   * {@link ScheduledSendService} uses it to write the hold and its release job
+   * in the same commit as the campaign, so a crash can never strand a campaign
+   * in `scheduled` with nothing that would ever release it.
+   */
+  onCreated?: (
+    client: PoolClient,
+    job: { id: string; name: string; total: number },
+  ) => Promise<void>;
 }
 
 /**
@@ -75,13 +91,19 @@ const JOB_COLUMNS =
 const RECIPIENT_COLUMNS = 'id,job_id,receiver,text,status,foreign_id,error,created_at';
 
 /**
- * Job statuses the runner will pick up. `scheduled` is a queued job whose
- * campaign carries a future `scheduled_at`; it dispatches on the SAME tick as a
- * plain queued job (the deferral lives on the engine row, not in a JKANNEL
- * timer) and exists so the grid can show and filter "this campaign was
- * submitted for later" rather than presenting it as an ordinary send.
+ * Job statuses the runner will pick up.
+ *
+ * `scheduled` is deliberately NOT here any more. It used to be: a campaign with
+ * a future `scheduled_at` dispatched on the very next tick, and the wait was
+ * pushed onto each recipient's engine row as `send_sms.deferred` — a request to
+ * the carrier that most refuse and that the `smsc = fake` bind this deployment
+ * runs ignores outright. The campaign therefore went out immediately. Now
+ * `scheduled` means genuinely held: a `message.scheduled.release` job due at
+ * the campaign's instant moves it to `queued`, and only then does this runner
+ * see it. See scheduled-send.service.ts; migration 042 moves any campaign left
+ * in `scheduled` by the old behaviour to `queued` so nothing is stranded.
  */
-const DISPATCHABLE_STATUSES = ['queued', 'scheduled'];
+const DISPATCHABLE_STATUSES = ['queued'];
 
 /**
  * The jobs grid. Cursor pagination is opted into here specifically: a campaign
@@ -254,6 +276,8 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
     // 'scheduled' is descriptive, not a gate: the runner dispatches it on the
     // next tick exactly like 'queued', and the wait lives on each recipient's
     // engine row. Distinguishing it in the grid is the point.
+    // 'scheduled' is now a real hold, not a label: the runner does not dispatch
+    // it, and a release job due at `scheduled_at` is what moves it to 'queued'.
     const status = scheduledAt && scheduledAt.getTime() > Date.now() ? 'scheduled' : 'queued';
 
     const job = await this.database.tenantTransaction(actor.tenantId, async (client) => {
@@ -313,11 +337,24 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           }),
         ],
       );
+      // Last statement in the transaction: whatever the caller records here
+      // commits with the campaign or is lost with it, never half. This is how
+      // a scheduled campaign's hold and release job become atomic with it.
+      if (input.onCreated)
+        await input.onCreated(client, {
+          id: created.id,
+          name: created.name,
+          total: Number(created.total),
+        });
       return created;
     });
 
-    // Low-latency kick for small batches outside of test/disabled runs.
+    // Low-latency kick for small batches outside of test/disabled runs. A held
+    // campaign is skipped: its dispatch is the release job's business, and
+    // kicking it here would only burn a no-op claim against a status the runner
+    // no longer accepts.
     if (
+      job.status === 'queued' &&
       process.env.NODE_ENV !== 'test' &&
       process.env.BULK_SEND_RUNNER_ENABLED !== 'false' &&
       job.total <= Number(process.env.BULK_SEND_INLINE_MAX ?? 100)
@@ -527,9 +564,10 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
         customerId: job.customer_id,
         createdBy: job.created_by ?? 'bulk-send',
         // Every recipient inherits the campaign's schedule. It travels as the
-        // absolute instant, not as an offset, so the per-recipient deferral is
-        // recomputed against that instant at each INSERT and a slow drain
-        // cannot smear the campaign across the schedule.
+        // absolute instant, not as an offset. By the time a held campaign is
+        // dispatched that instant has passed, so the per-recipient `deferred`
+        // resolves to 0 — send now — while `validity` still reaches the
+        // carrier. For an unheld campaign nothing changes.
         schedule:
           scheduledAtMs === null && validityMinutes === null
             ? null

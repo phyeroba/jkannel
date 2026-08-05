@@ -20,10 +20,16 @@ export interface SqlboxSubmission {
    * sqlbox from the moment it picks the row up. null leaves the column NULL,
    * which sqlbox decodes as SMS_PARAM_UNDEFINED ("no preference").
    *
-   * This is a request to the CARRIER (it becomes submit_sm.schedule_delivery_time
-   * on an SMPP bind), not a hold anywhere inside JKANNEL or Kannel — see
-   * messaging-depth/message-scheduling.ts for the full, honest semantics,
-   * including the fact that the `smsc = fake` bind ignores it entirely.
+   * This column is a request to the CARRIER (it becomes
+   * submit_sm.schedule_delivery_time on an SMPP bind), which most refuse and the
+   * `smsc = fake` bind ignores outright. It is NOT what makes "send later" work.
+   *
+   * Operator-facing scheduling is a JKANNEL-side hold: the message never reaches
+   * this repository until its instant arrives (see
+   * messaging-depth/scheduled-send.service.ts and ADR-0008 Amendment 1). By the
+   * time a scheduled send is submitted here it is being sent NOW, so this field
+   * is normally null even for one. Set it only to ask a carrier that genuinely
+   * honours schedule_delivery_time to defer further on its own side.
    */
   deferredMinutes?: number | null;
   /**

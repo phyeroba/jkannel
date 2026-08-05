@@ -13,6 +13,7 @@ import {
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { Actor, BulkSendService, BULK_SEND_MAX_RECIPIENTS } from './bulk-send.service';
+import { ScheduledSendService } from './scheduled-send.service';
 import { parseMessageSchedule } from './message-scheduling';
 
 type Request = AuthenticatedRequest;
@@ -61,7 +62,10 @@ function parseRecipients(value: unknown): string[] {
 @Controller('bulk-send')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class BulkSendController {
-  constructor(private readonly service: BulkSendService) {}
+  constructor(
+    private readonly service: BulkSendService,
+    private readonly scheduling: ScheduledSendService,
+  ) {}
 
   /**
    * `smscId` is now OPTIONAL: omit it and the routing engine picks the bind for
@@ -69,14 +73,17 @@ export class BulkSendController {
    * state and live bind health. `customerId` attributes the campaign so its
    * quota, credit, sender IDs and route bindings are enforced per message.
    *
-   * `scheduledAt` (ISO 8601) and `validityMinutes` schedule the whole campaign:
-   * every recipient inherits them and each one's `send_sms` row carries the
-   * corresponding `deferred` / `validity`. A past `scheduledAt`, or a validity
-   * that would expire at or before it, is a 400. See message-scheduling.ts for
-   * what deferral actually guarantees — on the `smsc = fake` bind, nothing.
+   * `scheduledAt` (ISO 8601 with offset) and `validityMinutes` schedule the
+   * whole campaign — SAME FIELDS, same validation, real behaviour. A future
+   * `scheduledAt` now genuinely HOLDS the campaign: it is created `scheduled`,
+   * the runner does not touch it, and a release job due at that instant moves
+   * it to `queued`, at which point every recipient is dispatched through the
+   * normal send path with its own routing, blocklist and entitlement checks
+   * evaluated THEN. Cancel or move it via `/scheduled-messages`. A past
+   * `scheduledAt`, or a validity that would expire at or before it, is a 400.
    */
   @Post() @RequirePermissions('configuration.manage') create(@Req() r: Request, @Body() b: any) {
-    return this.service.createJob(actor(r), {
+    return this.scheduling.submitBulk(actor(r), {
       name: text(b?.name, 'name'),
       smscId: optionalText(b?.smscId),
       message: text(b?.message, 'message'),

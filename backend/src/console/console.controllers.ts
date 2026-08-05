@@ -39,6 +39,7 @@ import { SmscService, SmscType } from '../smsc/smsc.service';
 import { RoutingService } from '../routing/routing.service';
 import { NotificationDeliveryService } from '../monitoring/notification-delivery.service';
 import { MessageSendService } from '../messaging-depth/message-send.service';
+import { ScheduledSendService } from '../messaging-depth/scheduled-send.service';
 import {
   MessageFilters,
   describeMessageFilters,
@@ -1168,6 +1169,10 @@ export class ReadModelsController {
     // entitlements and the recorded decision. Optional only so the existing
     // controller unit tests can construct it with the collaborators they need.
     private readonly send?: MessageSendService,
+    // "Send later". Sits in front of the send path and holds a message whose
+    // scheduledAt is in the future, releasing it into `send` at that instant.
+    // Optional for the same reason as `send`.
+    private readonly scheduling?: ScheduledSendService,
   ) {}
   /**
    * SQLBox tables are engine-owned and have no tenant column; every read is
@@ -1375,13 +1380,18 @@ export class ReadModelsController {
    * sender IDs, route bindings, quota and credit are enforced inside the same
    * transaction as the send.
    *
-   * SEND NOW vs SEND LATER. `scheduledAt` (ISO 8601) and `validityMinutes` map
-   * onto the engine's own `send_sms.deferred` / `send_sms.validity` columns —
-   * JKANNEL runs no scheduler of its own. A past `scheduledAt`, or a validity
-   * that would expire at or before it, is a 400 naming the problem. Read
-   * messaging-depth/message-scheduling.ts for what deferral does and does NOT
-   * guarantee: it is a request to the carrier, and the `smsc = fake` bind this
-   * deployment runs ignores it outright.
+   * SEND NOW vs SEND LATER. Same two fields as before — `scheduledAt` (ISO 8601
+   * with offset) and `validityMinutes` — but a future `scheduledAt` is now a
+   * REAL hold rather than a request to the carrier. The message is kept by
+   * JKANNEL and released into this same send path at the scheduled instant,
+   * where blocklist, routing, sender-ID approval, quota and credit are
+   * evaluated THEN, against the state that exists then. The response says
+   * `status: "scheduled"` with `sqlId: null`, because nothing has been
+   * submitted to the engine yet; list, cancel or move it via
+   * `/scheduled-messages`. `validityMinutes` still travels to the engine's
+   * `send_sms.validity` on the eventual submit — that one real SMPP carriers do
+   * honour. A past `scheduledAt`, or a validity that would expire at or before
+   * it, is a 400 naming the problem. See messaging-depth/message-scheduling.ts.
    */
   @Post('messages') @RequirePermissions('configuration.manage') async submit(
     @Req() r: Request,
@@ -1395,7 +1405,7 @@ export class ReadModelsController {
         : text(b.smscId, 'smscId');
     if (smscId && !allowed.includes(smscId))
       throw new BadRequestException('smscId must reference one of your tenant’s SMSCs');
-    return this.send!.send(actor(r), {
+    return this.scheduling!.submitMessage(actor(r), {
       sender: text(b.sender, 'sender'),
       receiver: text(b.receiver, 'receiver'),
       text: text(b.text, 'text'),

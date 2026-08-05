@@ -1,10 +1,15 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  DEFAULT_SCHEDULED_SEND_MAX_LATENESS_MINUTES,
   MAX_SCHEDULE_MINUTES,
+  SCHEDULED_SEND_ON_TIME_GRACE_MS,
+  classifyMissedWindow,
   deferredMinutesFor,
   describeSchedule,
   engineScheduleColumns,
   parseMessageSchedule,
+  requiresHold,
+  scheduledSendMaxLatenessMs,
 } from './message-scheduling';
 
 const NOW = Date.parse('2026-08-05T12:00:00Z');
@@ -156,5 +161,104 @@ describe('describeSchedule', () => {
     expect(describeSchedule({ scheduledAtMs: NOW, validityMinutes: 30 })).toBe(
       'scheduledAt=2026-08-05T12:00:00.000Z, validityMinutes=30',
     );
+  });
+});
+
+// ===========================================================================
+// Release policy
+// ===========================================================================
+
+/**
+ * The hold decision. Getting this wrong in either direction is a real defect:
+ * holding a "send now" message turns an immediate send into a scheduled one,
+ * and failing to hold a future one is the bug this whole change set removes.
+ */
+describe('requiresHold', () => {
+  it('holds a genuinely future instant', () => {
+    expect(requiresHold({ scheduledAtMs: NOW + 60 * 60_000, validityMinutes: null }, NOW)).toBe(
+      true,
+    );
+  });
+
+  it('does not hold an absent schedule, or one carrying only a validity', () => {
+    expect(requiresHold(null, NOW)).toBe(false);
+    expect(requiresHold(undefined, NOW)).toBe(false);
+    expect(requiresHold({ scheduledAtMs: null, validityMinutes: 60 }, NOW)).toBe(false);
+  });
+
+  it('does not hold an instant inside the 60s past grace — that is "now"', () => {
+    // What a datetime-local picker produces when the operator means "now".
+    expect(requiresHold({ scheduledAtMs: NOW - 30_000, validityMinutes: null }, NOW)).toBe(false);
+    expect(requiresHold({ scheduledAtMs: NOW + 30_000, validityMinutes: null }, NOW)).toBe(false);
+    // Just outside it, so a real wait exists to honour.
+    expect(requiresHold({ scheduledAtMs: NOW + 61_000, validityMinutes: null }, NOW)).toBe(true);
+  });
+});
+
+describe('scheduledSendMaxLatenessMs', () => {
+  it('defaults to two hours', () => {
+    expect(scheduledSendMaxLatenessMs({} as NodeJS.ProcessEnv)).toBe(
+      DEFAULT_SCHEDULED_SEND_MAX_LATENESS_MINUTES * 60_000,
+    );
+  });
+
+  it('is configurable, including down to zero (no catch-up at all)', () => {
+    expect(scheduledSendMaxLatenessMs({ SCHEDULED_SEND_MAX_LATENESS_MINUTES: '15' } as any)).toBe(
+      15 * 60_000,
+    );
+    expect(scheduledSendMaxLatenessMs({ SCHEDULED_SEND_MAX_LATENESS_MINUTES: '0' } as any)).toBe(0);
+  });
+
+  it('falls back to the default rather than accepting nonsense', () => {
+    const fallback = DEFAULT_SCHEDULED_SEND_MAX_LATENESS_MINUTES * 60_000;
+    for (const raw of ['', 'soon', '-5', String(MAX_SCHEDULE_MINUTES + 1)])
+      expect(scheduledSendMaxLatenessMs({ SCHEDULED_SEND_MAX_LATENESS_MINUTES: raw } as any)).toBe(
+        fallback,
+      );
+  });
+});
+
+describe('classifyMissedWindow', () => {
+  const ceiling = 120 * 60_000;
+
+  it('is on time when the release happens at (or a hair after) the instant', () => {
+    expect(classifyMissedWindow(NOW, NOW, ceiling)).toMatchObject({
+      action: 'release',
+      late: false,
+      latenessMs: 0,
+    });
+    expect(classifyMissedWindow(NOW, NOW + SCHEDULED_SEND_ON_TIME_GRACE_MS, ceiling)).toMatchObject(
+      {
+        action: 'release',
+        late: false,
+      },
+    );
+  });
+
+  it('never reports negative lateness when the worker runs a touch early', () => {
+    expect(classifyMissedWindow(NOW, NOW - 500, ceiling).latenessMs).toBe(0);
+  });
+
+  it('releases late — the catch-up case — inside the ceiling', () => {
+    expect(classifyMissedWindow(NOW, NOW + 45 * 60_000, ceiling)).toMatchObject({
+      action: 'release',
+      late: true,
+      latenessMs: 45 * 60_000,
+    });
+    // The boundary itself still releases; only past it does the message expire.
+    expect(classifyMissedWindow(NOW, NOW + ceiling, ceiling).action).toBe('release');
+  });
+
+  it('expires beyond the ceiling rather than delivering something wildly stale', () => {
+    expect(classifyMissedWindow(NOW, NOW + ceiling + 1, ceiling).action).toBe('expire');
+    expect(classifyMissedWindow(NOW, NOW + 3 * 24 * 60 * 60_000, ceiling)).toMatchObject({
+      action: 'expire',
+      late: true,
+    });
+  });
+
+  it('with a zero ceiling, still tolerates the on-time grace and expires anything beyond it', () => {
+    expect(classifyMissedWindow(NOW, NOW + 30_000, 0).action).toBe('release');
+    expect(classifyMissedWindow(NOW, NOW + 90_000, 0).action).toBe('expire');
   });
 });

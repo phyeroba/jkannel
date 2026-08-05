@@ -5,12 +5,28 @@ import { parseInstant } from './message-filters';
  * THE scheduling contract: "send later" and "give up after".
  *
  * ---------------------------------------------------------------------------
- * WHY THERE IS NO JKANNEL-SIDE SCHEDULER
+ * WHERE THE HOLD LIVES — JKANNEL, NOT THE CARRIER
  * ---------------------------------------------------------------------------
- * Kannel already carries both concepts end to end, and duplicating them here
- * would mean two clocks, two retry stories and a spool JKANNEL has to babysit.
- * The engine path, verified against the SQLBox and Kannel sources rather than
- * assumed:
+ * A future `scheduledAt` is held by JKANNEL and released into the normal send
+ * path at the scheduled instant. See scheduled-send.service.ts for the
+ * mechanism and migration 042 for the table. In short: a held message is a row
+ * in `scheduled_messages` plus an `api_jobs` row of type
+ * `message.scheduled.release` whose `next_attempt_at` IS the scheduled instant,
+ * so the Wave-F queue's `FOR UPDATE SKIP LOCKED` claim releases it exactly
+ * once, across any number of replicas, and entitlements are evaluated when the
+ * message is actually sent rather than when it was scheduled.
+ *
+ * This file remains the single place that PARSES and VALIDATES a schedule, and
+ * the single place that maps a schedule onto the engine's columns at submit
+ * time. What changed is only that a future instant no longer reaches the engine
+ * as a deferral: by the time the release happens, `scheduledAtMs` is in the
+ * past and {@link deferredMinutesFor} collapses to 0 — send now.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY NOT LEAVE IT TO THE ENGINE — the finding this design answers
+ * ---------------------------------------------------------------------------
+ * The engine path was verified against the SQLBox and Kannel sources rather
+ * than assumed:
  *
  *   1. `send_sms.deferred` / `send_sms.validity` are bigint columns holding
  *      RELATIVE MINUTES. NULL means "not set".
@@ -24,37 +40,32 @@ import { parseInstant } from './message-filters';
  *          deferred -> submit_sm.schedule_delivery_time
  *          validity -> submit_sm.validity_period
  *
- * ---------------------------------------------------------------------------
- * WHAT THAT DOES AND DOES NOT GUARANTEE — READ THIS BEFORE PROMISING A USER
- * ---------------------------------------------------------------------------
- * `deferred` is a REQUEST TO THE CARRIER, not a hold. Nothing between the
- * console and the SMSC keeps the message back: JKANNEL inserts it immediately,
- * sqlbox forwards it immediately, bearerbox submits it immediately, and the
- * SMSC is the only party that is asked to sit on it until
- * `schedule_delivery_time`. Therefore:
+ * `deferred` is therefore a REQUEST TO THE CARRIER, not a hold. Nothing between
+ * the console and the SMSC keeps the message back, and:
  *
- *   - On an SMPP bind whose carrier honours scheduled delivery, it works.
  *   - Many carriers reject a submit_sm carrying schedule_delivery_time outright
  *     (Kannel's own documentation warns the parameter "is hated by the SMSC in
- *     99% of the cases"). A scheduled send can therefore FAIL where the same
- *     message sent immediately would succeed. Confirm with the carrier first.
- *   - On the `smsc = fake` bind this deployment currently runs
- *     (infrastructure/kannel/kamex.conf), it does NOTHING. gw/smsc/smsc_fake.c
- *     contains no reference to `deferred` or `validity` at all: the fake bearer
- *     delivers the message at once. Scheduling against a fake bind is recorded
- *     faithfully in `send_sms` and then ignored by the bearer.
+ *     99% of the cases"), so a scheduled send could FAIL where the same message
+ *     sent immediately would succeed.
+ *   - On the `smsc = fake` bind this deployment runs
+ *     (infrastructure/kannel/kamex.conf) it does NOTHING at all:
+ *     gw/smsc/smsc_fake.c contains no reference to `deferred` or `validity`, so
+ *     the fake bearer delivers immediately.
  *
- * The columns are written correctly and honestly; whether the message is
- * actually held is the bearer's decision, and on this stack today it is not.
+ * That is why "send later" is now held control-plane side. `validity` is a
+ * different matter and is NOT reimplemented: real SMPP carriers do honour
+ * validity_period, so it stays an engine concern and is written onto the
+ * `send_sms` row of the eventual submission exactly as before.
  *
  * ---------------------------------------------------------------------------
  * TIME BASE
  * ---------------------------------------------------------------------------
- * Because sqlbox anchors the offset to ITS pickup time and not to our insert
- * time, the offset is computed as late as possible — at the moment of the
- * `send_sms` INSERT — and never at request-parse time. sqlbox drains the spool
- * in well under a second, so the residual skew is sub-minute; the offset is
- * rounded UP so a message is never released early.
+ * Everything is stored and compared in UTC; the API accepts ISO 8601 with an
+ * offset. Because sqlbox anchors any residual offset to ITS pickup time and not
+ * to our insert time, {@link engineScheduleColumns} is still evaluated as late
+ * as possible — at the moment of the `send_sms` INSERT — and never at
+ * request-parse time. The offset is rounded UP so a message is never released
+ * early.
  */
 
 /** Kannel's SMS_PARAM_UNDEFINED. A NULL column decodes to this. */
@@ -184,6 +195,92 @@ export function engineScheduleColumns(
     deferredMinutes: deferredMinutesFor(schedule?.scheduledAtMs ?? null, now),
     validityMinutes: schedule?.validityMinutes ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// RELEASE POLICY
+// ---------------------------------------------------------------------------
+
+/**
+ * How late a release may be and still go out.
+ *
+ * If the platform is down across a scheduled instant, catching up is usually
+ * what the operator wants — a reminder released at 09:07 for a 09:00 schedule
+ * is fine. Catching up WITHOUT A CEILING is not: an SMS that arrives three days
+ * late can be worse than one that never arrives (a one-time code, a "your
+ * delivery is arriving today", an event reminder for an event that has ended).
+ *
+ * Default: 120 minutes. Chosen to cover an ordinary restart, deploy or short
+ * outage while still being inside the window where the message plausibly still
+ * means what it said. Override with SCHEDULED_SEND_MAX_LATENESS_MINUTES; 0
+ * disables catch-up entirely (anything not released within
+ * {@link SCHEDULED_SEND_ON_TIME_GRACE_MS} expires).
+ *
+ * Beyond the ceiling the message is NOT delivered: it is marked `expired` with
+ * the lateness recorded, which is a refusal an operator can see rather than a
+ * stale delivery they cannot undo.
+ */
+export const DEFAULT_SCHEDULED_SEND_MAX_LATENESS_MINUTES = 120;
+
+/**
+ * Lateness under which a release is still "on time". One minute matches both
+ * the worker's default tick and the minute truncation of a `datetime-local`
+ * picker, so an ordinary release is never flagged as late.
+ */
+export const SCHEDULED_SEND_ON_TIME_GRACE_MS = 60_000;
+
+/** The configured staleness ceiling in milliseconds. */
+export function scheduledSendMaxLatenessMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.SCHEDULED_SEND_MAX_LATENESS_MINUTES;
+  const parsed = raw === undefined || raw === '' ? NaN : Number(raw);
+  const minutes =
+    Number.isFinite(parsed) && parsed >= 0 && parsed <= MAX_SCHEDULE_MINUTES
+      ? parsed
+      : DEFAULT_SCHEDULED_SEND_MAX_LATENESS_MINUTES;
+  return Math.round(minutes * 60_000);
+}
+
+/** What the release path decided to do about a missed window. */
+export type MissedWindowVerdict =
+  | { action: 'release'; late: false; latenessMs: number; ceilingMs: number }
+  | { action: 'release'; late: true; latenessMs: number; ceilingMs: number }
+  | { action: 'expire'; late: true; latenessMs: number; ceilingMs: number };
+
+/**
+ * The missed-window decision, isolated so it is testable without a database.
+ *
+ * `latenessMs` is clamped at 0: a release that runs a few milliseconds early
+ * (clock skew between the claim and this check) is on time, not negatively
+ * late.
+ */
+export function classifyMissedWindow(
+  scheduledAtMs: number,
+  now = Date.now(),
+  ceilingMs = scheduledSendMaxLatenessMs(),
+): MissedWindowVerdict {
+  const latenessMs = Math.max(0, now - scheduledAtMs);
+  if (latenessMs > ceilingMs && latenessMs > SCHEDULED_SEND_ON_TIME_GRACE_MS)
+    return { action: 'expire', late: true, latenessMs, ceilingMs };
+  if (latenessMs > SCHEDULED_SEND_ON_TIME_GRACE_MS)
+    return { action: 'release', late: true, latenessMs, ceilingMs };
+  return { action: 'release', late: false, latenessMs, ceilingMs };
+}
+
+/**
+ * Does this schedule need to be HELD, or can it be sent straight away?
+ *
+ * The 60s grace is the same one {@link parseMessageSchedule} applies to a past
+ * instant, and for the same reason: a `datetime-local` value the operator means
+ * as "now" is up to 59 seconds stale by the time it arrives. Holding such a
+ * message for zero seconds would turn an immediate send into a scheduled one
+ * and change its response shape for no benefit.
+ */
+export function requiresHold(
+  schedule: MessageSchedule | null | undefined,
+  now = Date.now(),
+): boolean {
+  const at = schedule?.scheduledAtMs;
+  return at !== null && at !== undefined && at > now + SCHEDULE_PAST_GRACE_MS;
 }
 
 /** Human-readable rendering for an audit reason / export header. */

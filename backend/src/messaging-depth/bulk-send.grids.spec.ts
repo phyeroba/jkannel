@@ -286,12 +286,19 @@ describe('scheduled campaigns', () => {
     });
   });
 
-  it('claims scheduled jobs on the same tick as queued ones', async () => {
+  /**
+   * The regression that matters most in this file. `scheduled` used to be a
+   * label the runner ignored: a campaign booked for 09:00 tomorrow was claimed
+   * on the very next tick and the wait was pushed onto each recipient's engine
+   * row as `send_sms.deferred` — which most carriers refuse and the `fake` bind
+   * ignores outright, so it went out immediately. `scheduled` is now a real
+   * hold: only the release job, due at the campaign's instant, moves it to
+   * `queued`, and only then may this runner touch it.
+   */
+  it('will not dispatch a scheduled campaign — only a released one', async () => {
     const { service, calls } = makeService();
     await service.processJob('1', 'job-1').catch(() => undefined);
     const claim = calls.find((call) => call.sql.includes("SET status='running'"));
-    // The wait lives on the engine row, not in a JKANNEL timer: 'scheduled' is
-    // a label for the grid, never a gate on dispatch.
-    expect(claim!.params[1]).toEqual(['queued', 'scheduled']);
+    expect(claim!.params[1]).toEqual(['queued']);
   });
 });

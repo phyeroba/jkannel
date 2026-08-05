@@ -13,6 +13,33 @@ export interface CreateJobInput {
   type: string;
   input?: unknown;
   idempotencyKey?: string;
+  /**
+   * Instant at which the job first becomes claimable — written to
+   * `next_attempt_at`. Omitted (the default) means "now".
+   *
+   * This is the one addition that turns the queue into a scheduler, and it is
+   * deliberately the ONLY addition: the claim predicate is already
+   * `status='queued' AND next_attempt_at <= now() ... FOR UPDATE SKIP LOCKED`,
+   * so a job stamped with a future instant is invisible to every worker until
+   * that instant and is then claimed by exactly one of them. A scheduled send
+   * is therefore a job whose `next_attempt_at` IS the scheduled instant, and it
+   * inherits retry with backoff, bounded attempts, dead-lettering and
+   * stale-claim reaping for free rather than through a second scheduler.
+   */
+  runAt?: Date | string | number | null;
+}
+
+/**
+ * Normalises {@link CreateJobInput.runAt} to a Date, or null for "now".
+ * A value that is not a real instant is a 400 rather than a job that would
+ * either run immediately or never.
+ */
+function parseRunAt(value: CreateJobInput['runAt'], field = 'runAt'): Date | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime()))
+    throw new BadRequestException(`${field} must be a valid instant (ISO 8601, Date or epoch ms)`);
+  return parsed;
 }
 
 /** A row of `api_jobs` as extended by migration 034. */
@@ -76,6 +103,12 @@ const JOB_COLUMNS =
  * `queued` with an exponential `next_attempt_at`, until `max_attempts` is
  * reached, at which point it becomes terminal `dead_letter` — visible, never
  * silently retried forever, and never reported as success.
+ *
+ * The same `next_attempt_at` that schedules a retry also schedules FIRST
+ * execution ({@link CreateJobInput.runAt}), which is what lets deferred work —
+ * notably a "send later" message hold, see
+ * messaging-depth/scheduled-send.service.ts — be expressed as an ordinary job
+ * due at a future instant. Nothing in this file special-cases it.
  */
 @Injectable()
 export class JobsService {
@@ -86,6 +119,27 @@ export class JobsService {
 
   // ---- submission ---------------------------------------------------------
   async create(actor: JobActor, value: CreateJobInput) {
+    // Validate BEFORE opening a transaction so a rejected submission costs no
+    // connection and writes nothing.
+    const prepared = this.prepare(value);
+    return this.database.tenantTransaction(actor.tenantId, (client) =>
+      this.insert(client, actor, value, prepared),
+    );
+  }
+
+  /**
+   * Submission body against a caller-supplied client, so a domain can enqueue a
+   * job in the SAME transaction as the row the job will act on. The
+   * scheduled-send hold uses this: the held message and its release job are
+   * either both committed or neither is, so there is never a hold with no
+   * releaser (a message reported as scheduled that would never be sent) nor a
+   * releaser with no hold.
+   */
+  async createOn(client: PoolClient, actor: JobActor, value: CreateJobInput) {
+    return this.insert(client, actor, value, this.prepare(value));
+  }
+
+  private prepare(value: CreateJobInput): { maxAttempts: number; runAt: Date | null } {
     if (typeof value?.type !== 'string' || !JOB_TYPE_PATTERN.test(value.type))
       throw new BadRequestException('type must be a lowercase job type identifier');
     if (
@@ -99,32 +153,39 @@ export class JobsService {
     const registration = this.registry.require(value.type);
     if (value.input !== undefined && value.input !== null && typeof value.input !== 'object')
       throw new BadRequestException('input must be an object');
+    return { maxAttempts: registration.maxAttempts, runAt: parseRunAt(value.runAt) };
+  }
 
-    return this.database.tenantTransaction(actor.tenantId, async (client) => {
-      if (value.idempotencyKey) {
-        const existing = (
-          await client.query<JobRow>(
-            `SELECT ${JOB_COLUMNS} FROM api_jobs WHERE type=$1 AND idempotency_key=$2`,
-            [value.type, value.idempotencyKey],
-          )
-        ).rows[0];
-        if (existing) return { ...existing, replayed: true };
-      }
-      return (
+  private async insert(
+    client: PoolClient,
+    actor: JobActor,
+    value: CreateJobInput,
+    prepared: { maxAttempts: number; runAt: Date | null },
+  ) {
+    if (value.idempotencyKey) {
+      const existing = (
         await client.query<JobRow>(
-          `INSERT INTO api_jobs(tenant_id,type,input,requested_by,idempotency_key,max_attempts,next_attempt_at)
-           VALUES($1,$2,$3,$4,$5,$6,now()) RETURNING ${JOB_COLUMNS}`,
-          [
-            actor.tenantId,
-            value.type,
-            JSON.stringify(value.input ?? {}),
-            actor.userId,
-            value.idempotencyKey ?? null,
-            registration.maxAttempts,
-          ],
+          `SELECT ${JOB_COLUMNS} FROM api_jobs WHERE type=$1 AND idempotency_key=$2`,
+          [value.type, value.idempotencyKey],
         )
       ).rows[0];
-    });
+      if (existing) return { ...existing, replayed: true };
+    }
+    return (
+      await client.query<JobRow>(
+        `INSERT INTO api_jobs(tenant_id,type,input,requested_by,idempotency_key,max_attempts,next_attempt_at)
+           VALUES($1,$2,$3,$4,$5,$6,COALESCE($7::timestamptz, now())) RETURNING ${JOB_COLUMNS}`,
+        [
+          actor.tenantId,
+          value.type,
+          JSON.stringify(value.input ?? {}),
+          actor.userId,
+          value.idempotencyKey ?? null,
+          prepared.maxAttempts,
+          prepared.runAt,
+        ],
+      )
+    ).rows[0];
   }
 
   // ---- reads --------------------------------------------------------------
@@ -162,17 +223,48 @@ export class JobsService {
 
   async cancel(actor: JobActor, id: string, reason?: string) {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
-      const row = (
-        await client.query<JobRow>(
-          `UPDATE api_jobs SET status='cancelled',progress=100,error=$2,last_error=$2,
-                  completed_at=now(),updated_at=now(),claimed_by=NULL,heartbeat_at=NULL
-             WHERE id=$1 AND status IN ('queued','running') RETURNING ${JOB_COLUMNS}`,
-          [id, reason ?? 'Cancelled by operator'],
-        )
-      ).rows[0];
+      const row = await this.cancelOn(client, id, reason);
       if (!row) throw new NotFoundException('Cancellable job not found');
       return row;
     });
+  }
+
+  /**
+   * Cancel body against a caller-supplied client. Returns undefined when the
+   * job is no longer cancellable — the caller decides what that means, because
+   * "the worker got there first" is a legitimate outcome for a scheduled send
+   * cancellation and a 404 would misdescribe it.
+   */
+  async cancelOn(client: PoolClient, id: string, reason?: string): Promise<JobRow | undefined> {
+    return (
+      await client.query<JobRow>(
+        `UPDATE api_jobs SET status='cancelled',progress=100,error=$2,last_error=$2,
+                completed_at=now(),updated_at=now(),claimed_by=NULL,heartbeat_at=NULL
+           WHERE id=$1 AND status IN ('queued','running') RETURNING ${JOB_COLUMNS}`,
+        [id, reason ?? 'Cancelled by operator'],
+      )
+    ).rows[0];
+  }
+
+  /**
+   * Moves a still-queued job's due instant. Returns undefined when the row is
+   * no longer `queued` — i.e. a worker already claimed it — which is precisely
+   * the race a reschedule must lose rather than paper over: the caller then
+   * reports "already released" instead of silently changing nothing.
+   */
+  async rescheduleOn(
+    client: PoolClient,
+    id: string,
+    runAt: Date | string | number,
+  ): Promise<JobRow | undefined> {
+    const when = parseRunAt(runAt, 'scheduledAt')!;
+    return (
+      await client.query<JobRow>(
+        `UPDATE api_jobs SET next_attempt_at=$2,updated_at=now()
+           WHERE id=$1 AND status='queued' RETURNING ${JOB_COLUMNS}`,
+        [id, when],
+      )
+    ).rows[0];
   }
 
   // ---- worker-side queue operations ---------------------------------------

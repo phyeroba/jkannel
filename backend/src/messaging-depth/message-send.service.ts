@@ -48,15 +48,35 @@ export interface SendRequest {
   cost?: number | null;
   /**
    * Deferred delivery + expiry, already parsed and validated by
-   * {@link parseMessageSchedule}. Resolved into `send_sms.deferred` /
+   * `parseMessageSchedule`. Resolved into `send_sms.deferred` /
    * `send_sms.validity` (relative minutes) at the instant of the INSERT, which
    * is what the engine's time base requires.
    *
-   * A deferral is a request to the CARRIER, not a hold: nothing in JKANNEL or
-   * Kannel keeps the message back. Read message-scheduling.ts before telling a
-   * user their message is "scheduled".
+   * A FUTURE `scheduledAt` never reaches this service: it is held by
+   * {@link ScheduledSendService} and released here at the scheduled instant, by
+   * which time the offset has collapsed to 0. What arrives here is either a
+   * schedule whose instant has come, or one carrying only `validityMinutes` —
+   * and validity IS honoured by real SMPP carriers, so it is still written onto
+   * the engine row. See message-scheduling.ts.
    */
   schedule?: MessageSchedule | null;
+
+  /**
+   * Invoked INSIDE the send transaction, with the same client, immediately
+   * after the engine submission and the audit row — the last thing before
+   * COMMIT. Throwing from it rolls the ENTIRE send back: no quota consumed, no
+   * debit posted, no decision claiming a send that did not happen.
+   *
+   * It exists so a caller can record the fact of the send atomically with the
+   * send itself. The scheduled-send release uses it to flip its hold from
+   * `releasing` to `released` in the same commit, which is what makes a
+   * crash mid-release non-duplicating: a hold left in `releasing` provably did
+   * not send, so retrying it is safe.
+   */
+  onSubmitted?: (
+    client: PoolClient,
+    submitted: { sqlId: string; decisionId: string },
+  ) => Promise<void>;
 }
 
 export interface SendResult {
@@ -353,6 +373,11 @@ export class MessageSendService {
             record.reason,
           ],
         );
+
+        // Last statement before COMMIT, deliberately: whatever the caller
+        // records here is committed with the send or lost with it, never half.
+        if (request.onSubmitted)
+          await request.onSubmitted(client, { sqlId: queued.sqlId, decisionId });
 
         return {
           sqlId: queued.sqlId,

@@ -105,8 +105,103 @@ Revisit if any of the following becomes true:
 - JKANNEL is required to route across multiple independent engines simultaneously, where
   a coordinating queue above the engines may become unavoidable.
 
+---
+
+## Amendment 1 — Scheduled sends are held by JKANNEL (2026-08-05)
+
+**Status:** Accepted. Additive; the decision above is unchanged.
+
+### What prompted it
+
+"Send later" did not work. `scheduledAt` was written onto the engine row as
+`send_sms.deferred`, which sqlbox turns into SMPP `schedule_delivery_time` — a
+**request to the carrier**, not a hold. Most carriers refuse it (Kannel's own
+documentation warns the parameter "is hated by the SMSC in 99% of the cases"),
+and the `smsc = fake` bind this deployment runs ignores it outright:
+`gw/smsc/smsc_fake.c` contains no reference to `deferred` at all. A message
+scheduled for 09:00 tomorrow was recorded faithfully and then delivered
+immediately. The console said "scheduled"; the handset disagreed.
+
+### Decision
+
+**JKANNEL holds explicitly deferred messages itself and releases them into the
+existing send path at the scheduled instant.** The engine is not modified, not
+forked, and not asked to do anything it does not already do.
+
+### Why this is not the outbound queue this ADR rejected
+
+The rejected alternative was a JKANNEL table in front of **every** message, with
+JKANNEL deciding when each one was safe to release based on bind health. That
+would have duplicated retry, throttling, windowing, store-and-forward, DLR
+correlation and SMPP flow control, and put the control plane on the critical
+path of all traffic — so a control-plane bug would become a message-loss bug.
+Every word of that reasoning still stands.
+
+Scheduling is a different thing in three specific ways:
+
+| | Rejected outbound queue | Scheduled-send hold |
+|---|---|---|
+| **What it holds** | all outbound traffic | only messages an operator explicitly deferred |
+| **When it holds** | after the send decision, in front of the bearer | before the message enters the data plane at all |
+| **What it decides** | *whether the bind is healthy enough to release* — an engine concern | *whether the requested instant has arrived* — a control-plane concern |
+
+Once released, the message goes through `MessageSendService` exactly as an
+immediate send does and the engine's behaviour is byte-for-byte unchanged.
+Immediate traffic — the overwhelming majority — never touches the hold. The
+control plane is not on the critical path of anything it was not already on.
+
+The distinction in one line: **"when should this be submitted?" is a
+control-plane question; "how is it delivered once submitted?" remains the
+engine's.** Nothing here gives JKANNEL custody of in-flight message state, which
+is what the decision above protects.
+
+`validityMinutes` is deliberately **not** reimplemented. Real SMPP carriers do
+honour `validity_period`, so it stays an engine concern and is still written onto
+the `send_sms` row of the eventual submission.
+
+### Implementation, in brief
+
+A held send is a `scheduled_messages` row (migration 042) plus an `api_jobs` row
+of type `message.scheduled.release` whose `next_attempt_at` **is** the scheduled
+instant. No new scheduler was written: the existing job queue already claims due
+work with `FOR UPDATE SKIP LOCKED` (so N replicas release a message exactly
+once), and already provides backoff, bounded attempts, dead-lettering and
+stale-claim reaping.
+
+Three consequences worth recording:
+
+- **Entitlements are evaluated at release, never at schedule time.** Quota,
+  credit, sender-ID approval, blocklist and routing are all checked at the
+  moment of sending, so a message scheduled at midnight consumes the 09:00
+  quota and is refused if the customer's standing has changed overnight.
+- **Missed windows have a decided outcome.** If the platform is down across the
+  scheduled instant, the message is released late and flagged, up to a
+  configurable staleness ceiling (`SCHEDULED_SEND_MAX_LATENESS_MINUTES`,
+  default 120). Beyond that it is marked `expired` and **not** sent, because an
+  SMS arriving three days late can be worse than one that never arrives.
+- **Held messages are cancellable and reschedulable; released ones are not,**
+  and the API answers 409 saying so rather than reporting a cancellation that
+  stopped nothing.
+
+### New risk this introduces
+
+JKANNEL now holds message content at rest for the duration of a hold, and a
+JKANNEL outage spanning a scheduled instant delays — or, past the ceiling,
+prevents — that delivery. That is inherent to scheduling anywhere, and is the
+cost of the capability being real; it is bounded to deferred traffic only, and
+immediate delivery remains independent of the control plane exactly as this ADR
+requires.
+
+### Future review
+
+Revisit if an engine JKANNEL supports gains a *reliable* server-side hold (not
+`schedule_delivery_time` passed to a carrier), at which point delegating the
+wait to the adapter would be preferable to holding it here.
+
 ## References
 
 - ADR-0007 — heterogeneous engine support via the Engine Adapter contract
 - `project/SPEC_GAP_ANALYSIS.md` — three integration voids and the build order
 - `backend/src/queue-console/` — the implementation of the capabilities listed above
+- `backend/src/messaging-depth/scheduled-send.service.ts` — the scheduled-send hold (Amendment 1)
+- `database/migrations/042_scheduled_messages.up.sql` — the hold's storage and RLS

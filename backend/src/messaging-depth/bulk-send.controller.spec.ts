@@ -11,25 +11,31 @@ describe('BulkSendController', () => {
     getJob: jest.fn(() => Promise.resolve({ id: validId })),
     listRecipients: jest.fn(() => Promise.resolve({ items: [] })),
   };
+  /**
+   * Creation goes through ScheduledSendService, which decides between "create
+   * and dispatch now" and "hold until scheduledAt". The controller's job is
+   * only to validate and normalise, so that is all this spec asserts.
+   */
+  const scheduling: any = { submitBulk: jest.fn(() => Promise.resolve({ id: validId })) };
   beforeEach(() => jest.clearAllMocks());
 
   it('requires a name, smscId, message and recipients', () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     expect(() =>
       controller.create(request, { smscId: 's', message: 'm', recipients: ['+100'] }),
     ).toThrow(BadRequestException);
-    expect(service.createJob).not.toHaveBeenCalled();
+    expect(scheduling.submitBulk).not.toHaveBeenCalled();
   });
 
   it('rejects a non-array recipients value', () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     expect(() =>
       controller.create(request, { name: 'c', smscId: 's', message: 'm', recipients: 'nope' }),
     ).toThrow(BadRequestException);
   });
 
   it('rejects a recipient that is not an E.164-like address', () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     expect(() =>
       controller.create(request, {
         name: 'c',
@@ -41,14 +47,14 @@ describe('BulkSendController', () => {
   });
 
   it('normalizes a valid create into actor + input', async () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     await controller.create(request, {
       name: '  Campaign  ',
       smscId: '  carrier-a  ',
       message: '  hi  ',
       recipients: [' +256700000000 ', '+256711111111'],
     });
-    expect(service.createJob).toHaveBeenCalledWith(
+    expect(scheduling.submitBulk).toHaveBeenCalledWith(
       { tenantId: '1', userId: 'u1' },
       {
         name: 'Campaign',
@@ -63,13 +69,13 @@ describe('BulkSendController', () => {
   });
 
   it('validates the job id on read endpoints', () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     expect(() => controller.get(request, 'not-a-uuid')).toThrow(BadRequestException);
     expect(() => controller.recipients(request, 'not-a-uuid', {})).toThrow(BadRequestException);
   });
 
   it('delegates list and detail to the service', async () => {
-    const controller = new BulkSendController(service);
+    const controller = new BulkSendController(service, scheduling);
     await controller.list(request, {});
     await controller.get(request, validId);
     await controller.recipients(request, validId, {});

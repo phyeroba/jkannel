@@ -289,12 +289,25 @@ describe('delivery report export parity', () => {
 // Scheduled single send
 // ===========================================================================
 describe('POST /messages scheduling', () => {
+  /**
+   * `POST /messages` now goes through ScheduledSendService, which decides
+   * between sending immediately and holding until `scheduledAt`. The controller
+   * still owns parsing and validation, so that is what this block asserts; the
+   * hold-vs-send decision itself is covered in scheduled-send.service.spec.ts.
+   */
   function makeSubmitController() {
-    const send: any = { send: jest.fn().mockResolvedValue({ sqlId: '1' }) };
+    const scheduling: any = { submitMessage: jest.fn().mockResolvedValue({ sqlId: '1' }) };
     const repository: any = { listTenantSmscEngineIds: jest.fn().mockResolvedValue(['carrier-a']) };
     return {
-      send,
-      controller: new ReadModelsController({} as any, undefined, repository, undefined, send),
+      send: scheduling,
+      controller: new ReadModelsController(
+        {} as any,
+        undefined,
+        repository,
+        undefined,
+        undefined,
+        scheduling,
+      ),
     };
   }
   const body = { sender: 'ACME', receiver: '+256700000000', text: 'hello' };
@@ -305,7 +318,7 @@ describe('POST /messages scheduling', () => {
     // row, so sub-second precision is deliberately not carried.
     const scheduledAt = new Date(Math.ceil((Date.now() + 3_600_000) / 1000) * 1000).toISOString();
     await controller.submit(request, { ...body, scheduledAt, validityMinutes: 120 });
-    expect(send.send).toHaveBeenCalledWith(
+    expect(send.submitMessage).toHaveBeenCalledWith(
       { tenantId: '7', userId: 'user-1' },
       expect.objectContaining({
         schedule: { scheduledAtMs: Date.parse(scheduledAt), validityMinutes: 120 },
@@ -318,7 +331,7 @@ describe('POST /messages scheduling', () => {
     await expect(
       controller.submit(request, { ...body, scheduledAt: '2020-01-01T00:00:00Z' }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(send.send).not.toHaveBeenCalled();
+    expect(send.submitMessage).not.toHaveBeenCalled();
   });
 
   it('rejects a validity that expires before the scheduled time', async () => {
@@ -330,13 +343,13 @@ describe('POST /messages scheduling', () => {
         validityMinutes: 30,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(send.send).not.toHaveBeenCalled();
+    expect(send.submitMessage).not.toHaveBeenCalled();
   });
 
   it('sends immediately, with an empty schedule, when none is given', async () => {
     const { controller, send } = makeSubmitController();
     await controller.submit(request, body);
-    expect(send.send.mock.calls[0][1].schedule).toEqual({
+    expect(send.submitMessage.mock.calls[0][1].schedule).toEqual({
       scheduledAtMs: null,
       validityMinutes: null,
     });
