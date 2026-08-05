@@ -49,6 +49,44 @@ interface SmscDefinitionRow {
   name: string;
 }
 
+/**
+ * Collapses the engine's per-connection bind reports into one entry per SMSC.
+ *
+ * Kamex's `instances = N` directive creates N connections from a single smsc
+ * group, all sharing one `smsc-id`, and /status.json reports each separately.
+ * Everything downstream is keyed on the SMSC definition, so they must be merged
+ * before use.
+ *
+ * Health is OR, not last-seen: a carrier is reachable while at least one of its
+ * connections is bound, and the engine spreads traffic across whichever are
+ * usable. Queue depth and failure counts are summed, because those are the
+ * carrier's totals. The surviving `status` is taken from a healthy connection
+ * when one exists so the state vocabulary stays a real engine token rather than
+ * a synthesised one; otherwise the first report is kept.
+ */
+export function collapseBindsByEngineId(binds: EngineBindSnapshot[]): EngineBindSnapshot[] {
+  const merged = new Map<string, EngineBindSnapshot>();
+  for (const bind of binds) {
+    const current = merged.get(bind.engineId);
+    if (!current) {
+      merged.set(bind.engineId, { ...bind });
+      continue;
+    }
+    const currentHealthy = isHealthy(toBindState(current.status));
+    const incomingHealthy = isHealthy(toBindState(bind.status));
+    merged.set(bind.engineId, {
+      ...current,
+      // Promote to a healthy token as soon as any connection reports one.
+      status: currentHealthy || !incomingHealthy ? current.status : bind.status,
+      queued: current.queued + bind.queued,
+      failed: current.failed + bind.failed,
+      sent: current.sent + bind.sent,
+      received: current.received + bind.received,
+    });
+  }
+  return [...merged.values()];
+}
+
 interface BindStateRow {
   state: string;
   consecutive_observations: number;
@@ -266,8 +304,18 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
       ).rows;
       const owned = new Map(definitions.map((row) => [row.engine_id, row]));
       // Only binds this tenant owns are ever considered; the engine is shared.
-      const binds = snapshot.binds.filter((bind) => owned.has(bind.engineId));
-      const boundCount = binds.filter((bind) => isHealthy(toBindState(bind.status))).length;
+      const observed = snapshot.binds.filter((bind) => owned.has(bind.engineId));
+      // Count every physical connection, before collapsing them per SMSC.
+      const boundCount = observed.filter((bind) => isHealthy(toBindState(bind.status))).length;
+      // One row per SMSC definition, not per connection. With `instances = N`
+      // the engine reports N binds sharing one engine_id; smsc_bind_state is
+      // keyed (tenant_id, smsc_id), so writing each one separately made N
+      // upserts race into a single row and the last writer won. A carrier with
+      // two healthy binds and one reconnecting could therefore be recorded as
+      // unbound and dropped from availableSmscIds, taking working capacity out
+      // of service. Collapse first: a carrier is usable while ANY of its
+      // connections is bound, and its depth/failures are the sum across them.
+      const binds = collapseBindsByEngineId(observed);
 
       await client.query(
         `INSERT INTO engine_poll_snapshots

@@ -10,6 +10,19 @@ import {
 export type SmscBindMode = 'transceiver' | 'transmitter' | 'receiver';
 
 /**
+ * `wait-ack-expire`: what the SMPP driver does when a submit_sm_resp does not
+ * arrive within `wait-ack` seconds. Values are the engine's own
+ * (gw/smsc/smsc_smpp.c SMPP_WAITACK_*), not an invention of this codebase.
+ */
+export type WaitAckExpireAction =
+  /** 0 — drop the session and rebuild the bind. */
+  | 0
+  /** 1 — requeue the message so any bind can carry it. Kamex's default. */
+  | 1
+  /** 2 — keep waiting forever. */
+  | 2;
+
+/**
  * One engine SMSC link. Mirrors the SMSC_MANAGER_SPEC_03 "Connection
  * Attributes" set and the columns added by migration 029, so a row in
  * `smsc_definitions` maps one-to-one onto this object.
@@ -53,6 +66,58 @@ export interface EngineSmsc {
   altCharset?: string;
   /** HTTP adapter submit endpoint. */
   sendUrl?: string;
+
+  // ---- Connection resilience (migration 041) --------------------------------
+
+  /**
+   * Number of parallel binds to open to this carrier, rendered as the engine's
+   * `instances` directive. bearerbox (gw/bb_smscconn.c, via
+   * `smscconn_instances`) creates this many connections from the single `smsc`
+   * group, all carrying this `id`, and its router spreads traffic over them.
+   *
+   * Undefined or 1 emits nothing, so a single-bind SMSC renders exactly as it
+   * did before this field existed. SMPP only — the `fake` and `http` adapters
+   * open a listening socket on `port`, so a second instance would collide.
+   */
+  connectionCount?: number;
+  /**
+   * Rendered as `connection-timeout`: seconds with no PDU response after which
+   * the SMPP driver declares a still-open socket dead and reconnects. This is
+   * the guard against an idle bind that is dead but not closed. Undefined keeps
+   * the engine's own default of 300s (10 x `enquire-link-interval`); 0 disables
+   * the check entirely.
+   */
+  connectionTimeoutSeconds?: number;
+  /** Rendered as `wait-ack-expire`. Undefined keeps the engine default (requeue). */
+  waitAckExpireAction?: WaitAckExpireAction;
+  /**
+   * Rendered as `retry`. Without it the SMPP driver stops for good when the
+   * carrier rejects the bind with an invalid system-id/password/system-type,
+   * so a transient authentication fault needs an operator to clear it.
+   */
+  retryOnAuthFailure?: boolean;
+
+  // ---- Declarative routing (migration 041) ----------------------------------
+  // Evaluated per message by the engine's `smscconn_usable()`. Lists render as
+  // semicolon-separated, double-quoted values.
+
+  /** `allowed-smsc-id`: hard whitelist of message smsc-id values. */
+  allowedSmscIds?: string[];
+  /** `denied-smsc-id`: hard blacklist. Ignored by the engine when allowedSmscIds is set. */
+  deniedSmscIds?: string[];
+  /**
+   * `preferred-smsc-id`: soft preference. A preferred link wins over a
+   * non-preferred one, but a non-preferred link still carries the traffic when
+   * no preferred link is usable — the engine's declarative "prefer A, fall back
+   * to B".
+   */
+  preferredSmscIds?: string[];
+  /** `allowed-prefix`: recipient MSISDN prefixes this link accepts. */
+  allowedPrefixes?: string[];
+  /** `denied-prefix`: recipient MSISDN prefixes this link refuses. */
+  deniedPrefixes?: string[];
+  /** `preferred-prefix`: recipient MSISDN prefixes this link is preferred for. */
+  preferredPrefixes?: string[];
 }
 
 export interface EngineSmsbox {
@@ -164,6 +229,22 @@ const DLR_DB_FIELDS: Array<[string, string]> = [
 const isInteger = (value: unknown, min: number, max: number) =>
   typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 
+/**
+ * The SMSC-group routing list fields, paired with the engine directive each one
+ * renders to. Kept as data so validation and rendering cannot drift apart.
+ */
+const ROUTING_LISTS: Array<[keyof EngineSmsc, string]> = [
+  ['allowedSmscIds', 'allowed-smsc-id'],
+  ['deniedSmscIds', 'denied-smsc-id'],
+  ['preferredSmscIds', 'preferred-smsc-id'],
+  ['allowedPrefixes', 'allowed-prefix'],
+  ['deniedPrefixes', 'denied-prefix'],
+  ['preferredPrefixes', 'preferred-prefix'],
+];
+
+/** Engine list values are semicolon separated, so an entry may not contain one. */
+const LIST_SEPARATOR = ';';
+
 @Injectable()
 export class ConfigurationGeneratorService {
   // @Optional + a default so modules that have not registered SecretResolver
@@ -229,6 +310,8 @@ export class ConfigurationGeneratorService {
       errors.push(`${smsc.id} reconnectDelaySeconds must be an integer between 0 and 3600`);
     if (smsc.waitAckSeconds !== undefined && !isInteger(smsc.waitAckSeconds, 1, 3600))
       errors.push(`${smsc.id} waitAckSeconds must be an integer between 1 and 3600`);
+    errors.push(...this.validateSmscResilience(smsc));
+    errors.push(...this.validateSmscRouting(smsc));
     if (smsc.type === 'http' && smsc.enabled && !smsc.sendUrl)
       errors.push(`${smsc.id} HTTP SMSC requires sendUrl`);
     // AT modems need device/speed/modemtype, which JKANNEL does not model. Say
@@ -237,6 +320,66 @@ export class ConfigurationGeneratorService {
       errors.push(
         `${smsc.id} AT modem SMSCs cannot be rendered: the modem device, speed and ` +
           'modem type attributes are not modelled yet',
+      );
+    return errors;
+  }
+
+  /** Parallel-bind count and the reconnect/idle-detection attributes. */
+  private validateSmscResilience(smsc: EngineSmsc): string[] {
+    const errors: string[] = [];
+    if (smsc.connectionCount !== undefined) {
+      if (!isInteger(smsc.connectionCount, 1, 64))
+        errors.push(`${smsc.id} connectionCount must be an integer between 1 and 64`);
+      // The fake and http adapters bind a *listening* socket on `port`
+      // (smsc_fake.c make_server_socket / smsc_http.c http_open_port), so a
+      // second instance of the same group cannot start. Only an SMPP link,
+      // which dials out, can be opened more than once.
+      else if (smsc.connectionCount > 1 && smsc.type !== 'smpp')
+        errors.push(
+          `${smsc.id} connectionCount above 1 is only supported for SMPP links; ` +
+            `the ${smsc.type} adapter listens on a single local port`,
+        );
+    }
+    if (
+      smsc.connectionTimeoutSeconds !== undefined &&
+      !isInteger(smsc.connectionTimeoutSeconds, 0, 86400)
+    )
+      errors.push(`${smsc.id} connectionTimeoutSeconds must be an integer between 0 and 86400`);
+    if (
+      smsc.waitAckExpireAction !== undefined &&
+      !([0, 1, 2] as unknown[]).includes(smsc.waitAckExpireAction)
+    )
+      errors.push(`${smsc.id} waitAckExpireAction must be 0, 1 or 2`);
+    return errors;
+  }
+
+  /** The allowed/denied/preferred smsc-id and prefix lists. */
+  private validateSmscRouting(smsc: EngineSmsc): string[] {
+    const errors: string[] = [];
+    for (const [field, directive] of ROUTING_LISTS) {
+      const list = smsc[field] as string[] | undefined;
+      if (list === undefined) continue;
+      if (!Array.isArray(list)) {
+        errors.push(`${smsc.id} ${String(field)} must be a list of strings`);
+        continue;
+      }
+      for (const entry of list) {
+        if (typeof entry !== 'string' || !entry.trim())
+          errors.push(`${smsc.id} ${String(field)} entries must be non-empty strings`);
+        else if (entry.includes(LIST_SEPARATOR))
+          errors.push(
+            `${smsc.id} ${String(field)} entry "${entry}" may not contain "${LIST_SEPARATOR}": ` +
+              `it separates values in ${directive}`,
+          );
+      }
+    }
+    // smscconn_usable() checks allowed-smsc-id first and only falls through to
+    // denied-smsc-id when allowed is unset, so setting both silently discards
+    // the deny list. Say so instead of rendering a rule that does nothing.
+    if (smsc.allowedSmscIds?.length && smsc.deniedSmscIds?.length)
+      errors.push(
+        `${smsc.id} cannot set both allowedSmscIds and deniedSmscIds: the engine ignores ` +
+          'denied-smsc-id whenever allowed-smsc-id is present',
       );
     return errors;
   }
@@ -382,6 +525,9 @@ export class ConfigurationGeneratorService {
       lines.push('group = smsc');
       push('smsc', smsc.type);
       push('smsc-id', smsc.id);
+      // One group, N binds. Omitted at 1 so a single-connection SMSC keeps its
+      // existing byte-for-byte output.
+      if ((smsc.connectionCount ?? 1) > 1) push('instances', smsc.connectionCount);
       push('host', smsc.host);
       push('port', smsc.port);
       if (smsc.type === 'smpp') this.renderSmppSmsc(smsc, push);
@@ -391,6 +537,7 @@ export class ConfigurationGeneratorService {
       push('reconnect-delay', smsc.reconnectDelaySeconds);
       push('max-error-count', smsc.maxErrorCount);
       push('alt-charset', smsc.altCharset);
+      this.renderSmscRouting(smsc, quoted);
     }
 
     if (model.smsbox) {
@@ -493,9 +640,72 @@ export class ConfigurationGeneratorService {
     push('dest-addr-ton', smsc.destAddrTon);
     push('dest-addr-npi', smsc.destAddrNpi);
     push('max-pending-submits', smsc.windowSize);
+    // Liveness. enquire-link-interval is the SMPP keepalive; connection-timeout
+    // is the "no response at all for this long, the socket is dead even though
+    // it is open" guard that actually triggers the reconnect. reconnect-delay
+    // (emitted generically below) then paces the retry loop.
     push('enquire-link-interval', smsc.keepaliveSeconds);
     push('wait-ack', smsc.waitAckSeconds);
+    push('wait-ack-expire', smsc.waitAckExpireAction);
+    push('connection-timeout', smsc.connectionTimeoutSeconds);
+    if (smsc.retryOnAuthFailure) push('retry', true);
     if (smsc.useTls) push('use-ssl', true);
+  }
+
+  /**
+   * Emits the SMSC-group routing directives. All are optional and omitted when
+   * empty, so an SMSC that does not use them renders unchanged.
+   *
+   * ---------------------------------------------------------------------------
+   * DESIGN NOTE — retrying a message on another bind after a *delivery* failure
+   * ---------------------------------------------------------------------------
+   * This is deliberately NOT implemented, here or anywhere else yet. Two
+   * different failures get confused with each other, so to be precise:
+   *
+   * 1. Submit-time failure (the bind is down, or the carrier never acks the
+   *    submit_sm). Already handled, at two levels. The engine requeues on
+   *    `wait-ack` expiry (`wait-ack-expire` = 1, the Kamex default) and dumps a
+   *    reconnecting link's queue back to the global queue so a sibling bind
+   *    picks it up; `preferred-smsc-id` and the `instances` count above decide
+   *    which. Above that, JKANNEL's own `MessageSendService` picks only from
+   *    `availableSmscIds` derived from live bind state and falls back per route.
+   *
+   * 2. Delivery failure — the submit succeeded and a *negative DLR* arrives
+   *    later (SMPP UNDELIV / REJECTD / EXPIRED). The engine cannot retry this:
+   *    by the time the DLR lands, the message is long gone from bearerbox. It
+   *    is a control-plane job, and it belongs in the messaging module, not in
+   *    the configuration generator. What it needs:
+   *
+   *      - A DLR watcher keyed on terminal-failure statuses only. Success and
+   *        intermediate/BUFFRED statuses must not trigger anything, and the
+   *        watcher must read the delivery record, not the raw DLR, so a
+   *        duplicate DLR cannot start a second retry.
+   *      - A retry policy per route or per customer: max attempts, and a
+   *        backoff (exponential with jitter) measured from the DLR timestamp,
+   *        not the submit. Attempts must be persisted on the message so a
+   *        control-plane restart neither loses nor repeats them.
+   *      - Alternate-bind selection: exclude the bind that just failed, then
+   *        re-run the normal route resolution over the remaining available
+   *        binds. If none is left, stop and surface the failure — never fall
+   *        back to the same carrier that produced the permanent failure.
+   *      - Loop protection: a permanent per-destination failure (unroutable
+   *        number, blacklisted MSISDN) must be classified as non-retryable and
+   *        suppressed, plus a per-destination circuit breaker so one dead
+   *        number cannot consume the retry budget forever. Every retry needs to
+   *        be linked to the original message id for billing and audit, so one
+   *        logical send is never charged or reported as several.
+   *
+   * Until that exists, a negative DLR is recorded and surfaced, and nothing
+   * resends it.
+   */
+  private renderSmscRouting(
+    smsc: EngineSmsc,
+    quoted: (key: string, value: string | undefined) => void,
+  ) {
+    for (const [field, directive] of ROUTING_LISTS) {
+      const list = smsc[field] as string[] | undefined;
+      if (list?.length) quoted(directive, list.join(LIST_SEPARATOR));
+    }
   }
 
   private renderHttpSmsc(

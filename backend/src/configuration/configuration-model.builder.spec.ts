@@ -16,7 +16,7 @@ function fakeDatabase(handler: (sql: string, params: unknown[]) => { rows: any[]
   };
 }
 
-/** A row shaped like smsc_definitions after migration 029, with column defaults. */
+/** A row shaped like smsc_definitions after migrations 029 and 041, with column defaults. */
 const smscRow = (overrides: Record<string, unknown> = {}) => ({
   engine_id: 'carrier-a',
   type: 'smpp',
@@ -43,6 +43,18 @@ const smscRow = (overrides: Record<string, unknown> = {}) => ({
   use_tls: false,
   alt_charset: null,
   send_url: null,
+  // Migration 041 defaults: a single bind, no explicit idle/ack overrides, no
+  // routing rules. These must render exactly as they did before 041 existed.
+  connection_count: 1,
+  connection_timeout_seconds: null,
+  wait_ack_expire_action: null,
+  retry_on_auth_failure: false,
+  allowed_smsc_ids: [],
+  denied_smsc_ids: [],
+  preferred_smsc_ids: [],
+  allowed_prefixes: [],
+  denied_prefixes: [],
+  preferred_prefixes: [],
   enabled: true,
   lifecycle_state: 'deployed',
   ...overrides,
@@ -193,6 +205,92 @@ describe('ConfigurationModelBuilder', () => {
       database: 'jkannel',
       usernameEnv: 'JKANNEL_SQLBOX_USER',
       passwordEnv: 'JKANNEL_SQLBOX_PASSWORD',
+    });
+  });
+
+  describe('connection resilience columns (migration 041)', () => {
+    it('reads the resilience and routing columns onto the model', async () => {
+      const { database } = withRows([
+        smscRow({
+          connection_count: 4,
+          connection_timeout_seconds: 120,
+          wait_ack_expire_action: 1,
+          retry_on_auth_failure: true,
+          preferred_smsc_ids: ['carrier-a'],
+          denied_prefixes: ['1900', '1976'],
+        }),
+      ]);
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      expect(model.smsc[0]).toMatchObject({
+        connectionCount: 4,
+        connectionTimeoutSeconds: 120,
+        waitAckExpireAction: 1,
+        retryOnAuthFailure: true,
+        preferredSmscIds: ['carrier-a'],
+        deniedPrefixes: ['1900', '1976'],
+      });
+    });
+
+    it('selects the new columns in the SMSC query', async () => {
+      const { database, client } = withRows([smscRow()]);
+      await new ConfigurationModelBuilder(database).build(actor);
+      const sql = String(
+        client.query.mock.calls.find((call: any[]) =>
+          String(call[0]).includes('FROM smsc_definitions'),
+        )![0],
+      );
+      for (const column of [
+        'connection_count',
+        'connection_timeout_seconds',
+        'wait_ack_expire_action',
+        'retry_on_auth_failure',
+        'allowed_smsc_ids',
+        'denied_smsc_ids',
+        'preferred_smsc_ids',
+        'allowed_prefixes',
+        'denied_prefixes',
+        'preferred_prefixes',
+      ])
+        expect(sql).toContain(column);
+    });
+
+    it('drops the column defaults so an untouched SMSC renders as it did before 041', async () => {
+      const { database } = withRows([smscRow()]);
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      const [smsc] = model.smsc;
+      // Empty arrays and `false` become undefined: the renderer emits nothing
+      // for them, so no directive appears and no config checksum moves.
+      expect(smsc.retryOnAuthFailure).toBeUndefined();
+      expect(smsc.connectionTimeoutSeconds).toBeUndefined();
+      expect(smsc.waitAckExpireAction).toBeUndefined();
+      for (const field of [
+        'allowedSmscIds',
+        'deniedSmscIds',
+        'preferredSmscIds',
+        'allowedPrefixes',
+        'deniedPrefixes',
+        'preferredPrefixes',
+      ] as const)
+        expect(smsc[field]).toBeUndefined();
+      // connection_count is NOT NULL DEFAULT 1, so it is carried as 1 — the
+      // renderer omits `instances` at 1.
+      expect(smsc.connectionCount).toBe(1);
+
+      const content = new ConfigurationGeneratorService().generate(model).content;
+      expect(content).not.toContain('instances');
+      expect(content).not.toContain('retry =');
+      expect(content).not.toContain('connection-timeout');
+      expect(content).not.toContain('preferred-smsc-id');
+    });
+
+    it('renders parallel binds from the database through to the config file', async () => {
+      const { database } = withRows([smscRow({ connection_count: 3 })]);
+      const { model } = await new ConfigurationModelBuilder(database).build(actor);
+      const content = new ConfigurationGeneratorService().generate(model).content;
+      expect(content).toContain('smsc-id = carrier-a');
+      expect(content).toContain('instances = 3');
+      // Still one group; the engine expands it into three binds.
+      expect(content.match(/group = smsc/g)).toHaveLength(1);
     });
   });
 

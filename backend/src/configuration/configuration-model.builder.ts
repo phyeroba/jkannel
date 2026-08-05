@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
-import { EngineConfiguration, EngineSmsc, SmscBindMode } from './configuration-generator.service';
+import {
+  EngineConfiguration,
+  EngineSmsc,
+  SmscBindMode,
+  WaitAckExpireAction,
+} from './configuration-generator.service';
 
 export interface Actor {
   tenantId: string;
@@ -76,6 +81,17 @@ interface SmscRow {
   use_tls: boolean | null;
   alt_charset: string | null;
   send_url: string | null;
+  // Migration 041.
+  connection_count: number | null;
+  connection_timeout_seconds: number | null;
+  wait_ack_expire_action: number | null;
+  retry_on_auth_failure: boolean | null;
+  allowed_smsc_ids: string[] | null;
+  denied_smsc_ids: string[] | null;
+  preferred_smsc_ids: string[] | null;
+  allowed_prefixes: string[] | null;
+  denied_prefixes: string[] | null;
+  preferred_prefixes: string[] | null;
   enabled: boolean;
   lifecycle_state: string;
 }
@@ -84,10 +100,21 @@ const SMSC_COLUMNS = `engine_id, type, host, port, receive_port, system_id, user
   credential_secret_ref, system_type, bind_mode, interface_version, address_range,
   source_addr_ton, source_addr_npi, dest_addr_ton, dest_addr_npi, window_size, tps,
   keepalive_seconds, reconnect_delay_seconds, wait_ack_seconds, max_error_count,
-  use_tls, alt_charset, send_url, enabled, lifecycle_state`;
+  use_tls, alt_charset, send_url, connection_count, connection_timeout_seconds,
+  wait_ack_expire_action, retry_on_auth_failure, allowed_smsc_ids, denied_smsc_ids,
+  preferred_smsc_ids, allowed_prefixes, denied_prefixes, preferred_prefixes,
+  enabled, lifecycle_state`;
 
 const numberOrUndefined = (value: unknown): number | undefined =>
   value === null || value === undefined ? undefined : Number(value);
+
+/**
+ * A routing list only reaches the model when it has entries: an empty array is
+ * the column default and must render nothing, so it is dropped here rather than
+ * carried through as `[]` for the renderer to second-guess.
+ */
+const listOrUndefined = (value: string[] | null | undefined): string[] | undefined =>
+  Array.isArray(value) && value.length ? value : undefined;
 
 /**
  * Builds the internal {@link EngineConfiguration} from the tenant's operational
@@ -262,6 +289,20 @@ export class ConfigurationModelBuilder {
       useTls: row.use_tls ?? undefined,
       altCharset: row.alt_charset ?? undefined,
       sendUrl: row.send_url ?? undefined,
+      // Migration 041. connection_count defaults to 1 in the database, and the
+      // renderer omits `instances` at 1, so an untouched SMSC is unchanged.
+      connectionCount: numberOrUndefined(row.connection_count),
+      connectionTimeoutSeconds: numberOrUndefined(row.connection_timeout_seconds),
+      waitAckExpireAction: numberOrUndefined(row.wait_ack_expire_action) as
+        WaitAckExpireAction | undefined,
+      // false is the column default and emits nothing; only true is carried.
+      retryOnAuthFailure: row.retry_on_auth_failure ? true : undefined,
+      allowedSmscIds: listOrUndefined(row.allowed_smsc_ids),
+      deniedSmscIds: listOrUndefined(row.denied_smsc_ids),
+      preferredSmscIds: listOrUndefined(row.preferred_smsc_ids),
+      allowedPrefixes: listOrUndefined(row.allowed_prefixes),
+      deniedPrefixes: listOrUndefined(row.denied_prefixes),
+      preferredPrefixes: listOrUndefined(row.preferred_prefixes),
     };
   }
 

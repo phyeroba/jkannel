@@ -29,7 +29,33 @@ export interface SmscAttributes {
   altCharset?: string;
   sendUrl?: string;
   notes?: string;
+
+  /**
+   * Connection resilience and declarative routing (migration 041). See
+   * {@link EngineSmsc} in the configuration module for the engine directive
+   * each of these renders to.
+   */
+  connectionCount?: number;
+  connectionTimeoutSeconds?: number;
+  waitAckExpireAction?: number;
+  retryOnAuthFailure?: boolean;
+  allowedSmscIds?: string[];
+  deniedSmscIds?: string[];
+  preferredSmscIds?: string[];
+  allowedPrefixes?: string[];
+  deniedPrefixes?: string[];
+  preferredPrefixes?: string[];
 }
+
+/** Attribute keys holding a semicolon-separated engine routing list. */
+const ROUTING_LIST_KEYS = [
+  'allowedSmscIds',
+  'deniedSmscIds',
+  'preferredSmscIds',
+  'allowedPrefixes',
+  'deniedPrefixes',
+  'preferredPrefixes',
+] as const;
 
 export interface SmscDefinition extends SmscAttributes {
   id: string;
@@ -59,6 +85,10 @@ const NUMERIC_RANGES: Array<[keyof SmscAttributes, number, number]> = [
   ['reconnectDelaySeconds', 0, 3600],
   ['waitAckSeconds', 1, 3600],
   ['maxErrorCount', 0, 100000],
+  // Migration 041. Ranges match the CHECK constraints in 041_smsc_resilience.
+  ['connectionCount', 1, 64],
+  ['connectionTimeoutSeconds', 0, 86400],
+  ['waitAckExpireAction', 0, 2],
 ];
 
 @Injectable()
@@ -84,6 +114,20 @@ export class SmscService {
     }
     if (value.type === 'http' && value.sendUrl && !/^https?:\/\//.test(value.sendUrl))
       errors.push('sendUrl must be an http(s) URL');
+    // Parallel binds are an SMPP-only capability: the fake and http adapters
+    // open a listening socket on `port`, so a second instance cannot start.
+    if (value.connectionCount !== undefined && value.connectionCount > 1 && value.type !== 'smpp')
+      errors.push('connectionCount above 1 is only supported for SMPP links');
+    for (const key of ROUTING_LIST_KEYS) {
+      const list = value[key];
+      if (list === undefined) continue;
+      if (!Array.isArray(list) || list.some((e) => typeof e !== 'string' || !e.trim()))
+        errors.push(`${key} must be a list of non-empty strings`);
+      else if (list.some((e) => e.includes(';')))
+        errors.push(`${key} entries may not contain ";", which separates values in the engine`);
+    }
+    if (value.allowedSmscIds?.length && value.deniedSmscIds?.length)
+      errors.push('allowedSmscIds and deniedSmscIds are mutually exclusive');
     return errors;
   }
   assertValid(value: SmscDefinition): SmscDefinition {
@@ -133,9 +177,29 @@ export class SmscService {
       'reconnectDelaySeconds',
       'waitAckSeconds',
       'maxErrorCount',
+      'connectionCount',
+      'connectionTimeoutSeconds',
+      'waitAckExpireAction',
     ] as const)
       copyNumber(key);
     if (typeof body.useTls === 'boolean') attributes.useTls = body.useTls;
+    if (typeof body.retryOnAuthFailure === 'boolean')
+      attributes.retryOnAuthFailure = body.retryOnAuthFailure;
+    // Routing lists accept either an array or the engine's own semicolon-
+    // separated string, so an operator can paste a value straight from a
+    // carrier's instructions. An explicit empty list is kept: it is how a
+    // caller clears a rule, and is distinct from omitting the key.
+    for (const key of ROUTING_LIST_KEYS) {
+      const raw = body[key];
+      // Non-string members are passed through so validate() names the field
+      // rather than silently dropping them.
+      if (Array.isArray(raw)) attributes[key] = raw;
+      else if (typeof raw === 'string')
+        attributes[key] = raw
+          .split(';')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+    }
     return attributes;
   }
 }

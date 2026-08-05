@@ -1,6 +1,6 @@
-import { EngineQueueSnapshot } from '../engine/kamex.adapter';
+import { EngineBindSnapshot, EngineQueueSnapshot } from '../engine/kamex.adapter';
 import { EngineSnapshotCache } from './engine-snapshot.cache';
-import { SmscStatusPoller } from './smsc-status.poller';
+import { collapseBindsByEngineId, SmscStatusPoller } from './smsc-status.poller';
 
 interface Recorded {
   sql: string;
@@ -318,5 +318,70 @@ describe('EngineSnapshotCache', () => {
     const at = new Date('2026-08-04T03:00:00.000Z');
     cache.set(snapshotWith([]), at);
     expect(cache.ageSeconds(new Date('2026-08-04T03:00:45.000Z'))).toBe(45);
+  });
+});
+
+describe('collapseBindsByEngineId', () => {
+  const bind = (over: Partial<EngineBindSnapshot> & { engineId: string }): EngineBindSnapshot => ({
+    name: over.engineId,
+    status: 'online',
+    queued: 0,
+    failed: 0,
+    sent: 0,
+    received: 0,
+    outboundRate: [0, 0, 0],
+    inboundRate: [0, 0, 0],
+    ...over,
+  });
+
+  it('keeps a carrier healthy while any one of its parallel connections is bound', () => {
+    // Kamex `instances = 3`: three connections, one smsc-id. Two are bound and
+    // one is reconnecting. Before collapsing, all three upserted into the same
+    // (tenant_id, smsc_id) row and the last writer won -- so this carrier could
+    // be recorded as `connecting`, dropped from availableSmscIds, and have its
+    // two working connections taken out of service.
+    const [merged] = collapseBindsByEngineId([
+      bind({ engineId: 'carrier-a', status: 'online' }),
+      bind({ engineId: 'carrier-a', status: 'online' }),
+      bind({ engineId: 'carrier-a', status: 'connecting' }),
+    ]);
+    expect(merged.status).toBe('online');
+  });
+
+  it('is order-independent - the unhealthy connection reporting last cannot win', () => {
+    const healthyLast = collapseBindsByEngineId([
+      bind({ engineId: 'carrier-a', status: 'connecting' }),
+      bind({ engineId: 'carrier-a', status: 'online' }),
+    ])[0];
+    expect(healthyLast.status).toBe('online');
+  });
+
+  it('sums queue depth and failures across the connections', () => {
+    const [merged] = collapseBindsByEngineId([
+      bind({ engineId: 'carrier-a', queued: 4, failed: 1, sent: 10, received: 2 }),
+      bind({ engineId: 'carrier-a', queued: 6, failed: 2, sent: 5, received: 3 }),
+    ]);
+    expect(merged.queued).toBe(10);
+    expect(merged.failed).toBe(3);
+    expect(merged.sent).toBe(15);
+    expect(merged.received).toBe(5);
+  });
+
+  it('reports a carrier down only when every connection is down', () => {
+    const [merged] = collapseBindsByEngineId([
+      bind({ engineId: 'carrier-a', status: 'connecting' }),
+      bind({ engineId: 'carrier-a', status: 'dead' }),
+    ]);
+    expect(merged.status).toBe('connecting');
+  });
+
+  it('leaves distinct carriers separate and single-connection carriers untouched', () => {
+    const merged = collapseBindsByEngineId([
+      bind({ engineId: 'carrier-a', queued: 1 }),
+      bind({ engineId: 'carrier-b', queued: 2, status: 'dead' }),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.map((m) => m.engineId).sort()).toEqual(['carrier-a', 'carrier-b']);
+    expect(merged.find((m) => m.engineId === 'carrier-b')!.status).toBe('dead');
   });
 });

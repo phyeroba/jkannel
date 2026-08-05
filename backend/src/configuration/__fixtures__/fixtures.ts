@@ -82,6 +82,69 @@ export const SMPP_CARRIER: EngineConfiguration = {
 };
 
 /**
+ * A carrier that permits three simultaneous binds, with the full resilience
+ * set turned on: parallel connections, idle-link detection, requeue-on-ack-
+ * timeout, retry through a bind rejection, and a declarative preference so this
+ * link is chosen ahead of the standby carrier that follows it.
+ *
+ * The standby (`carrier-standby`) deliberately carries none of the new
+ * attributes: it renders exactly as a pre-041 SMSC would, and it is the link
+ * traffic falls back to when the preferred one is unusable.
+ */
+export const PARALLEL_CARRIER: EngineConfiguration = {
+  adminPort: 13000,
+  smsboxPort: 13001,
+  adminSecretRef: 'secret://kamex/admin-password',
+  logLevel: 1,
+  smsc: [
+    {
+      id: 'carrier-primary',
+      type: 'smpp',
+      host: 'smpp.primary.example',
+      port: 2775,
+      enabled: true,
+      username: 'jkannel_prod',
+      passwordSecretRef: 'secret://kamex/carrier-primary-password',
+      bindMode: 'transceiver',
+      interfaceVersion: 34,
+      windowSize: 20,
+      throughput: 50,
+      keepaliveSeconds: 30,
+      reconnectDelaySeconds: 10,
+      waitAckSeconds: 60,
+      maxErrorCount: 10,
+      useTls: true,
+      connectionCount: 3,
+      connectionTimeoutSeconds: 120,
+      waitAckExpireAction: 1,
+      retryOnAuthFailure: true,
+      preferredSmscIds: ['carrier-primary'],
+      preferredPrefixes: ['2567', '2569'],
+      deniedPrefixes: ['1900'],
+    },
+    {
+      id: 'carrier-standby',
+      type: 'smpp',
+      host: 'smpp.standby.example',
+      port: 2775,
+      enabled: true,
+      username: 'jkannel_standby',
+      passwordSecretRef: 'secret://kamex/carrier-standby-password',
+      bindMode: 'transceiver',
+      windowSize: 10,
+      throughput: 20,
+      keepaliveSeconds: 30,
+      reconnectDelaySeconds: 10,
+      connectionCount: 1,
+    },
+  ],
+  smsbox: { bearerboxHost: 'kamex-bearerbox', sendsmsPort: 13013, logLevel: 1 },
+  sendsmsUsers: [{ username: 'jkannel', passwordSecretRef: 'secret://kamex/sendsms-password' }],
+  smsServices: [{ keyword: 'default', text: 'No service specified' }],
+  dlrStorage: { type: 'internal' },
+};
+
+/**
  * Several links of different kinds, one of them disabled, plus a
  * receiver-only bind and an HTTP provider. Exercises ordering, per-type
  * directive selection and the enabled filter in one render.
