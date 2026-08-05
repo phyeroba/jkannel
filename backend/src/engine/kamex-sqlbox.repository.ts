@@ -37,6 +37,57 @@ export interface SqlboxSubmission {
    * trying (submit_sm.validity_period on an SMPP bind). Same NULL semantics.
    */
   validityMinutes?: number | null;
+  /**
+   * `send_sms.priority` — SMPP `priority_flag`, {@link MESSAGE_PRIORITY_MIN} to
+   * {@link MESSAGE_PRIORITY_MAX}, higher goes first. null/undefined leaves the
+   * column NULL, which the driver decodes as MSG_PARAM_UNDEFINED (-1) — exactly
+   * what every message carried before this field existed.
+   *
+   * WHAT IT ACTUALLY DOES, in one sentence: it orders bearerbox's per-SMSC
+   * outbound queue, so it only changes anything when that queue has a BACKLOG —
+   * on an idle link with a sub-second drain nothing observable changes.
+   *
+   * See the note above {@link KamexSqlboxRepository.submit} for the full chain
+   * and for what had to be patched to make the value non-inert.
+   */
+  priority?: number | null;
+}
+
+/** Lowest SMPP priority_flag: normal/bulk. */
+export const MESSAGE_PRIORITY_MIN = 0;
+/** Highest SMPP priority_flag the engine will put on the wire (smsc_smpp.c:1154). */
+export const MESSAGE_PRIORITY_MAX = 3;
+
+/**
+ * Parses an optional message priority from an API body or an internal caller.
+ *
+ * Absent / null / '' means "no preference" and yields null, which is written as
+ * a NULL column and read back by the engine as MSG_PARAM_UNDEFINED — the
+ * pre-existing behaviour for every message. Anything present must be a whole
+ * number in [0, 3]; anything else is a 400 that names the range, because the
+ * engine silently ignores an out-of-range priority_flag
+ * (`if (msg->sms.priority >= 0 && msg->sms.priority <= 3)`, smsc_smpp.c:1154)
+ * and a silently ignored control is worse than a rejected one.
+ */
+export function parseMessagePriority(value: unknown, field = 'priority'): number | null {
+  if (value === undefined || value === null) return null;
+  // Only a number or a string is ever a priority. Coercing anything else would
+  // quietly turn `[]` into 0 and `true` into 1 — both real, sendable levels.
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? value.trim() === ''
+          ? null
+          : Number(value.trim())
+        : Number.NaN;
+  if (parsed === null) return null;
+  if (!Number.isInteger(parsed) || parsed < MESSAGE_PRIORITY_MIN || parsed > MESSAGE_PRIORITY_MAX)
+    throw new BadRequestException(
+      `${field} must be a whole number between ${MESSAGE_PRIORITY_MIN} and ${MESSAGE_PRIORITY_MAX} ` +
+        `(SMPP priority_flag, higher leaves the queue first); received "${String(value)}"`,
+    );
+  return parsed;
 }
 export interface SqlboxListOptions {
   limit?: number;
@@ -186,6 +237,10 @@ export function resolveDeliveryStatuses(value: unknown): DeliveryStatus[] | unde
  * could not be shown as multi-part, an 8-bit or UCS-2 body was indistinguishable
  * from plain text, and `binfo` (the carrier's billing identifier) was invisible.
  * Listed once so the sent_sms and send_sms projections cannot drift apart.
+ *
+ * `priority` requires migration 043 on a database created before it; the
+ * patched sqlbox driver requires that same column, so any deployment running
+ * the current engine image already has it.
  */
 const DETAIL_COLUMN_NAMES = [
   'coding',
@@ -197,6 +252,7 @@ const DETAIL_COLUMN_NAMES = [
   'pid',
   'binfo',
   'meta_data',
+  'priority',
 ] as const;
 
 const detailColumns = (prefix = '') =>
@@ -485,6 +541,12 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       mclass: KamexSqlboxRepository.number(row.mclass),
       /** Protocol identifier. */
       pid: KamexSqlboxRepository.number(row.pid),
+      /**
+       * SMPP priority_flag the message was submitted at (0-3), or null when the
+       * sender expressed no preference. Read straight off the engine row, so
+       * this is what the engine actually saw — not what a caller asked for.
+       */
+      priority: KamexSqlboxRepository.number(row.priority),
       /** Carrier billing identifier, when the SMSC supplied one. */
       binfo: row.binfo ?? null,
       metaData: row.meta_data ?? null,
@@ -722,6 +784,7 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
     'deferred',
     'mclass',
     'pid',
+    'priority',
     'binfo',
     'metaData',
     'text',
@@ -1051,10 +1114,78 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
    * Honesty note carried next to the INSERT on purpose: writing `deferred` does
    * not make JKANNEL, sqlbox or bearerbox hold the message. It asks the CARRIER
    * to. See messaging-depth/message-scheduling.ts.
+   *
+   * ---------------------------------------------------------------------------
+   * `priority` — WHY IT IS HERE, AND WHAT IT ACTUALLY DOES
+   * ---------------------------------------------------------------------------
+   * This comment used to say that priority could not be written here, because
+   * on PostgreSQL nothing would ever read it. That was true of stock sqlbox and
+   * is no longer true of the sqlbox this platform builds. The evidence, kept
+   * because the citations are the whole reason this is trustworthy:
+   *
+   * 1. THE ENGINE HONOURS PRIORITY. bearerbox's per-SMSC queue is not the FIFO
+   *    it is usually assumed to be:
+   *
+   *      gw/smsc/smsc_smpp.c:246
+   *        smpp->msgs_to_send = gw_prioqueue_create(sms_priority_compare);
+   *
+   *    gw/sms.c:395 sms_priority_compare() orders by sms.priority, then
+   *    sms.time; gwlib/gw-prioqueue.c is a MAX-heap (gw_prioqueue_remove
+   *    returns the largest) with an insertion-sequence tiebreak that keeps
+   *    equal elements FIFO. Higher number leaves first, matching SMPP
+   *    priority_flag where 3 is the highest level. It goes on the wire at
+   *
+   *      gw/smsc/smsc_smpp.c:1154
+   *        if (msg->sms.priority >= 0 && msg->sms.priority <= 3)
+   *            pdu->u.submit_sm.priority_flag = msg->sms.priority;
+   *
+   * 2. THE BLOCKER WAS THE SQLBOX POSTGRESQL DRIVER, NOT THE ENGINE. In the
+   *    same upstream tree, addons/sqlbox/gw/sqlbox_mysql.h carries `priority`
+   *    through CREATE, SELECT and INSERT and sqlbox_mysql.c:148 reads it with
+   *    `atol_null(row[27])`, while sqlbox_pgsql.h's SELECT named 27 columns
+   *    with `priority` absent and the string appeared nowhere in
+   *    sqlbox_pgsql.c. Every row therefore reached bearerbox with
+   *    msg->sms.priority still MSG_PARAM_UNDEFINED (-1, gw/msg.c:101), so the
+   *    max-heap degenerated to its sms.time tiebreak and behaved FIFO purely by
+   *    accident of uniformity.
+   *
+   * 3. THAT GAP IS NOW CLOSED IN THE IMAGE THIS PLATFORM SHIPS.
+   *    infrastructure/kannel/sqlbox/Dockerfile builds sqlbox from the pinned
+   *    source RPM and patches the PostgreSQL driver to parity with the MySQL
+   *    one: both CREATE statements, the SELECT (priority becomes result index
+   *    27), the INSERT, `atol_null(27)` in pgsql_fetch_msg and
+   *    `st_num(msg->sms.priority)` in pgsql_save_msg. The build asserts each
+   *    substitution and then greps the LINKED BINARY for the patched SELECT, so
+   *    a sed that stopped matching fails the build instead of quietly producing
+   *    an inert column. Migration 043 adds the column to already-deployed
+   *    databases, because the PostgreSQL CREATE has no IF NOT EXISTS and so
+   *    only ever helps a fresh one.
+   *
+   * WHAT AN OPERATOR SHOULD BE TOLD, exactly: priority orders bearerbox's
+   * per-SMSC outbound queue, which only matters when a backlog exists — with a
+   * sub-second drain and an idle link it changes nothing observable.
+   *
+   * WHAT IS NOT PROVEN ON THIS DEPLOYMENT: the loopback binds here are
+   * `smsc = fake`, and gw/smsc/smsc_fake.c contains zero references to
+   * priority. Ordering therefore cannot be demonstrated live against them. What
+   * is demonstrated: the column is written, the driver's SELECT names it, and
+   * the shipped binary contains the patched string.
+   *
+   * NULL is preserved as "no preference": the driver decodes a NULL column as
+   * MSG_PARAM_UNDEFINED (-1), which is what every message carried before this
+   * existed, so an unset priority behaves exactly as it did.
+   *
+   * foreign_id is untouched by any of this, deliberately. sqlbox_pgsql.c stamps
+   * the consumed send_sms.sql_id into it ("we abuse the foreign_id field in the
+   * message struct for our sql_id value") and that is the correlation key for
+   * tracing, resend and DLR-derived delivery status.
    */
   async submit(value: SqlboxSubmission) {
+    // Validated here as well as at the API boundary: no internal caller should
+    // be able to write a value the engine would silently discard.
+    const priority = parseMessagePriority(value.priority);
     const result = await this.required().query<{ sql_id: string }>(
-      `INSERT INTO send_sms(momt,sender,receiver,msgdata,time,smsc_id,dlr_mask,dlr_url,foreign_id,deferred,validity) VALUES('MT',$1,$2,$3,extract(epoch from now())::bigint,$4,$5,$6,$7,$8,$9) RETURNING sql_id::text`,
+      `INSERT INTO send_sms(momt,sender,receiver,msgdata,time,smsc_id,dlr_mask,dlr_url,foreign_id,deferred,validity,priority) VALUES('MT',$1,$2,$3,extract(epoch from now())::bigint,$4,$5,$6,$7,$8,$9,$10) RETURNING sql_id::text`,
       [
         value.sender,
         value.receiver,
@@ -1065,6 +1196,7 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
         value.foreignId ?? null,
         value.deferredMinutes ?? null,
         value.validityMinutes ?? null,
+        priority,
       ],
     );
     return {
@@ -1073,6 +1205,8 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       source: 'kamex-sqlbox',
       deferredMinutes: value.deferredMinutes ?? null,
       validityMinutes: value.validityMinutes ?? null,
+      /** As written to send_sms.priority; null = no preference (engine default). */
+      priority,
     };
   }
 }

@@ -59,6 +59,23 @@ const dlrRow = (overrides: Record<string, any> = {}) => ({
   ...overrides,
 });
 
+/**
+ * The `[deferred, validity]` pair from a captured send_sms INSERT, resolved
+ * through the statement's own column list and `$n` placeholders. Reading them
+ * off the end of the parameter array instead would break — silently, by
+ * comparing the wrong columns — the first time a column is appended.
+ */
+function scheduleParams(call: { sql: string; params: unknown[] }) {
+  const columns = call.sql.match(/INSERT INTO send_sms\(([^)]*)\)/)![1].split(',');
+  // Greedy up to ") RETURNING": one of the values is `extract(epoch from
+  // now())::bigint`, so a non-paren character class would stop inside it.
+  const values = call.sql.match(/VALUES\((.*)\) RETURNING/)![1].split(',');
+  return ['deferred', 'validity'].map((name) => {
+    const placeholder = values[columns.indexOf(name)].trim();
+    return call.params[Number(placeholder.slice(1)) - 1];
+  });
+}
+
 describe('scheduled / deferred submission', () => {
   it('writes deferred and validity onto the send_sms insert', async () => {
     const { repository, calls } = makeRepository([{ sql_id: '901' }]);
@@ -73,8 +90,11 @@ describe('scheduled / deferred submission', () => {
 
     // The engine stores RELATIVE MINUTES in both columns; sqlbox converts them
     // to absolute instants when it picks the row up.
+    // Located by column position rather than by "the last two parameters", so
+    // a column appended after `validity` (e.g. `priority`) cannot make this
+    // assertion silently start reading the wrong values.
     expect(calls[0].sql).toContain('deferred,validity');
-    expect(calls[0].params.slice(-2)).toEqual([90, 240]);
+    expect(scheduleParams(calls[0])).toEqual([90, 240]);
     expect(result).toMatchObject({ deferredMinutes: 90, validityMinutes: 240, status: 'queued' });
   });
 
@@ -84,7 +104,7 @@ describe('scheduled / deferred submission', () => {
     // would make every ordinary send look like an explicit zero-delay request.
     const { repository, calls } = makeRepository([{ sql_id: '902' }]);
     await repository.submit({ sender: 'ACME', receiver: '+256700000000', text: 'now' });
-    expect(calls[0].params.slice(-2)).toEqual([null, null]);
+    expect(scheduleParams(calls[0])).toEqual([null, null]);
   });
 
   it('writes a zero deferral as 0 when the caller genuinely asked for one', async () => {
@@ -96,7 +116,7 @@ describe('scheduled / deferred submission', () => {
       deferredMinutes: 0,
       validityMinutes: 5,
     });
-    expect(calls[0].params.slice(-2)).toEqual([0, 5]);
+    expect(scheduleParams(calls[0])).toEqual([0, 5]);
   });
 });
 

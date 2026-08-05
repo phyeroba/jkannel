@@ -1,5 +1,6 @@
 # SQLBox for Kamex, rebuilt from the official checksum-pinned 1.8.3 source RPM
-# with the MSSQL dispatcher branch disabled.
+# with the MSSQL dispatcher branch disabled and the PostgreSQL driver taught the
+# `priority` column its MySQL sibling already carries.
 #
 # Why not the official binary RPM: upstream sqlbox's backend dispatcher calls
 # sqlbox_init_mssql first when compiled with FreeTDS support, and that function
@@ -51,10 +52,87 @@ RUN cd /build/kamex-1.8.3/addons/sqlbox \
          -e 's/#ifdef HAVE_ORACLE/#if 0 \/* disabled: panics when its group is absent *\//' \
          -e 's/#ifdef HAVE_SQLITE3/#if 0 \/* disabled: panics when its group is absent *\//' \
          gw/sqlbox_sql.c \
-    && grep -c '#if 0' gw/sqlbox_sql.c \
+    && test "$(grep -c '#if 0' gw/sqlbox_sql.c)" -eq 4
+
+# -----------------------------------------------------------------------------
+# PRIORITY PARITY PATCH — teach the PostgreSQL driver the `priority` column that
+# the MySQL driver in the SAME source tree already carries.
+#
+# WHY THIS EXISTS. bearerbox genuinely honours message priority: the per-SMSC
+# queue is gw_prioqueue_create(sms_priority_compare) (gw/smsc/smsc_smpp.c:246),
+# a MAX-heap on sms.priority then sms.time (gw/sms.c:395), and
+# smsc_smpp.c:1154 puts the value on the wire as submit_sm.priority_flag.
+# What breaks the chain is the SQLBox driver, not the engine:
+#
+#   gw/sqlbox_mysql.h   CREATE / SELECT / INSERT all name `priority`, and
+#                       sqlbox_mysql.c:148 does atol_null(row[27])
+#   gw/sqlbox_pgsql.h   SELECT names 27 columns and `priority` is not one of
+#                       them; the string appears nowhere in sqlbox_pgsql.c
+#
+# So on stock PostgreSQL every row read out of send_sms reaches bearerbox with
+# msg->sms.priority still MSG_PARAM_UNDEFINED (-1). Every message carries the
+# same value, the max-heap degenerates to its sms.time tiebreak, and the queue
+# is FIFO purely by accident of uniformity. Adding a `priority` column to
+# send_sms WITHOUT this patch would be read by nothing: sqlbox's SELECT is a
+# fixed string in a compiled binary, and a column it does not name is invisible.
+#
+# WHAT IT DOES — five substitutions, mirroring sqlbox_mysql.{c,h} exactly:
+#   1. both CREATE TABLE statements gain `priority BIGINT NULL` immediately
+#      before foreign_id, the same position the MySQL driver puts it in
+#   2. SELECT gains `priority` as its 28th column, i.e. result index 27
+#   3. INSERT gains the `priority` column plus one more %S placeholder.
+#      octstr_format's %S are positional and interchangeable, so the extra
+#      placeholder is appended to the first VALUES line; what matters is that
+#      the placeholder count matches the column count, which is asserted below.
+#   4. pgsql_save_msg() writes st_num(msg->sms.priority), so sent_sms records
+#      what a message was actually sent at
+#   5. pgsql_fetch_msg() reads it back with atol_null(27). A NULL column yields
+#      -1 = MSG_PARAM_UNDEFINED, i.e. exactly today's behaviour for any row that
+#      does not set a priority — the default path is unchanged.
+#
+# IDEMPOTENT. Every substitution consumes its own pattern. The one insertion
+# with no naturally consumed anchor (case 5) also normalises `meta_data  =` to
+# `meta_data =`; that whitespace change is what stops a re-run duplicating the
+# line, not cosmetics.
+#
+# ASSERTED. A sed that matches nothing exits 0, which would produce an
+# unpatched binary that looks patched — the only real risk in this file. Each
+# `grep`/`test` below turns that into a build failure. The last one greps the
+# LINKED BINARY, because a compiled string is the only proof the build actually
+# consumed the patched source.
+#
+# foreign_id is deliberately untouched: sqlbox_pgsql.c stamps the consumed
+# send_sms.sql_id into it ("we abuse the foreign_id field in the message struct
+# for our sql_id value"), and that is JKANNEL's correlation key for tracing,
+# resend and DLR-derived delivery status.
+#
+# NOTE FOR OPERATORS: sqlbox's CREATE TABLE has no IF NOT EXISTS, so on an
+# existing database these CREATEs fail harmlessly and the column is NOT added.
+# database/migrations/043_send_sms_priority.up.sql adds it to send_sms and
+# sent_sms for already-deployed installations.
+# -----------------------------------------------------------------------------
+RUN cd /build/kamex-1.8.3/addons/sqlbox \
+    && sed -i \
+         -e 's/meta_data TEXT NULL, foreign_id VARCHAR(255) NULL)/meta_data TEXT NULL, priority BIGINT NULL, foreign_id VARCHAR(255) NULL)/g' \
+         -e 's/binfo, meta_data FROM %S/binfo, meta_data, priority FROM %S/' \
+         -e 's/binfo, meta_data, foreign_id) VALUES (%S, %S, %S,/binfo, meta_data, priority, foreign_id) VALUES (%S, %S, %S, %S,/' \
+         gw/sqlbox_pgsql.h \
+    && sed -i \
+         -e 's/st_str(msg->sms.meta_data), st_str(msg->sms.foreign_id));/st_str(msg->sms.meta_data), st_num(msg->sms.priority), st_str(msg->sms.foreign_id));/' \
+         -e 's/msg->sms.meta_data  = octstr_null_create(26);/msg->sms.meta_data = octstr_null_create(26);\n            msg->sms.priority = atol_null(27);/' \
+         gw/sqlbox_pgsql.c \
+    && test "$(grep -c 'priority BIGINT NULL' gw/sqlbox_pgsql.h)" -eq 2 \
+    && grep -q 'binfo, meta_data, priority FROM %S' gw/sqlbox_pgsql.h \
+    && grep -q 'binfo, meta_data, priority, foreign_id) VALUES' gw/sqlbox_pgsql.h \
+    && test "$(sed -n '/SQLBOX_PGSQL_INSERT_QUERY/,+3p' gw/sqlbox_pgsql.h | grep -o '%S' | wc -l)" -eq 28 \
+    && grep -q 'st_num(msg->sms.priority)' gw/sqlbox_pgsql.c \
+    && grep -q 'msg->sms.priority = atol_null(27);' gw/sqlbox_pgsql.c
+
+RUN cd /build/kamex-1.8.3/addons/sqlbox \
     && autoreconf -fi \
     && ./configure --prefix=/usr --with-kannel-dir=/usr \
     && make -j"$(nproc)" \
+    && grep -qa 'binfo, meta_data, priority FROM' gw/sqlbox \
     && install -m 755 gw/sqlbox /sqlbox-nomssql
 
 FROM ghcr.io/vaska94/kamex:1.8.3@sha256:c13f0e390bf0cbadef55440a6dc584670851faf41e42a027644e984502a21d7d
