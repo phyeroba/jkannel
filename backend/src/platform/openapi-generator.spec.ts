@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../security/auth.guard';
+import { ApiKeyAuthGuard } from '../api-gateway/api-key-auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { buildOpenApiDocument, collectRoutes } from './openapi-generator';
 
@@ -24,6 +25,14 @@ class PublicController {
   }
 }
 
+@Controller('gatewayish')
+@UseGuards(ApiKeyAuthGuard, PermissionsGuard)
+class ApiKeyController {
+  @Post('messages') @RequirePermissions('sms.send') submit() {
+    return {};
+  }
+}
+
 describe('collectRoutes', () => {
   it('reflects path, method, path-params and auth from real decorators', () => {
     const routes = collectRoutes([WidgetsController, PublicController]);
@@ -39,6 +48,37 @@ describe('collectRoutes', () => {
 
     expect(byId('/widgets', 'post')?.method).toBe('post');
     expect(byId('/public-thing/ping', 'get')?.secured).toBe(false);
+  });
+
+  /**
+   * Regression: the generator recognised only `AuthGuard` by name, so every
+   * API-key-guarded route was emitted with `security: []`. The console's API
+   * Reference renders that document verbatim, so the effect was the reference
+   * telling readers that `/gateway/*` — the externally-reachable send API —
+   * needed no credential. A false "public" on a secured route is the worst
+   * direction for this error to point, hence a test rather than a comment.
+   */
+  it('emits the API-key scheme for ApiKeyAuthGuard rather than calling it public', () => {
+    const routes = collectRoutes([ApiKeyController]);
+    const submit = routes.find((r) => r.path === '/gatewayish/messages');
+    expect(submit?.secured).toBe(true);
+    expect(submit?.authSchemes).toEqual(['apiKeyAuth']);
+
+    const document = buildOpenApiDocument([ApiKeyController]) as any;
+    expect(document.paths['/gatewayish/messages'].post.security).toEqual([{ apiKeyAuth: [] }]);
+    expect(document.components.securitySchemes.apiKeyAuth).toEqual({
+      type: 'apiKey',
+      in: 'header',
+      name: 'X-API-Key',
+    });
+  });
+
+  it('keeps bearer and public routes distinct from API-key ones', () => {
+    const routes = collectRoutes([WidgetsController, PublicController, ApiKeyController]);
+    const schemes = (path: string) => routes.find((r) => r.path === path)?.authSchemes;
+    expect(schemes('/widgets')).toEqual(['bearerAuth']);
+    expect(schemes('/public-thing/ping')).toEqual([]);
+    expect(schemes('/gatewayish/messages')).toEqual(['apiKeyAuth']);
   });
 
   it('recovers named query parameters', () => {

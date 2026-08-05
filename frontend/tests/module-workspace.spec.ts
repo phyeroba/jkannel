@@ -58,15 +58,72 @@ const stubDownloads = () => {
 };
 
 describe('module workspace behavior', () => {
-  it('filters records and communicates the empty state in the table', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation(() => apiResponse(records)),
+  /**
+   * Regression: Customers, API Gateway, Plugins and Backup had no grid config,
+   * so each loaded the API's default first page (50 rows), rendered no pager,
+   * and searched only those rows in the browser — while the backend exposed a
+   * full search/sort/filter whitelist for all four. Row 51 was unreachable and
+   * a search that "found nothing" had never looked past page one.
+   */
+  it('sends the customers search, sort and filter to the API and pages the result', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((url: string) =>
+        apiResponse(String(url).includes('search=') ? gridPage([], 0) : gridPage(records, 120)),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/customers', 'Customers');
+    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
+
+    // The pager exists at all, and knows there are more than one page of rows.
+    expect(wrapper.get('[data-testid="grid-range"]').text()).toContain('120');
+    // Sort and filter controls are offered because the API honours them.
+    expect(wrapper.get('[data-testid="grid-sort"]').findAll('option').length).toBe(4);
+    expect(wrapper.find('[data-testid="grid-filter-status"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="workspace-search"]').setValue('no-such-customer');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('search=no-such-customer')),
+      ).toBe(true),
     );
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="empty-state"]').text()).toBe(
+        'No records match these filters.',
+      ),
+    );
+    wrapper.unmount();
+  });
+
+  /**
+   * Regression: the Messages search box searched nothing.
+   *
+   * It never triggered a request (the debounce watcher only fired for grid and
+   * cursor workspaces), and `visibleRows` then filtered the API's own matches
+   * against `id name detail status` — fields a SQLBox message row does not
+   * carry. Searching a recipient or message body matched on the server and was
+   * discarded in the browser, so the operator saw "No records match".
+   */
+  it('sends the messages search term to the API and keeps the rows it returns', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => apiResponse(records));
+    vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
     await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
-    await wrapper.get('[data-testid="workspace-search"]').setValue('no-such-message');
-    expect(wrapper.get('.empty-cell').text()).toBe('No records match these filters.');
+
+    await wrapper.get('[data-testid="workspace-search"]').setValue('+256700000000');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('query=%2B256700000000')),
+      ).toBe(true),
+    );
+    // The server answered with rows; none of them may be filtered back out here.
+    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
+
+    // And the coarse client-side Status dropdown is gone: Messages has a real
+    // server-side "Delivery status" filter, and two Status controls with
+    // different vocabularies on one screen contradicted each other.
+    expect(wrapper.find('[data-testid="status-filter"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('creates a route with target/fallback SMSC dropdowns and labels row actions for assistive technology', async () => {

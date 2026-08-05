@@ -328,6 +328,7 @@ export class ScheduledSendService {
       channel: request.channel,
       operator: request.operator ?? null,
       cost: request.cost ?? null,
+      priority: request.priority ?? null,
       rerouteIfUnavailable: request.rerouteIfUnavailable ?? false,
       reference: request.reference ?? null,
     };
@@ -772,6 +773,9 @@ export class ScheduledSendService {
       channel: (payload.channel ?? 'console') as SendChannel,
       operator: payload.operator ?? null,
       cost: payload.cost ?? null,
+      // `?? null`, never `?? 0`: a hold created before priority existed has no
+      // key here, and null is "no preference" — 0 would be the bulk level.
+      priority: payload.priority ?? null,
       rerouteIfUnavailable: Boolean(payload.rerouteIfUnavailable),
       reference: payload.reference ?? row.id,
       schedule,

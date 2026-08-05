@@ -31,6 +31,12 @@ interface GridFilterField {
   field: string;
   label: string;
   options?: string[];
+  /**
+   * Names a ref of `{ value, label }` choices loaded at runtime. Needed where
+   * the API filters on an opaque id but the grid displays a human name: a plain
+   * text box then silently returns nothing for the very value on screen.
+   */
+  choices?: 'routeSmsc';
 }
 
 interface GridConfig {
@@ -331,7 +337,11 @@ const definitions: Record<string, Workspace> = {
           label: 'Deployment',
           options: ['draft', 'validated', 'deployed', 'rolled_back', 'disabled', 'archived'],
         },
-        { field: 'targetSmscId', label: 'Target SMSC' },
+        // The API compares `target_smsc_id::text` exactly, and the grid column
+        // renders `target_smsc_name` — so a free-text box invited the operator
+        // to type the name they could see and get zero rows back, with no
+        // error. Pick from the same connections list the route editor uses.
+        { field: 'targetSmscId', label: 'Target SMSC', choices: 'routeSmsc' },
       ],
       exportBase: '/routes/export',
     },
@@ -577,6 +587,14 @@ const definitions: Record<string, Workspace> = {
     action: 'Add customer',
     actionEndpoint: '/customers',
     actionMethod: 'POST',
+    // Mirrors CUSTOMER_GRIDS.customers. Without a grid this workspace loaded
+    // the API's default first 50 rows, rendered no pager, and searched only
+    // those 50 in the browser — so row 51 onward was unreachable and a search
+    // that "found nothing" had never looked past the first page.
+    grid: {
+      sortFields: ['name', 'status', 'createdAt'],
+      filters: [{ field: 'status', label: 'Status' }],
+    },
     columns: [
       { header: 'Customer', value: (raw) => text(raw.name) },
       { header: 'Code', value: (raw) => text(raw.code), mono: true },
@@ -594,6 +612,13 @@ const definitions: Record<string, Workspace> = {
     actionEndpoint: '/api-gateway/clients',
     actionMethod: 'POST',
     creatable: true,
+    // Mirrors PLATFORM_GRIDS.apiGatewayClients. No exportBase: this workspace
+    // already renders its own CSV/PDF buttons for the same endpoints.
+    grid: {
+      sortFields: ['name', 'status', 'createdAt', 'lastUsedAt', 'rateLimit'],
+      defaultSort: '-createdAt',
+      filters: [{ field: 'status', label: 'Status' }],
+    },
     columns: [
       { header: 'Name', value: (raw) => text(raw.name) },
       { header: 'Client key', value: (raw) => text(raw.client_key ?? raw.clientKey), mono: true },
@@ -653,6 +678,14 @@ const definitions: Record<string, Workspace> = {
     search: 'Plugin, capability, publisher, or state',
     endpoint: '/plugins',
     action: 'Refresh',
+    /* Mirrors PLATFORM_GRIDS.plugins. */
+    grid: {
+      sortFields: ['name', 'status', 'installedAt', 'version'],
+      filters: [
+        { field: 'status', label: 'Status' },
+        { field: 'publisher', label: 'Publisher' },
+      ],
+    },
     columns: [
       { header: 'Plugin', value: (raw) => text(raw.name ?? raw.plugin_id) },
       { header: 'Version', value: (raw) => text(raw.version) },
@@ -669,6 +702,25 @@ const definitions: Record<string, Workspace> = {
     action: 'Create backup',
     actionEndpoint: '/backup-dr',
     actionMethod: 'POST',
+    // Mirrors BACKUP_DR_GRIDS.backups. No exportBase: this workspace renders
+    // its own CSV button (and states that there is no PDF route).
+    grid: {
+      sortFields: [
+        'startedAt',
+        'completedAt',
+        'status',
+        'kind',
+        'retentionClass',
+        'verifiedAt',
+        'sizeBytes',
+      ],
+      defaultSort: '-startedAt',
+      filters: [
+        { field: 'status', label: 'Status' },
+        { field: 'kind', label: 'Kind' },
+        { field: 'retentionClass', label: 'Retention' },
+      ],
+    },
     columns: [
       { header: 'Label', value: (raw) => text(raw.label) },
       { header: 'Scope', value: (raw) => text(raw.scope) },
@@ -816,9 +868,16 @@ const smscOptionsError = ref('');
 const deliverySummary = ref<RecordValue | null>(null);
 const deliveryUnavailable = ref(false);
 
-/* Honest "planned / unavailable" source handling (e.g. customers). */
+/*
+  Honest handling of a backend `source: { status: 'unavailable' }` marker. In
+  practice every one the console reaches is the SQLBox message store reporting
+  itself unreachable, so the code is kept and branched on — see
+  detectUnavailableSource().
+*/
 const sourceUnavailable = ref(false);
 const sourceMessage = ref('');
+const sourceCode = ref('');
+const sourceIsOutage = computed(() => sourceCode.value === 'SQLBOX_NOT_AVAILABLE');
 
 /* Shared detail drawer (users, smsc, logs-audit). */
 const detailOpen = ref(false);
@@ -1033,8 +1092,23 @@ const states = computed(() => [
   'All',
   ...new Set(rows.value.map((row) => row.status).filter(Boolean)),
 ]);
+/**
+ * Workspaces whose search term is sent to the API rather than applied here.
+ *
+ * `/messages` belongs in this set and was missing from it, with two
+ * consequences: the debounced search watcher bailed out (so typing did nothing
+ * until "Apply filters" was clicked), and `visibleRows` then re-filtered the
+ * server's own matches against `id name detail status` — fields a SQLBox
+ * message row does not have. Searching a recipient number or message body,
+ * exactly what the placeholder invites, matched on the server and was then
+ * filtered to zero rows in the browser, showing "No records match these
+ * filters."
+ */
+const serverSideSearch = computed(
+  () => Boolean(grid.value) || isCursor.value || key.value === 'messages',
+);
 const visibleRows = computed(() => {
-  if (grid.value) return rows.value;
+  if (serverSideSearch.value) return rows.value;
   return rows.value
     .filter((row) => state.value === 'All' || row.status === state.value)
     .filter((row) =>
@@ -1075,6 +1149,24 @@ const isCursor = computed(() => isQueue.value || isDlr.value);
 const isDocker = computed(() => key.value === 'docker');
 const isSystem = computed(() => key.value === 'system');
 const customRender = computed(() => isCursor.value || isDocker.value || isSystem.value);
+
+/**
+ * Whether the search box actually filters anything on this workspace.
+ *
+ * Three cases:
+ *   - `grid` → the term is sent as `?search=` and applied by the API. Real.
+ *   - the generic table → `visibleRows` filters the loaded rows client-side.
+ *     Narrower than it looks, but real.
+ *   - `/docker` and `/system` → rendered by their own templates, which iterate
+ *     `containers` / `settingGroups` and never consult `visibleRows`; neither
+ *     endpoint reads a query parameter either. `/monitoring` returns a single
+ *     engine-identity row, so filtering it is meaningless.
+ * The last group used to render a search box (and a Status dropdown) that
+ * silently did nothing, so those controls are no longer offered there.
+ */
+const searchIsLive = computed(
+  () => !isDocker.value && !isSystem.value && key.value !== 'monitoring',
+);
 const detailModule = computed(
   () =>
     key.value === 'users' ||
@@ -1196,14 +1288,26 @@ function captureMessageFilterEcho(payload: unknown) {
   if (messageAppliedFilters.value === '—') messageAppliedFilters.value = '';
 }
 
+/**
+ * A `source: { status: 'unavailable' }` marker is not one thing.
+ *
+ * Every emitter the console actually reaches is `SQLBOX_NOT_AVAILABLE` — the
+ * message store is down or unreachable — which is an OUTAGE, not a roadmap
+ * item. Rendering it as "Planned — not yet available" told an operator that
+ * Messages, Queues and Delivery Reports had never been built, at the exact
+ * moment they most needed to know SQLBox was unreachable. The code is now read
+ * so the outage case says so, in an alert, with the probe evidence.
+ */
 function detectUnavailableSource(payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
   const source = (payload as RecordValue).source;
   if (source && typeof source === 'object' && (source as RecordValue).status === 'unavailable') {
+    const record = source as RecordValue;
     sourceUnavailable.value = true;
+    sourceCode.value = text(record.code, '');
     sourceMessage.value = text(
-      (source as RecordValue).message,
-      'This module is planned and not yet available.',
+      record.message ?? record.detail,
+      'The data source for this workspace reported itself unavailable.',
     );
   }
 }
@@ -1215,6 +1319,7 @@ async function load(preserveNotice = false) {
   unavailable.value = false;
   sourceUnavailable.value = false;
   sourceMessage.value = '';
+  sourceCode.value = '';
   if (!preserveNotice) notice.value = '';
   if (key.value === 'messages') {
     messageFilterError.value = '';
@@ -1570,6 +1675,20 @@ function smscDotClass(raw: RecordValue) {
   if (enabled && ['active', 'reachable', 'deployed', 'validated'].includes(life)) return 'good';
   if (!enabled || ['degraded', 'archived'].includes(life)) return 'bad';
   return 'warn';
+}
+/**
+ * Whether an SMSC row is currently enabled.
+ *
+ * The row-action toggle used to key off `row.status`, but `normalize()` derives
+ * `status` from `status ?? state ?? lifecycle_state` and the SMSC list SELECT
+ * returns neither `status` nor `state` — so `row.status` was always the
+ * lifecycle state. A connection with `enabled = false` and
+ * `lifecycle_state = 'active'` therefore showed "Disable" (disabling an already
+ * disabled bind) and could never be re-enabled from the grid, while the
+ * "Enabled" column one cell to the left correctly said "no".
+ */
+function smscEnabled(raw: RecordValue) {
+  return !(raw.enabled === false || raw.enabled === 'false');
 }
 function smscHealthText(raw: RecordValue) {
   const health = raw.health;
@@ -2167,7 +2286,13 @@ async function verifyBackup(row: Row) {
   error.value = '';
   notice.value = '';
   try {
-    const result = await apiRequest<RecordValue>(`/backup-dr/${row.id}/verify`);
+    // POST, not GET: the route is `@Post(':id/verify')` and re-checks the
+    // artifact's checksum. Sent as a bare GET this 404'd on every click, so the
+    // button reported "Request failed (404)" and never verified anything.
+    const result = await apiRequest<RecordValue>(`/backup-dr/${row.id}/verify`, {
+      method: 'POST',
+      body: '{}',
+    });
     notice.value = `Verification for ${row.name}: ${text(
       result.status ?? result.detail ?? result.state,
       'completed',
@@ -3089,7 +3214,9 @@ const {
 });
 
 watch(query, (value) => {
-  if (!grid.value && !isCursor.value) return;
+  // Only debounce-and-reload where the term is a server parameter; elsewhere
+  // `visibleRows` filters what is already loaded and no request is needed.
+  if (!serverSideSearch.value) return;
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     if (value === appliedSearch) return;
@@ -3154,6 +3281,7 @@ watch(
     deliveryUnavailable.value = false;
     sourceUnavailable.value = false;
     sourceMessage.value = '';
+    sourceCode.value = '';
     resetCursor();
     gridFilters.value = {};
     const defaultSort = workspace.value?.grid?.defaultSort ?? '';
@@ -3173,6 +3301,9 @@ watch(
     retentionSweep.value = null;
     // Only the live modules poll; everything else stays on manual refresh.
     liveAuto.value = isLiveModule.value;
+    // The Target SMSC filter is a select over these, so they have to be there
+    // before the operator opens it — not only once the route composer is used.
+    if (key.value === 'routing') void loadRouteSmscOptions();
     void load();
   },
   { immediate: true },
@@ -3186,7 +3317,7 @@ onUnmounted(() => {
 <template>
   <section v-if="workspace" :aria-busy="loading" data-testid="module-workspace">
     <section class="toolbar panel" :class="{ 'grid-toolbar': Boolean(grid) }">
-      <label class="filter-search">
+      <label v-if="searchIsLive" class="filter-search">
         <span class="sr-only">Search {{ workspace.noun }} records</span>
         <input v-model="query" :placeholder="workspace.search" data-testid="workspace-search" />
       </label>
@@ -3207,7 +3338,16 @@ onUnmounted(() => {
       >
         {{ sortDirection === 'asc' ? 'Asc ↑' : 'Desc ↓' }}
       </button>
-      <label v-if="!grid" class="filter-select">
+      <!--
+        Only offered where it is wired to something: `visibleRows` is what
+        applies it, and the custom-render workspaces (queues, delivery reports,
+        docker, system) render their own tables straight from their own state
+        and never consult it. Delivery Reports has its own real status chips,
+        and Messages has a real server-side "Delivery status" select — this
+        client-side one filtered the coarse legacy status against a completely
+        different vocabulary, so two Status controls disagreed on one screen.
+      -->
+      <label v-if="!grid && !customRender && key !== 'messages'" class="filter-select">
         <span>Status</span>
         <select v-model="state" data-testid="status-filter">
           <option v-for="option in states" :key="option">{{ option }}</option>
@@ -3311,14 +3451,15 @@ onUnmounted(() => {
         >
           Export CSV
         </button>
-        <button
-          class="secondary-button"
-          data-testid="export-backup-pdf"
-          :disabled="loading"
-          @click="exportSimple('/backup-dr/export', 'pdf')"
+        <!--
+          No PDF button: `/backup-dr/export.pdf` does not exist — the controller
+          defines `export.csv` only. (`/backups/export.pdf` on the legacy catalog
+          controller is a different resource this console never reads.) Stating
+          the gap the way the Reports page does beats a button that 404s.
+        -->
+        <small class="source-note" data-testid="export-backup-csv-only"
+          >CSV only — the API has no PDF route for the backup catalog.</small
         >
-          Export PDF
-        </button>
       </template>
       <template v-if="key === 'api-gateway'">
         <button
@@ -3350,6 +3491,17 @@ onUnmounted(() => {
             <option value="">All</option>
             <option v-for="option in field.options" :key="option" :value="option">
               {{ option }}
+            </option>
+          </select>
+          <select
+            v-else-if="field.choices === 'routeSmsc'"
+            v-model="gridFilters[field.field]"
+            :data-testid="`grid-filter-${field.field}`"
+            @change="applyGrid"
+          >
+            <option value="">All</option>
+            <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
             </option>
           </select>
           <input
@@ -3512,11 +3664,26 @@ onUnmounted(() => {
     <section
       v-if="sourceUnavailable"
       class="panel help-box"
-      role="status"
+      :role="sourceIsOutage ? 'alert' : 'status'"
       data-testid="source-unavailable"
     >
-      <h2>Planned — not yet available</h2>
-      <p>{{ sourceMessage }}</p>
+      <template v-if="sourceIsOutage">
+        <h2>Message store unreachable</h2>
+        <p>
+          The SQLBox message store is not answering, so this workspace has no data to show. This is
+          an outage, not a missing feature — the rows exist, the console cannot read them right now.
+        </p>
+        <p class="mono" data-testid="source-unavailable-evidence">{{ sourceMessage }}</p>
+        <p>
+          Check the SQLBox container on
+          <RouterLink class="text-link" to="/docker">Runtime Containers</RouterLink>, then retry.
+        </p>
+        <button class="secondary-button" :disabled="loading" @click="load()">Retry</button>
+      </template>
+      <template v-else>
+        <h2>Data source unavailable</h2>
+        <p>{{ sourceMessage }}</p>
+      </template>
     </section>
 
     <section v-if="revealedSecret" class="panel secret-box" role="alert" data-testid="secret-box">
@@ -3573,15 +3740,26 @@ onUnmounted(() => {
         Plugins run out-of-process with least-privilege permissions and only receive the events they
         declare.
       </p>
+      <!--
+        This list previously promised Install and Uninstall as if they were
+        controls on this screen. `POST /plugins/install` exists but nothing in
+        the console calls it, and uninstall has no route at all — the plugins
+        controller defines no DELETE. Enable and disable are the only actions
+        this screen can perform, so that is what it now claims.
+      -->
       <ul>
         <li>
-          <strong>Install</strong> the signed bundle, then <strong>validate</strong> its manifest.
-        </li>
-        <li>
           <strong>Enable</strong> to start receiving events; <strong>disable</strong> to pause it.
+          These are the two actions available on this screen.
         </li>
-        <li><strong>Uninstall</strong> to remove it entirely.</li>
         <li>Each plugin is limited to the permissions and events listed below.</li>
+        <li>
+          <strong>Installing</strong> a signed bundle is an API operation (<code
+            >POST /plugins/install</code
+          >, which validates the manifest); there is no upload control here yet.
+          <strong>Uninstalling</strong> has no API at all — removing a plugin is an operator task on
+          the host.
+        </li>
       </ul>
     </section>
 
@@ -3826,10 +4004,18 @@ onUnmounted(() => {
           The <strong>client secret is shown exactly once</strong> at creation (and on rotate). Copy
           it immediately — it cannot be retrieved again.
         </li>
+        <!--
+          This used to say "send the key as a bearer token". It is not a bearer
+          token: ApiKeyAuthGuard reads X-API-Key, or an Authorization header
+          whose scheme is literally `ApiKey`. Sent as `Bearer`, the key is
+          treated as a JWT and rejected, which is a genuinely baffling 401.
+        -->
         <li>
-          <strong>Authenticate</strong> by sending the key as a bearer token:
-          <code>Authorization: Bearer &lt;client-key&gt;</code> against <code>{{ apiBaseUrl }}</code
-          >.
+          <strong>Authenticate</strong> with the key in its own header:
+          <code>X-API-Key: &lt;client-key&gt;</code> — or
+          <code>Authorization: ApiKey &lt;client-key&gt;</code> — against
+          <code>{{ apiBaseUrl }}/gateway</code>. It is not a bearer token; sending it as
+          <code>Bearer</code> fails authentication.
         </li>
         <li>
           <strong>Scopes</strong> (for example <code>messages.send</code>,
@@ -3840,8 +4026,9 @@ onUnmounted(() => {
           <code>429</code>.
         </li>
         <li>
-          The full machine-readable reference is at
-          <code>{{ openApiUrl }}</code> (OpenAPI 3).
+          The full reference — every route, the permission it needs, and its parameters — is on the
+          <RouterLink class="text-link" to="/api-reference">API Reference</RouterLink> screen, which
+          renders the live <code>{{ openApiUrl }}</code> document (OpenAPI 3.1).
         </li>
       </ul>
     </section>
@@ -3864,8 +4051,9 @@ onUnmounted(() => {
           may read), and <code>events</code> (what it subscribes to).
         </li>
         <li>
-          <strong>Lifecycle</strong>: install → validate → enable → disable → uninstall. Enabling
-          starts event delivery; disabling pauses it without removing the plugin.
+          <strong>Lifecycle</strong>: install → validate → enable → disable. Enabling starts event
+          delivery; disabling pauses it without removing the plugin. Install runs over the API only
+          (<code>POST /plugins/install</code>), and there is no uninstall endpoint today.
         </li>
         <li>
           <strong>Permission &amp; event model</strong>: plugins run out-of-process with
@@ -5213,9 +5401,10 @@ onUnmounted(() => {
                 </button>
                 <button
                   class="secondary-button"
-                  @click="rowAction(row, row.status === 'disabled' ? 'enable' : 'disable')"
+                  :data-testid="`smsc-toggle-${row.id}`"
+                  @click="rowAction(row, smscEnabled(row.raw) ? 'disable' : 'enable')"
                 >
-                  {{ row.status === 'disabled' ? 'Enable' : 'Disable' }}
+                  {{ smscEnabled(row.raw) ? 'Disable' : 'Enable' }}
                 </button>
               </td>
               <td v-else-if="key === 'routing'" class="row-actions">
@@ -5426,7 +5615,15 @@ onUnmounted(() => {
               <td v-for="column in queueColumns" :key="column.label">{{ column.value(item) }}</td>
             </tr>
             <tr v-if="!loading && !cursorItems.length">
-              <td :colspan="queueColumns.length" class="empty-cell">No queued messages.</td>
+              <!-- An empty send queue is the healthy steady state, not a fault. -->
+              <td :colspan="queueColumns.length" class="empty-cell">
+                The send queue is empty.
+                <small class="empty-cell-hint"
+                  >That is the normal state for a healthy gateway — messages leave the spool as fast
+                  as the binds accept them. Anything already handed to an SMSC has moved on to
+                  Messages and Delivery Reports.</small
+                >
+              </td>
             </tr>
           </tbody>
         </table>
@@ -5789,7 +5986,19 @@ onUnmounted(() => {
             <dd v-if="container.detail">{{ text(container.detail) }}</dd>
           </dl>
         </article>
-        <p v-if="!loading && !containers.length" class="empty-cell">No containers reported.</p>
+        <!--
+          "No containers reported" was indistinguishable from "the Docker probe
+          failed", which matters because the panel's own note says unprobeable
+          services come back as `unknown` rather than vanishing.
+        -->
+        <p v-if="!loading && !containers.length" class="empty-cell">
+          The container inventory came back empty.
+          <small class="empty-cell-hint"
+            >A running deployment normally reports at least one service here, and services the probe
+            cannot reach are listed as <code>unknown</code> rather than omitted — so an empty list
+            usually means the Docker probe itself could not enumerate anything.</small
+          >
+        </p>
       </div>
     </section>
 

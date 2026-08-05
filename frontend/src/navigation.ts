@@ -234,6 +234,14 @@ export const navigation: NavigationItem[] = [
     permission: 'system.view',
     group: 'Platform',
   },
+  // No permission: an API reference is documentation, and the OpenAPI document
+  // it renders is served unauthenticated by the backend.
+  {
+    label: 'API Reference',
+    to: '/api-reference',
+    icon: 'api',
+    group: 'Platform',
+  },
   {
     label: 'Runtime Containers',
     to: '/docker',

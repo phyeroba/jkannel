@@ -282,7 +282,12 @@ async function loadSmscOptions() {
     const payload = await apiRequest<unknown>('/smscs?limit=500&offset=0');
     smscOptions.value = asItems(payload)
       .map((row) => ({
-        value: text(row.id, ''),
+        // The ENGINE id, not the row UUID. A maintenance window's SMSC scope is
+        // matched in MaintenanceWindowService against the `smsc` metric label,
+        // and the only writer of that label is the status poller, which sets it
+        // to `bind.engineId`. Sending UUIDs saved a window that looked correct
+        // and suppressed absolutely nothing.
+        value: text(row.engine_id ?? row.engineId, ''),
         label: `${text(row.name)} (${text(row.engine_id ?? row.engineId)})`,
       }))
       .filter((option) => option.value && option.value !== '—');
@@ -895,10 +900,21 @@ onMounted(() => {
           Schedule window
         </button>
       </header>
+      <!--
+        This used to end "there is no per-alert 'suppress' action". There is:
+        POST /alerts/:id/suppress, and the Alert Lifecycle screen already ships
+        the control. Left uncorrected, the note sent operators looking for a
+        capability the console had, and told them it did not exist.
+      -->
       <p class="source-note">
         During a window, alert rule evaluation and escalation are suppressed for everything in its
-        scope. This is how planned work is kept out of the alert stream — there is no per-alert
-        “suppress” action.
+        scope — this is how planned work is kept out of the alert stream. To silence one alert
+        rather than a scope, use the per-alert suppress action on
+        <RouterLink class="text-link" to="/alert-lifecycle">Alert Lifecycle</RouterLink>.
+      </p>
+      <p class="source-note" data-testid="maintenance-scope-note">
+        Scoped windows match on the SMSC <strong>engine id</strong> carried by the metric samples
+        the alert rules evaluate, which is what the picker below sends.
       </p>
 
       <p v-if="windowNotice" class="notice" role="status" data-testid="maintenance-notice">

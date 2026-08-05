@@ -10,7 +10,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
-import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { KamexSqlboxRepository, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 import { DatabaseService } from '../database/database.service';
 import { MessageSendService } from '../messaging-depth/message-send.service';
 import { ApiKeyAuthGuard, GatewayRequest } from './api-key-auth.guard';
@@ -91,6 +91,12 @@ export class GatewayMessagingController {
    * bind from the tenant's deployed routes and live bind health, and the
    * decision is recorded. Supplying it pins the bind (still validated against
    * the tenant's own SMSCs).
+   *
+   * `priority` is an optional integer 0 (bulk) to 3 (highest) reaching
+   * `send_sms.priority`, which orders bearerbox's per-SMSC outbound queue.
+   * Omitted means no preference and is NOT equivalent to 0. Because it orders a
+   * QUEUE, it is only observable under backlog — an idle bind drains in
+   * sub-second time and sends in arrival order regardless.
    */
   @Post('messages')
   @RequirePermissions(GATEWAY_SCOPES.smsSend)
@@ -117,6 +123,7 @@ export class GatewayMessagingController {
         channel: 'api',
         reference: optionalText(body.reference) ?? null,
         operator: optionalText(body.operator) ?? null,
+        priority: parseMessagePriority(body.priority),
       },
     );
   }

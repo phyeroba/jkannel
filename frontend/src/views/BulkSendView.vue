@@ -79,6 +79,12 @@ interface GridColumn {
   value: (raw: RecordValue) => string;
   /** API sort field name; omitted when the column is not sortable server-side. */
   sort?: string;
+  /**
+   * Why this column has no sort control. Rendered as the header's tooltip so an
+   * unsortable heading reads as a deliberate, explained limit rather than a
+   * button that failed to render.
+   */
+  note?: string;
   mono?: boolean;
   badge?: boolean;
   hint?: (raw: RecordValue) => string;
@@ -380,8 +386,15 @@ const recipientColumns: GridColumn[] = [
     value: (raw) => text(raw.foreign_id ?? raw.foreignId, ''),
     mono: true,
   },
-  // `error` is a search column but not a sort column on BULK_RECIPIENT_GRID.
-  { key: 'error', label: 'Error', value: (raw) => text(raw.error, '') },
+  // `error` is in BULK_RECIPIENT_GRID.searchColumns but not in its sortColumns,
+  // so the API would reject `sort=error`. The header therefore carries no sort
+  // button — and says why, so it does not read as a broken control.
+  {
+    key: 'error',
+    label: 'Error',
+    note: 'Searchable, but not sortable: the API’s recipient sort whitelist does not include the error column.',
+    value: (raw) => text(raw.error, ''),
+  },
   {
     key: 'createdAt',
     label: 'Created',
@@ -724,6 +737,9 @@ onMounted(() => {
         >
           {{ jobsExporting ? 'Exporting…' : 'Export CSV' }}
         </button>
+        <small class="source-note" data-testid="bulk-jobs-csv-only"
+          >CSV only — the API has no PDF route for this export.</small
+        >
       </div>
 
       <p
@@ -758,7 +774,10 @@ onMounted(() => {
                     jobsSortDir === 'asc' ? '▲' : '▼'
                   }}</span>
                 </button>
-                <template v-else>{{ column.label }}</template>
+                <span v-else class="column-static" :title="column.note">
+                  {{ column.label }}
+                  <abbr v-if="column.note" title="Not sortable" aria-hidden="true">·</abbr>
+                </span>
               </th>
             </tr>
           </thead>
@@ -946,6 +965,9 @@ onMounted(() => {
           >
             {{ recipientsExporting ? 'Exporting…' : 'Export CSV' }}
           </button>
+          <small class="source-note" data-testid="bulk-recipients-csv-only"
+            >CSV only — the API has no PDF route for this export.</small
+          >
         </div>
 
         <div class="table-wrap">
@@ -974,7 +996,10 @@ onMounted(() => {
                       recipientsSortDir === 'asc' ? '▲' : '▼'
                     }}</span>
                   </button>
-                  <template v-else>{{ column.label }}</template>
+                  <span v-else class="column-static" :title="column.note">
+                    {{ column.label }}
+                    <abbr v-if="column.note" title="Not sortable" aria-hidden="true">·</abbr>
+                  </span>
                 </th>
               </tr>
             </thead>
@@ -1035,6 +1060,11 @@ onMounted(() => {
             </button>
           </div>
         </footer>
+        <p class="source-note" data-testid="bulk-recipients-sort-note">
+          The API sorts recipients by receiver, status, foreign ID or created time only. Error text
+          is searchable — the search box covers receiver, foreign ID and error — but it is not in
+          the sort whitelist, so that column has no sort control.
+        </p>
       </template>
     </section>
   </div>
@@ -1067,5 +1097,23 @@ onMounted(() => {
 }
 .notice-panel .notice {
   margin-top: 0;
+}
+/*
+  A column that cannot be sorted server-side must not look like a sort button
+  that failed to render. It stays plain heading text; the dotted marker carries
+  the "there is a reason" tooltip, and the grid footnote spells the reason out
+  for anyone not hovering.
+*/
+.column-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+.column-static abbr {
+  color: var(--muted);
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+  text-decoration: none;
 }
 </style>

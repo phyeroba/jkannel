@@ -330,6 +330,32 @@ describe('MessageSendService — route selection on the send path (G2)', () => {
     );
   });
 
+  /**
+   * A validated-then-dropped parameter is worse than an absent one: the caller
+   * gets a 200, the value is echoed nowhere, and the campaign that was supposed
+   * to sit behind everything else quietly does not. These two tests exist
+   * because this service is the single hop between every console/API/bulk
+   * submit and `send_sms`, so a missing line here silently disables priority
+   * across the whole product while every endpoint still accepts the field.
+   */
+  it('carries priority through to the engine submission', async () => {
+    const { service, sqlbox } = makeStack({
+      routes: [routeRow({ id: 'r-ug', name: 'Uganda', target_smsc_id: 'smsc-a' })],
+    });
+    await service.send(actor, { ...message, channel: 'console', priority: 3 });
+    expect(sqlbox.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: 3 }));
+  });
+
+  it('sends priority 0 as 0 and an unspecified priority as null, never conflating them', async () => {
+    const bulk = makeStack({ routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })] });
+    await bulk.service.send(actor, { ...message, channel: 'console', priority: 0 });
+    expect(bulk.sqlbox.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: 0 }));
+
+    const unset = makeStack({ routes: [routeRow({ id: 'r', name: 'UG', target_smsc_id: 'smsc-a' })] });
+    await unset.service.send(actor, { ...message, channel: 'console' });
+    expect(unset.sqlbox.submit).toHaveBeenCalledWith(expect.objectContaining({ priority: null }));
+  });
+
   it('still honours an explicit smscId, without consulting the router', async () => {
     const { service, sqlbox, sql } = makeStack({ routes: [] });
     const result = await service.send(actor, {

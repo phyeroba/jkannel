@@ -25,6 +25,12 @@ const mountWorkspace = async (path: string, title: string) => {
       ...(path === '/messages'
         ? []
         : [{ path: '/messages', name: 'messages', component: { template: '<div />' } }]),
+      // The SQLBox-outage panel points at Runtime Containers, and the API
+      // gateway panel at the API Reference.
+      ...(path === '/docker'
+        ? []
+        : [{ path: '/docker', name: 'docker', component: { template: '<div />' } }]),
+      { path: '/api-reference', name: 'api-reference', component: { template: '<div />' } },
     ],
   });
   await router.push(path);
@@ -140,6 +146,106 @@ describe('module workspace per-module enhancements', () => {
         fetchMock.mock.calls.some(
           (call) => /\/users\/u1$/.test(String(call[0])) && call[1]?.method === 'DELETE',
         ),
+      ).toBe(true),
+    );
+  });
+
+  /**
+   * Regression: the Enable/Disable row action keyed off `row.status`, which
+   * `normalize()` derives from `status ?? state ?? lifecycle_state` — and the
+   * SMSC list SELECT returns neither `status` nor `state`. A connection with
+   * `enabled = false` and `lifecycle_state = 'active'` therefore offered
+   * "Disable" (disabling something already disabled) and could never be
+   * re-enabled from the grid, while the Enabled column beside it said "no".
+   */
+  it('labels the SMSC enable/disable action from `enabled`, not the lifecycle state', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (/\/smscs\/s2\/actions\/enable$/.test(url) && init?.method === 'POST')
+        return apiResponse({});
+      return apiResponse(
+        gridPage([
+          { id: 's1', name: 'Live', enabled: true, lifecycle_state: 'active' },
+          // The trap: disabled, but still lifecycle_state = 'active'.
+          { id: 's2', name: 'Paused', enabled: false, lifecycle_state: 'active' },
+        ]),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    expect(wrapper.get('[data-testid="smsc-toggle-s1"]').text()).toBe('Disable');
+    expect(wrapper.get('[data-testid="smsc-toggle-s2"]').text()).toBe('Enable');
+
+    await wrapper.get('[data-testid="smsc-toggle-s2"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            /\/smscs\/s2\/actions\/enable$/.test(String(call[0])) && call[1]?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+  });
+
+  /**
+   * Regression: a search box and a Status dropdown were rendered on every
+   * workspace, including the ones whose templates never consult `visibleRows`
+   * and whose endpoints read no query parameter at all. Typing did nothing,
+   * with no indication that it would do nothing.
+   */
+  it('offers no search or status control where neither the client nor the API applies one', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => apiResponse({ items: [], observedAt: 't' })),
+    );
+    for (const [path, title] of [
+      ['/docker', 'Docker'],
+      ['/system', 'System Settings'],
+      ['/monitoring', 'Monitoring'],
+    ]) {
+      const wrapper = await mountWorkspace(path, title);
+      await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+      expect(wrapper.find('[data-testid="workspace-search"]').exists()).toBe(false);
+      wrapper.unmount();
+    }
+
+    // Delivery Reports renders its own table from its own state, so the generic
+    // Status dropdown never reached it either — but its search box is real,
+    // because the term is sent to the API.
+    const dlr = await mountWorkspace('/delivery-reports', 'Delivery Reports');
+    await vi.waitFor(() => expect(dlr.attributes('aria-busy')).toBe('false'));
+    expect(dlr.find('[data-testid="workspace-search"]').exists()).toBe(true);
+    expect(dlr.find('[data-testid="status-filter"]').exists()).toBe(false);
+    dlr.unmount();
+  });
+
+  /**
+   * Regression: the routing Target SMSC filter was a free-text box, but the API
+   * compares `target_smsc_id::text` exactly while the grid column renders
+   * `target_smsc_name`. Typing the name on screen returned zero rows silently.
+   */
+  it('filters routes by target SMSC through a picker that sends the id the API compares', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/smscs'))
+        return apiResponse(
+          gridPage([{ id: 'smsc-1', engine_id: 'primary-smpp', name: 'Primary SMPP' }]),
+        );
+      return apiResponse(gridPage([]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/routing', 'Routing');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    const filter = wrapper.get('[data-testid="grid-filter-targetSmscId"]');
+    expect(filter.element.tagName).toBe('SELECT');
+    await vi.waitFor(() => expect(filter.findAll('option').length).toBe(2));
+    expect(filter.text()).toContain('Primary SMPP');
+
+    await filter.setValue('smsc-1');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.targetSmscId=smsc-1')),
       ).toBe(true),
     );
   });
@@ -698,13 +804,23 @@ describe('module workspace per-module enhancements', () => {
     });
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    // Verify uses GET /backup-dr/:id/verify.
+    // Verify is POST /backup-dr/:id/verify. It used to be sent as a bare GET,
+    // which 404s on every click because the route is @Post — the button
+    // reported a failure and never re-checked a checksum.
     await wrapper.get('[data-testid="backup-verify-b1"]').trigger('click');
     await vi.waitFor(() =>
       expect(
-        fetchMock.mock.calls.some((call) => String(call[0]).includes('/backup-dr/b1/verify')),
+        fetchMock.mock.calls.some(
+          (call) => String(call[0]).includes('/backup-dr/b1/verify') && call[1]?.method === 'POST',
+        ),
       ).toBe(true),
     );
+
+    // No PDF button: /backup-dr/export.pdf does not exist. The gap is stated
+    // instead of offered, the way the Reports page states its own.
+    expect(wrapper.find('[data-testid="export-backup-pdf"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="export-backup-csv"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="export-backup-csv-only"]').text()).toContain('CSV only');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Restore requires a reason and posts confirm:true to /backup-dr/:id/restore.
@@ -846,7 +962,39 @@ describe('module workspace per-module enhancements', () => {
     expect(wrapper.get('[data-testid="docker-panel"]').text()).toContain('unknown');
   });
 
-  it('shows an honest planned message when a module source is unavailable (customers)', async () => {
+  /**
+   * Every `source: { status: 'unavailable' }` the console reaches is the SQLBox
+   * message store being unreachable. It used to be rendered as "Planned — not
+   * yet available", i.e. an outage was reported as a feature that had never
+   * been built — at exactly the moment the operator needed the opposite.
+   */
+  it('reports a SQLBox outage as an outage, not as an unbuilt feature', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      apiResponse({
+        items: [],
+        source: {
+          status: 'unavailable',
+          code: 'SQLBOX_NOT_AVAILABLE',
+          message: 'connect ECONNREFUSED 172.18.0.5:3306',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/queues', 'Queues');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+
+    const panel = wrapper.get('[data-testid="source-unavailable"]');
+    expect(panel.attributes('role')).toBe('alert');
+    expect(panel.text()).toContain('Message store unreachable');
+    expect(panel.text()).not.toContain('Planned');
+    expect(panel.text()).toContain('outage, not a missing feature');
+    // The probe's own evidence, so the operator can act on it.
+    expect(wrapper.get('[data-testid="source-unavailable-evidence"]').text()).toContain(
+      'ECONNREFUSED',
+    );
+  });
+
+  it('shows an honest unavailable message when a module source is unavailable (customers)', async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       apiResponse({
         items: [],
@@ -1123,7 +1271,16 @@ describe('module workspace per-module enhancements', () => {
     const docs = wrapper.get('[data-testid="api-gateway-docs"]').text();
     expect(docs).toContain('shown exactly once');
     expect(docs).toContain('openapi.json');
-    expect(docs).toContain('Bearer');
+    // The gateway key is NOT a bearer token: ApiKeyAuthGuard reads X-API-Key or
+    // `Authorization: ApiKey …`. The panel used to instruct callers to send it
+    // as Bearer, which is parsed as a JWT and rejected.
+    expect(docs).toContain('X-API-Key');
+    expect(docs).toContain('Authorization: ApiKey');
+    expect(docs).toContain('not a bearer token');
+    // And it points at the rendered reference rather than only the raw JSON.
+    expect(wrapper.get('[data-testid="api-gateway-docs"]').find('a').attributes('href')).toBe(
+      '/api-reference',
+    );
   });
 
   it('opens a volume snapshot detail with related breakdown from the reports grid', async () => {

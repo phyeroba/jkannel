@@ -403,4 +403,65 @@ describe('Analytics & Reports view', () => {
     // No fabricated numbers appear in an empty overview.
     expect(wrapper.find('[data-testid="overview-cards"]').exists()).toBe(false);
   });
+  /**
+   * Regression: the "Report type" menu offered every catalog kind flagged
+   * available, but a SAVED DEFINITION may only name a kind in the backend's
+   * REPORT_TYPES whitelist — a strict subset. Six options (smsc_success_rate,
+   * route_success_rate, queue_status, engine_health, recent_changes,
+   * audit_activity) therefore always answered 400. `hourly_heatmap` is also
+   * listed under two catalog categories, which rendered a duplicate option.
+   */
+  it('offers only report kinds a definition may actually name, deduplicated', async () => {
+    const twoCategoryCatalog = {
+      categories: [
+        {
+          key: 'traffic',
+          name: 'Traffic reports',
+          kinds: [
+            { key: 'daily_volume', name: 'Daily volume', available: true },
+            { key: 'hourly_heatmap', name: 'Hourly heatmap', available: true },
+            // Renderable on this page, but the scheduler has no runner for it.
+            { key: 'queue_status', name: 'Queue status', available: true },
+          ],
+        },
+        {
+          key: 'performance',
+          name: 'Performance reports',
+          kinds: [
+            { key: 'hourly_heatmap', name: 'Hourly heatmap', available: true },
+            { key: 'smsc_success_rate', name: 'SMSC success rate', available: true },
+            { key: 'latency_sla', name: 'Latency SLA', available: false },
+          ],
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/reports/analytics/catalog'))
+        return apiResponse(twoCategoryCatalog);
+      if (String(url).includes('/reports/definitions'))
+        return apiResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      return apiResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(AnalyticsView);
+    // Enabled only once the catalog has arrived and yielded definable kinds.
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="definition-new"]').attributes('disabled')).toBeUndefined(),
+    );
+    await wrapper.get('[data-testid="definition-new"]').trigger('click');
+
+    const options = wrapper
+      .get('[data-testid="definition-type"]')
+      .findAll('option')
+      .map((option) => option.element.value);
+    expect(options).toEqual(['daily_volume', 'hourly_heatmap']);
+    // Not offered: not in the create endpoint's whitelist.
+    expect(options).not.toContain('queue_status');
+    expect(options).not.toContain('smsc_success_rate');
+    // Listed twice in the catalog, offered once here.
+    expect(options.filter((key) => key === 'hourly_heatmap')).toHaveLength(1);
+    expect(wrapper.get('[data-testid="definition-type-note"]').text()).toContain(
+      'kinds the scheduler can run',
+    );
+  });
 });

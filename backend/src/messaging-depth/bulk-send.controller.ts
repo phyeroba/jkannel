@@ -15,6 +15,7 @@ import { PermissionsGuard, RequirePermissions } from '../security/permissions.gu
 import { Actor, BulkSendService, BULK_SEND_MAX_RECIPIENTS } from './bulk-send.service';
 import { ScheduledSendService } from './scheduled-send.service';
 import { parseMessageSchedule } from './message-scheduling';
+import { parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -81,6 +82,13 @@ export class BulkSendController {
    * normal send path with its own routing, blocklist and entitlement checks
    * evaluated THEN. Cancel or move it via `/scheduled-messages`. A past
    * `scheduledAt`, or a validity that would expire at or before it, is a 400.
+   *
+   * `priority` (0 bulk .. 3 highest, optional) is the campaign's send priority,
+   * inherited by every recipient and written to `send_sms.priority`. This is
+   * the send path where it matters most: a campaign is how a backlog forms on a
+   * throughput-capped bind, and marking one 0 is what keeps it behind
+   * transactional traffic sharing that bind. Omitted is "no preference", which
+   * is NOT the same as 0.
    */
   @Post() @RequirePermissions('configuration.manage') create(@Req() r: Request, @Body() b: any) {
     return this.scheduling.submitBulk(actor(r), {
@@ -93,6 +101,7 @@ export class BulkSendController {
         b?.customerId === undefined || b?.customerId === null || b?.customerId === ''
           ? undefined
           : uuid(b.customerId, 'customerId'),
+      priority: parseMessagePriority(b?.priority),
       schedule: parseMessageSchedule(b),
     });
   }

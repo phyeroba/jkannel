@@ -22,6 +22,7 @@ describe('primary navigation contract', () => {
         '/reports',
         '/customers',
         '/api-gateway',
+        '/api-reference',
         '/docker',
         '/logs-audit',
         '/plugins',
@@ -38,13 +39,21 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(29);
+    expect(navigation).toHaveLength(30);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
         (item) => item.permission === undefined || /\.(view|sessions)$/.test(item.permission),
       ),
     ).toBe(true);
+  });
+
+  it('keeps the API reference reachable for every authenticated user', () => {
+    const reference = navigation.find((item) => item.to === '/api-reference');
+    expect(reference).toBeDefined();
+    expect(reference?.group).toBe('Platform');
+    // Documentation, and the OpenAPI document itself is served unauthenticated.
+    expect(reference?.permission).toBeUndefined();
   });
 
   it('keeps notifications reachable for every authenticated user', () => {

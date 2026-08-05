@@ -21,7 +21,8 @@ import { PERMISSIONS_KEY } from '../security/permissions.guard';
  *   - path parameters (from :param segments);
  *   - named query parameters (@Query('name')) and header parameters
  *     (@Headers('name'));
- *   - whether the route is bearer-secured (AuthGuard present) or public;
+ *   - which credential the route takes: bearer JWT (AuthGuard), API key
+ *     (ApiKeyAuthGuard -> the `X-API-Key` scheme), or neither;
  *   - required permissions (@RequirePermissions -> x-required-permissions).
  *
  * Honest limitations (documented, not hidden):
@@ -60,7 +61,21 @@ export interface RouteInfo {
   method: string;
   /** OpenAPI-style path with {param} placeholders, e.g. /jobs/{id}. */
   path: string;
+  /** True when ANY authentication guard is present — bearer or API key. */
   secured: boolean;
+  /**
+   * Which security schemes the route's guards imply, in the order they should
+   * be offered. Empty means genuinely public.
+   *
+   * Separate from {@link secured} because the two answer different questions:
+   * `secured` is "may an anonymous caller reach this", while this is "what
+   * credential do I present". Collapsing them is what produced the earlier bug
+   * where every API-key route rendered as public — the generator recognised
+   * only `AuthGuard`, so `/gateway/*` came out with `security: []` and the
+   * console's API Reference told readers the most sensitive surface in the
+   * product needed no credential at all.
+   */
+  authSchemes: Array<'bearerAuth' | 'apiKeyAuth'>;
   permissions: string[];
   parameters: RouteParameter[];
   /** True when the handler accepts the whole query object (grid-style list). */
@@ -166,6 +181,7 @@ export function collectRoutes(controllers: Ctor[]): RouteInfo[] {
     if (typeof cls !== 'function') continue;
     const basePath = firstPath(Reflect.getMetadata(PATH_METADATA, cls));
     const classSecured = guardsInclude(cls, 'AuthGuard');
+    const classApiKey = guardsInclude(cls, 'ApiKeyAuthGuard');
     const classPermissions = readPermissions(cls);
     for (const handlerName of ownMethodNames(cls)) {
       const handler = (cls.prototype as Record<string, unknown>)[handlerName];
@@ -183,12 +199,18 @@ export function collectRoutes(controllers: Ctor[]): RouteInfo[] {
         ...args.query,
         ...args.headers,
       ];
+      const bearer = classSecured || guardsInclude(handler, 'AuthGuard');
+      const apiKey = classApiKey || guardsInclude(handler, 'ApiKeyAuthGuard');
+      const authSchemes: Array<'bearerAuth' | 'apiKeyAuth'> = [];
+      if (bearer) authSchemes.push('bearerAuth');
+      if (apiKey) authSchemes.push('apiKeyAuth');
       routes.push({
         controller: cls.name,
         handler: handlerName,
         method: httpMethod,
         path,
-        secured: classSecured || guardsInclude(handler, 'AuthGuard'),
+        secured: bearer || apiKey,
+        authSchemes,
         permissions: [...new Set([...classPermissions, ...readPermissions(handler)])],
         parameters,
         wholeQuery: args.wholeQuery && httpMethod === 'get',
@@ -236,7 +258,9 @@ function operationFor(route: RouteInfo): Record<string, unknown> {
     operationId: `${route.controller}_${route.handler}`,
     summary: SUMMARY_OVERRIDES[key] ?? `${humanize(route.handler)}`,
     tags: [route.path.split('/').filter(Boolean)[0] ?? 'root'],
-    security: route.secured ? [{ bearerAuth: [] }] : [],
+    // One entry per scheme is OR in OpenAPI: any ONE of them authenticates the
+    // request. That is the real semantics here — no route requires both.
+    security: route.authSchemes.map((scheme) => ({ [scheme]: [] })),
     responses: {
       '200': { description: 'Successful response' },
     },
@@ -297,6 +321,8 @@ export function buildOpenApiDocument(
       ],
     },
     servers: [{ url: '/api/v1' }],
+    // Document-level default only; every operation states its own, including
+    // the public ones (`security: []`) and the API-key ones.
     security: [{ bearerAuth: [] }],
     components: buildComponents(),
     paths,
@@ -305,7 +331,15 @@ export function buildOpenApiDocument(
 
 function buildComponents(): Record<string, unknown> {
   return {
-    securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
+    securitySchemes: {
+      bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      // `X-API-Key` is the header ApiKeyAuthGuard reads. It also accepts
+      // `Authorization: ApiKey <key>`, but that cannot be expressed as a second
+      // apiKey scheme on the same name, and sending the key as a BEARER token
+      // fails — it is parsed as a JWT and rejected. Naming the header here is
+      // the form that cannot be misread.
+      apiKeyAuth: { type: 'apiKey', in: 'header', name: 'X-API-Key' },
+    },
     headers: {
       IdempotencyKey: {
         description: 'Prevents duplicate execution of mutating retryable requests.',

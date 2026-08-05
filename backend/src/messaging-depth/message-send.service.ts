@@ -49,6 +49,21 @@ export interface SendRequest {
   /** Per-message charge override; otherwise the route's cost, else the default. */
   cost?: number | null;
   /**
+   * Engine send priority, 0 (bulk) to 3 (highest), already validated by
+   * `parseMessagePriority`. Written to `send_sms.priority`, which the patched
+   * sqlbox PostgreSQL driver carries into bearerbox, whose per-SMSC outbound
+   * queue is a max-heap on it.
+   *
+   * NULL and 0 are DIFFERENT and neither is a default for the other: null means
+   * "no preference" and reaches the engine as `MSG_PARAM_UNDEFINED`, while 0 is
+   * the real, lowest level. Passing `?? 0` here would quietly demote every
+   * unspecified message below every specified one.
+   *
+   * Only observable when a backlog exists: with an idle bind and a sub-second
+   * drain, nothing is ever queued long enough to reorder.
+   */
+  priority?: number | null;
+  /**
    * Deferred delivery + expiry, already parsed and validated by
    * `parseMessageSchedule`. Resolved into `send_sms.deferred` /
    * `send_sms.validity` (relative minutes) at the instant of the INSERT, which
@@ -414,6 +429,7 @@ export class MessageSendService {
           dlrMask: request.dlrMask,
           dlrUrl: request.dlrUrl,
           foreignId: request.foreignId,
+          priority: request.priority ?? null,
           deferredMinutes: columns.deferredMinutes,
           validityMinutes: columns.validityMinutes,
         });

@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -326,5 +327,58 @@ describe('Escalation & maintenance view', () => {
     );
     expect(readOnly.find('[data-testid="readiness-repair"]').exists()).toBe(false);
     readOnly.unmount();
+  });
+
+  /**
+   * Regression: the maintenance panel asserted "there is no per-alert
+   * 'suppress' action". There is — POST /alerts/:id/suppress — and the Alert
+   * Lifecycle screen already ships the control. The note sent operators looking
+   * for a capability the console had, and told them it did not exist.
+   */
+  it('points at the per-alert suppress action instead of denying it exists', async () => {
+    stubApi();
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:pathMatch(.*)*', component: { template: '<p />' } }],
+    });
+    await router.push('/alert-response');
+    await router.isReady();
+    const wrapper = mount(AlertResponseView, { global: { plugins: [router] } });
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="maintenance-scope-note"]').exists()).toBe(true),
+    );
+
+    const panel = wrapper.text();
+    expect(panel).not.toContain('there is no per-alert');
+    expect(panel).toContain('per-alert suppress action');
+    expect(
+      wrapper.findAll('a').some((link) => link.attributes('href') === '/alert-lifecycle'),
+    ).toBe(true);
+    wrapper.unmount();
+  });
+
+  /**
+   * Regression: the SMSC scope picker sent the row UUID, but
+   * MaintenanceWindowService matches `scope.smscs` against the `smsc` metric
+   * label, which the status poller writes as the ENGINE id. The window saved,
+   * looked correct, and suppressed nothing at all.
+   */
+  it('scopes a maintenance window by SMSC engine id, which is what suppression matches', async () => {
+    stubApi();
+    const wrapper = mount(AlertResponseView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="maintenance-create"]').exists()).toBe(true),
+    );
+    await wrapper.get('[data-testid="maintenance-create"]').trigger('click');
+    const scope = wrapper.get('[data-testid="maintenance-scope-all"]');
+    await scope.setValue(scope.findAll('option')[1].element.value);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="maintenance-smscs"]').exists()).toBe(true),
+    );
+
+    const option = wrapper.get('[data-testid="maintenance-smscs"]').get('input[type="checkbox"]');
+    expect((option.element as HTMLInputElement).value).toBe('primary-smpp');
+    expect(wrapper.get('[data-testid="maintenance-smscs"]').text()).toContain('Primary SMPP');
+    wrapper.unmount();
   });
 });

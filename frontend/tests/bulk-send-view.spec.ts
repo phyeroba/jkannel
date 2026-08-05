@@ -459,5 +459,22 @@ describe('Bulk Send view', () => {
     expect(exportUrl).not.toContain('cursor=');
     expect(exportUrl).not.toContain('limit=');
     expect(wrapper.get('[data-testid="bulk-detail-notice"]').text()).toContain('Exported 42');
+
+    // `error` is in BULK_RECIPIENT_GRID.searchColumns but not sortColumns, so
+    // it must not offer a sort control — and must not read as one that broke.
+    expect(wrapper.find('[data-testid="bulk-recipients-sort-error"]').exists()).toBe(false);
+    const errorHeader = wrapper.findAll('th').find((header) => header.text().startsWith('Error'))!;
+    expect(errorHeader.get('.column-static').attributes('title')).toContain('not sortable');
+    expect(errorHeader.attributes('aria-sort')).toBeUndefined();
+    expect(wrapper.get('[data-testid="bulk-recipients-sort-note"]').text()).toContain(
+      'not in the sort whitelist',
+    );
+
+    // Both bulk exports are CSV-only, and say so rather than leaving a reader
+    // hunting for a PDF button that no route backs.
+    expect(wrapper.get('[data-testid="bulk-recipients-csv-only"]').text()).toContain('CSV only');
+    expect(wrapper.get('[data-testid="bulk-jobs-csv-only"]').text()).toContain(
+      'no PDF route for this export',
+    );
   });
 });

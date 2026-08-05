@@ -674,12 +674,41 @@ const defRows = ref<Definition[]>([]);
 const defTotal = ref(0);
 const defNotice = ref('');
 
-/** Available report kinds (catalog kinds flagged available) for the create form. */
+/**
+ * The report kinds a SAVED DEFINITION may name.
+ *
+ * Mirrors REPORT_TYPES in backend/src/reporting-depth/report-definitions.
+ * repository.ts, which the create/update endpoints validate against. It is a
+ * strict subset of the catalog's `available` kinds — a catalog kind can be
+ * renderable on demand without the scheduler having a runner for it. Offering
+ * the whole catalog here put six options in the menu (smsc_success_rate,
+ * route_success_rate, queue_status, engine_health, recent_changes,
+ * audit_activity) that always answered 400.
+ */
+const DEFINABLE_REPORT_TYPES = new Set([
+  'daily_volume',
+  'weekly_volume',
+  'traffic_trend',
+  'delivery_breakdown',
+  'smsc_volume',
+  'smsc_success',
+  'route_volume',
+  'route_performance',
+  'hourly_heatmap',
+  'latency_sla',
+]);
+
+/** Definable catalog kinds, for the create form. */
 const availableKinds = computed(() => {
   const kinds: Array<{ key: string; label: string }> = [];
+  // `hourly_heatmap` is listed under two catalog categories, so dedupe by key —
+  // otherwise the <select> renders it twice with a duplicate :key.
+  const seen = new Set<string>();
   for (const category of catalogCategories.value) {
     for (const kind of category.kinds) {
-      if (kind.available) kinds.push({ key: kind.key, label: `${category.name} · ${kind.name}` });
+      if (!kind.available || !DEFINABLE_REPORT_TYPES.has(kind.key) || seen.has(kind.key)) continue;
+      seen.add(kind.key);
+      kinds.push({ key: kind.key, label: `${category.name} · ${kind.name}` });
     }
   }
   return kinds;
@@ -1470,6 +1499,10 @@ onMounted(() => void refreshAll());
               {{ kind.label }}
             </option>
           </select>
+          <small class="source-note" data-testid="definition-type-note"
+            >Only the kinds the scheduler can run are listed. Other catalog panels can be read on
+            this page but cannot be saved as a definition.</small
+          >
         </label>
         <label>
           Schedule

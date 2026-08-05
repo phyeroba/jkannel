@@ -33,6 +33,15 @@ export interface CreateBulkSendInput {
   /** Customer the campaign is attributed to and entitlement-checked against. */
   customerId?: string | null;
   /**
+   * Campaign-level send priority, 0 (bulk) to 3 (highest), inherited by every
+   * recipient. Omitted or null is "no preference", NOT 0.
+   *
+   * This is the send path where priority earns its keep: a campaign is how a
+   * backlog gets created in the first place, so marking one 0 is what keeps it
+   * behind transactional traffic on a shared bind. See migration 045.
+   */
+  priority?: number | null;
+  /**
    * Campaign-level deferred delivery + expiry, already validated by
    * `parseMessageSchedule`.
    *
@@ -87,7 +96,7 @@ export const BULK_SEND_MAX_RECIPIENTS = 5000;
 const BULK_SEND_LOCK_NAMESPACE = 0x2c3d;
 
 const JOB_COLUMNS =
-  'id,name,smsc_id,sender,customer_id::text,status,total,submitted,failed,detail,scheduled_at,validity_minutes,created_by,created_at,completed_at';
+  'id,name,smsc_id,sender,customer_id::text,status,total,submitted,failed,detail,scheduled_at,validity_minutes,priority,created_by,created_at,completed_at';
 const RECIPIENT_COLUMNS = 'id,job_id,receiver,text,status,foreign_id,error,created_at';
 
 /**
@@ -296,8 +305,8 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
       }
       const created = (
         await client.query(
-          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,sender,customer_id,status,total,created_by,scheduled_at,validity_minutes)
-           VALUES($1,$2,$3,$4,$5,$8,$6,$7,$9,$10) RETURNING ${JOB_COLUMNS}`,
+          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,sender,customer_id,status,total,created_by,scheduled_at,validity_minutes,priority)
+           VALUES($1,$2,$3,$4,$5,$8,$6,$7,$9,$10,$11) RETURNING ${JOB_COLUMNS}`,
           [
             actor.tenantId,
             input.name,
@@ -309,6 +318,7 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
             status,
             scheduledAt,
             schedule?.validityMinutes ?? null,
+            input.priority ?? null,
           ],
         )
       ).rows[0];
@@ -541,8 +551,9 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           created_by: string | null;
           scheduled_at: Date | string | null;
           validity_minutes: number | string | null;
+          priority: number | string | null;
         }>(
-          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status = ANY($2) RETURNING id,smsc_id,sender,customer_id::text,created_by,scheduled_at,validity_minutes",
+          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status = ANY($2) RETURNING id,smsc_id,sender,customer_id::text,created_by,scheduled_at,validity_minutes,priority",
           [jobId, DISPATCHABLE_STATUSES],
         )
       ).rows[0];
@@ -563,6 +574,10 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
         sender: job.sender ?? defaultBulkSender(),
         customerId: job.customer_id,
         createdBy: job.created_by ?? 'bulk-send',
+        // `?? null`, not `?? 0`: a campaign created before 045, or one that
+        // simply expressed no preference, must not be demoted to the bulk level.
+        priority:
+          job.priority === null || job.priority === undefined ? null : Number(job.priority),
         // Every recipient inherits the campaign's schedule. It travels as the
         // absolute instant, not as an offset. By the time a held campaign is
         // dispatched that instant has passed, so the per-recipient `deferred`
@@ -607,6 +622,7 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
             customerId: claim.customerId,
             channel: 'bulk',
             reference: jobId,
+            priority: claim.priority,
             schedule: claim.schedule,
           },
         );

@@ -11,6 +11,7 @@ import AlertLifecycleView from '../views/AlertLifecycleView.vue';
 import LogExplorerView from '../views/LogExplorerView.vue';
 import RoutingDepthView from '../views/RoutingDepthView.vue';
 import RolesView from '../views/RolesView.vue';
+import ApiReferenceView from '../views/ApiReferenceView.vue';
 import { canAccess, session } from '../stores/session';
 import { initializeSession, isAuthenticated } from '../stores/session';
 import LoginView from '../views/LoginView.vue';
@@ -71,7 +72,9 @@ const modules = [
   [
     '/logs-audit',
     'Logs & Audit',
-    'Search runtime logs and immutable operator audit events.',
+    // Runtime logs are the separate Log Explorer workspace; this one is the
+    // immutable audit trail. The old description promised both here.
+    'Search the immutable operator audit trail. Runtime logs live in Log Explorer.',
     'monitoring.view',
   ],
   [
@@ -83,7 +86,8 @@ const modules = [
   [
     '/backup',
     'Backup & Restore',
-    'Create, verify, download, and restore platform backups.',
+    // No "download": there is no artifact-download route and no control for it.
+    'Create, verify, schedule, and restore platform backups.',
     'system.view',
   ],
   ['/users', 'Users & Roles', 'Administer identities and access policies.', 'users.view'],
@@ -249,6 +253,21 @@ const routes: RouteRecordRaw[] = [
       description: 'Review and revoke active operator sessions.',
       breadcrumb: ['Sessions'],
       permission: 'users.sessions',
+    },
+  },
+  {
+    // No `permission`: this is documentation, and the document it renders is
+    // itself served unauthenticated by the backend (OpenApiController carries no
+    // guard). Gating the reader behind system.view would restrict the reference
+    // more tightly than the thing it describes. Same reasoning as /help.
+    path: '/api-reference',
+    name: 'api-reference',
+    component: ApiReferenceView,
+    meta: {
+      title: 'API Reference',
+      description:
+        'Every REST operation this deployment actually exposes, with the permission it requires — rendered live from the auto-generated OpenAPI document.',
+      breadcrumb: ['API Reference'],
     },
   },
   {

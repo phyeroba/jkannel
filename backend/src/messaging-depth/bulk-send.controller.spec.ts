@@ -61,11 +61,39 @@ describe('BulkSendController', () => {
         smscId: 'carrier-a',
         message: 'hi',
         recipients: ['+256700000000', '+256711111111'],
+        sender: undefined,
+        customerId: undefined,
+        // null, not 0: a campaign that expressed no priority must not be
+        // demoted to the bulk level, which is a real and lower SMPP value.
+        priority: null,
         // An unscheduled campaign still carries an explicit empty schedule, so
         // the service never has to distinguish "not asked for" from "absent".
         schedule: { scheduledAtMs: null, validityMinutes: null },
       },
     );
+  });
+
+  it('passes a stated campaign priority through, and rejects an out-of-range one', async () => {
+    const controller = new BulkSendController(service, scheduling);
+    await controller.create(request, {
+      name: 'Campaign',
+      message: 'hi',
+      recipients: ['+256700000000'],
+      priority: 0,
+    });
+    expect(scheduling.submitBulk).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ priority: 0 }),
+    );
+
+    expect(() =>
+      controller.create(request, {
+        name: 'Campaign',
+        message: 'hi',
+        recipients: ['+256700000000'],
+        priority: 9,
+      }),
+    ).toThrow(BadRequestException);
   });
 
   it('validates the job id on read endpoints', () => {

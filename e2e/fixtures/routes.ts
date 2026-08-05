@@ -34,6 +34,7 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Customers', path: '/customers', root: 'module-workspace' },
   { label: 'AI Copilot', path: '/copilot', root: 'copilot-view' },
   { label: 'API Gateway', path: '/api-gateway', root: 'module-workspace' },
+  { label: 'API Reference', path: '/api-reference', root: 'api-reference-view' },
   { label: 'Runtime Containers', path: '/docker', root: 'module-workspace' },
   { label: 'Logs & Audit', path: '/logs-audit', root: 'module-workspace' },
   { label: 'Log Explorer', path: '/log-explorer', root: 'log-explorer-view' },

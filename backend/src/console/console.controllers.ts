@@ -24,7 +24,7 @@ import {
 } from '../security/security-policy.service';
 import { ConsoleRepository, Actor, GridPage } from './console.repository';
 import { ExportColumn, ExportService } from '../platform/export.service';
-import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { KamexSqlboxRepository, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 import {
   ConfigurationGeneratorService,
   EngineConfiguration,
@@ -1393,20 +1393,18 @@ export class ReadModelsController {
    * honour. A past `scheduledAt`, or a validity that would expire at or before
    * it, is a 400 naming the problem. See messaging-depth/message-scheduling.ts.
    *
-   * MESSAGE PRIORITY is not a parameter of this endpoint, and the absence is
-   * deliberate rather than an oversight. `send_sms.priority` is now a real,
-   * honoured control: the sqlbox image this platform builds patches its
-   * PostgreSQL driver to select the column, and bearerbox orders each SMSC's
-   * outbound queue by it — see the note above KamexSqlboxRepository.submit for
-   * the full chain. But this endpoint does not reach `submit()` directly; it
-   * delegates to ScheduledSendService -> MessageSendService, and until
-   * `priority` is carried across those two hops (a field on `SendRequest`,
-   * forwarded into their `sqlbox.submit({...})` call) accepting it here would
-   * validate a value and then silently drop it — an inert control, which is
-   * worse than none. The send path that accepts it end to end today is
-   * `POST /queue/resend`, which spools directly. Either way, priority only
-   * reorders a queue that has a backlog in it: on an idle bind with a
-   * sub-second drain it changes nothing observable.
+   * MESSAGE PRIORITY. Optional `priority`, an integer 0 (bulk) to 3 (highest);
+   * omitted or null means no preference, which is NOT the same as 0. It is
+   * carried through ScheduledSendService -> MessageSendService into
+   * `send_sms.priority`; the sqlbox image this platform builds patches its
+   * PostgreSQL driver to carry the column (stock sqlbox drops it on this
+   * driver), and bearerbox's per-SMSC outbound queue is a max-heap on it.
+   *
+   * The honest limit: priority reorders a queue, so it only changes anything
+   * when a backlog exists. On an idle bind with a sub-second drain, a priority-3
+   * message and a priority-0 message sent together will leave in the order they
+   * arrived, because neither ever waits. It also cannot preempt a segment
+   * already handed to the SMPP link.
    */
   @Post('messages') @RequirePermissions('configuration.manage') async submit(
     @Req() r: Request,
@@ -1431,6 +1429,7 @@ export class ReadModelsController {
       customerId: optionalUuid(b.customerId, 'customerId') ?? null,
       channel: 'console',
       operator: typeof b.operator === 'string' ? b.operator : null,
+      priority: parseMessagePriority(b?.priority),
       schedule,
     });
   }
