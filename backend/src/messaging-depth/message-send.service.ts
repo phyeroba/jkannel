@@ -10,6 +10,7 @@ import {
 import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { SendEntitlementsService } from './send-entitlements.service';
+import { MessageSchedule, engineScheduleColumns } from './message-scheduling';
 
 export interface Actor {
   tenantId: string;
@@ -45,6 +46,17 @@ export interface SendRequest {
   rerouteIfUnavailable?: boolean;
   /** Per-message charge override; otherwise the route's cost, else the default. */
   cost?: number | null;
+  /**
+   * Deferred delivery + expiry, already parsed and validated by
+   * {@link parseMessageSchedule}. Resolved into `send_sms.deferred` /
+   * `send_sms.validity` (relative minutes) at the instant of the INSERT, which
+   * is what the engine's time base requires.
+   *
+   * A deferral is a request to the CARRIER, not a hold: nothing in JKANNEL or
+   * Kannel keeps the message back. Read message-scheduling.ts before telling a
+   * user their message is "scheduled".
+   */
+  schedule?: MessageSchedule | null;
 }
 
 export interface SendResult {
@@ -65,6 +77,15 @@ export interface SendResult {
   customerId: string | null;
   /** Amount debited from the customer's balance, 0 when unbilled. */
   charged: number;
+  /**
+   * Instant the caller asked for delivery at, echoed back so the console can
+   * show what was actually requested. null = as soon as possible.
+   */
+  scheduledAt: string | null;
+  /** `send_sms.deferred` as written (relative minutes), or null. */
+  deferredMinutes: number | null;
+  /** `send_sms.validity` as written (relative minutes), or null. */
+  validityMinutes: number | null;
 }
 
 type DecisionOutcome = 'routed' | 'explicit' | 'rerouted' | 'rejected';
@@ -286,6 +307,11 @@ export class MessageSendService {
         });
 
         // 6. Submit. Last statement in the transaction (see class doc).
+        // The deferral offset is resolved HERE rather than when the request was
+        // parsed: sqlbox anchors `deferred` to its own pickup time, so the
+        // offset has to be measured from as close to the INSERT as possible.
+        // For a bulk campaign that gap is minutes, not milliseconds.
+        const columns = engineScheduleColumns(request.schedule);
         const queued = await this.sqlbox.submit({
           sender,
           receiver: normalized.e164 ?? destination,
@@ -294,6 +320,8 @@ export class MessageSendService {
           dlrMask: request.dlrMask,
           dlrUrl: request.dlrUrl,
           foreignId: request.foreignId,
+          deferredMinutes: columns.deferredMinutes,
+          validityMinutes: columns.validityMinutes,
         });
 
         await client.query('UPDATE message_route_decisions SET message_ref=$2 WHERE id=$1', [
@@ -315,6 +343,12 @@ export class MessageSendService {
               customerId: request.customerId ?? null,
               charged: outcome.charged,
               destination,
+              scheduledAt:
+                request.schedule?.scheduledAtMs != null
+                  ? new Date(request.schedule.scheduledAtMs).toISOString()
+                  : null,
+              deferredMinutes: columns.deferredMinutes,
+              validityMinutes: columns.validityMinutes,
             }),
             record.reason,
           ],
@@ -335,6 +369,12 @@ export class MessageSendService {
           decisionId,
           customerId: outcome.customerId,
           charged: outcome.charged,
+          scheduledAt:
+            request.schedule?.scheduledAtMs != null
+              ? new Date(request.schedule.scheduledAtMs).toISOString()
+              : null,
+          deferredMinutes: columns.deferredMinutes,
+          validityMinutes: columns.validityMinutes,
         };
       });
     } catch (error) {

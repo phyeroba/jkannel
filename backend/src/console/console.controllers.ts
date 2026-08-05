@@ -44,6 +44,8 @@ import {
   describeMessageFilters,
   parseMessageFilters,
 } from '../messaging-depth/message-filters';
+import { parseMessageSchedule } from '../messaging-depth/message-scheduling';
+import { SEGMENT_LIMITS, previewSegments } from '../engine/message-segments';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -1297,6 +1299,60 @@ export class ReadModelsController {
       dryRun: b.dryRun !== false,
     });
   }
+  /**
+   * Segment accounting for text that has NOT been sent yet, so a composer can
+   * show "this costs 3 segments" before the operator commits to it.
+   *
+   * Cheap and side-effect free: no database, no engine, no probe — it is the
+   * same pure {@link previewSegments} the message grid uses to describe stored
+   * rows, so the composer's count and the log's count are the same number by
+   * construction.
+   *
+   * The console does NOT call this per keystroke; it mirrors the rules
+   * client-side (see the mirroring notes in engine/message-segments.ts) and
+   * uses this route to verify the mirror and to handle the awkward cases.
+   * `limits` is returned so the mirror can bootstrap its boundaries from the
+   * server rather than hard-coding a second copy of them.
+   */
+  @Get('messages/segments') @RequirePermissions('messages.view') segmentsForQuery(
+    @Query() q: any = {},
+  ) {
+    return this.segmentPreview(q?.text, q);
+  }
+  /**
+   * POST form of {@link segmentsForQuery}. Preferred by the console: a
+   * three-segment UCS-2 body is ~200 characters of percent-encoded query string
+   * and proxies do impose URL length limits.
+   */
+  @Post('messages/preview') @RequirePermissions('messages.view') previewMessage(
+    @Body() b: any = {},
+  ) {
+    return this.segmentPreview(b?.text, b);
+  }
+  private segmentPreview(rawText: unknown, source: any) {
+    if (rawText !== undefined && rawText !== null && typeof rawText !== 'string')
+      throw new BadRequestException('text must be a string');
+    const value = typeof rawText === 'string' ? rawText : '';
+    // A bound, not a business rule: 5000 characters is ~32 UCS-2 segments and
+    // far past anything sendable. It exists so the route stays cheap.
+    if (value.length > 5000)
+      throw new BadRequestException('text must be at most 5000 characters for a segment preview');
+    const preview = previewSegments({
+      text: value,
+      coding: source?.coding,
+      charset: source?.charset,
+      udhData: source?.udhData ?? source?.udh,
+    });
+    return {
+      ...preview,
+      // Aliases for the names the console's own mirror uses, so a component can
+      // consume this response and the local computation interchangeably —
+      // which is the whole point of the route existing alongside the mirror.
+      currentCapacity: preview.perSegment,
+      remainingInSegment: preview.remaining,
+      limits: SEGMENT_LIMITS,
+    };
+  }
   @Post('messages/indexes') @RequirePermissions('system.manage') async ensureMessageIndexes() {
     const probe = await this.sqlbox.probe();
     if (!probe.available)
@@ -1318,11 +1374,20 @@ export class ReadModelsController {
    * `customerId` attributes the message so the customer's blocklist, approved
    * sender IDs, route bindings, quota and credit are enforced inside the same
    * transaction as the send.
+   *
+   * SEND NOW vs SEND LATER. `scheduledAt` (ISO 8601) and `validityMinutes` map
+   * onto the engine's own `send_sms.deferred` / `send_sms.validity` columns —
+   * JKANNEL runs no scheduler of its own. A past `scheduledAt`, or a validity
+   * that would expire at or before it, is a 400 naming the problem. Read
+   * messaging-depth/message-scheduling.ts for what deferral does and does NOT
+   * guarantee: it is a request to the carrier, and the `smsc = fake` bind this
+   * deployment runs ignores it outright.
    */
   @Post('messages') @RequirePermissions('configuration.manage') async submit(
     @Req() r: Request,
     @Body() b: any,
   ) {
+    const schedule = parseMessageSchedule(b);
     const allowed = await this.tenantSmscScope(r);
     const smscId =
       b?.smscId === undefined || b?.smscId === null || b?.smscId === ''
@@ -1341,6 +1406,7 @@ export class ReadModelsController {
       customerId: optionalUuid(b.customerId, 'customerId') ?? null,
       channel: 'console',
       operator: typeof b.operator === 'string' ? b.operator : null,
+      schedule,
     });
   }
   @Get('queues') @RequirePermissions('messages.view') async queues(
@@ -1370,27 +1436,69 @@ export class ReadModelsController {
     ]);
     return { ...page, summary, source: { status: 'available', type: 'kamex-sqlbox' } };
   }
+  /**
+   * THE delivery-report option set, for the grid and for the export.
+   *
+   * The grid's status filter used to offer only "all", and the reason was not
+   * the UI: a DLR row's derived `delivery_status` was the catch-all
+   * `delivery_report`, so filtering to delivered/failed/rejected could only
+   * ever match nothing. `deliveryReport: true` makes the repository decode each
+   * receipt's OWN dlr_mask instead, which is the value that actually carries
+   * the outcome — and the whole `status` / `deliveryStatus` vocabulary the
+   * messages grid uses (including the `resendable` and `in-flight` groups) then
+   * works here unchanged.
+   *
+   * Both routes call THIS method with only their limits differing, so the CSV
+   * export cannot honour a narrower filter set than the screen it was raised
+   * from — the same structural guarantee `parseMessageFilters` gives /messages.
+   */
+  private async deliveryReportOptions(
+    r: Request,
+    q: any,
+    limits: { defaultLimit: number; maxLimit: number },
+  ) {
+    const filters = this.messageFilters(q, limits);
+    return {
+      filters,
+      options: {
+        ...filters,
+        // By definition the receipt rows, with their masks decoded. Set after
+        // the spread so no query parameter can widen the report back out.
+        deliveryReport: true as const,
+        direction: 'DLR' as const,
+        allowedSmscIds: await this.tenantSmscScope(r),
+      },
+    };
+  }
   @Get('reports/delivery') @RequirePermissions('reports.view') async reports(
     @Req() r: Request,
     @Query() q: any = {},
   ) {
+    // Parsed before the probe so a bad filter is a 400 whether or not SQLBox is
+    // reachable, exactly as on /messages.
+    const filters = this.messageFilters(q, { defaultLimit: 100, maxLimit: 500 });
     const probe = await this.sqlbox.probe();
     if (!probe.available)
       return {
         items: [],
         nextCursor: null,
         summary: null,
+        filters: { ...filters, description: describeMessageFilters(filters) ?? null },
         source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
       };
-    const page = await this.sqlbox.list({
-      ...this.messageFilters(q, { defaultLimit: 100, maxLimit: 500 }),
-      // This report is, by definition, the delivery-receipt rows.
-      direction: 'DLR',
-      allowedSmscIds: await this.tenantSmscScope(r),
+    const { options } = await this.deliveryReportOptions(r, q, {
+      defaultLimit: 100,
+      maxLimit: 500,
     });
+    const page: any = await this.sqlbox.list(options);
     return {
       ...page,
-      summary: { total: page.items.length, nextCursor: page.nextCursor },
+      summary: {
+        total: page.total ?? page.items.length,
+        returned: page.items.length,
+        nextCursor: page.nextCursor,
+      },
+      filters: { ...filters, description: describeMessageFilters(filters) ?? null },
       source: { status: 'available', type: 'kamex-sqlbox' },
     };
   }
@@ -1399,6 +1507,7 @@ export class ReadModelsController {
     @Query() q: any = {},
     @Res() response?: any,
   ) {
+    const filters = this.messageFilters(q, this.exportLimits());
     const probe = await this.sqlbox.probe();
     if (!probe.available) {
       response.setHeader('content-type', 'text/csv; charset=utf-8');
@@ -1407,15 +1516,14 @@ export class ReadModelsController {
       response.send(KamexSqlboxRepository.exportHeaderRow());
       return;
     }
-    const exported = await this.sqlbox.exportCsv({
-      ...this.messageFilters(q, this.exportLimits()),
-      // This report is, by definition, the delivery-receipt rows.
-      direction: 'DLR',
-      allowedSmscIds: await this.tenantSmscScope(r),
-    });
+    const { options } = await this.deliveryReportOptions(r, q, this.exportLimits());
+    const exported = await this.sqlbox.exportCsv(options);
     response.setHeader('content-type', 'text/csv; charset=utf-8');
     response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
     response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+    response.setHeader('x-jkannel-source-status', 'available');
+    const description = describeMessageFilters(filters);
+    if (description) response.setHeader('x-jkannel-export-filters', description);
     response.send(exported.content);
   }
   @Get('monitoring') @RequirePermissions('monitoring.view') async monitoring() {

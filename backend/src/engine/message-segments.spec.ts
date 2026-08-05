@@ -1,4 +1,15 @@
-import { countSegments, describeSegments, isGsm7Encodable } from './message-segments';
+import {
+  CONCAT_IE_OCTETS,
+  CONCAT_UDH_OCTETS,
+  GSM7_BASIC_CHARS,
+  GSM7_EXTENDED_CHARS,
+  PAYLOAD_OCTETS,
+  SEGMENT_LIMITS,
+  countSegments,
+  describeSegments,
+  isGsm7Encodable,
+  previewSegments,
+} from './message-segments';
 
 /** `n` copies of a single-septet GSM-7 character. */
 const gsm = (n: number) => 'a'.repeat(n);
@@ -192,5 +203,103 @@ describe('degenerate input', () => {
     expect(countSegments({})).toBe(1);
     expect(countSegments({ text: null })).toBe(1);
     expect(countSegments({ text: '' })).toBe(1);
+  });
+});
+
+/**
+ * These pin the contract the CLIENT-SIDE MIRROR is written against. The
+ * composer needs a live counter as the operator types and cannot call the API
+ * per keystroke, so the browser re-implements these rules; if any constant here
+ * changes without the mirror changing, the composer and the message log start
+ * disagreeing about what a message costs.
+ */
+describe('the surface a client-side mirror depends on', () => {
+  it('publishes the boundary table both sides must agree on', () => {
+    expect(SEGMENT_LIMITS).toEqual({
+      gsm7: { single: 160, multipart: 153 },
+      ucs2: { single: 70, multipart: 67 },
+      binary: { single: 140, multipart: 134 },
+    });
+  });
+
+  it('derives that table from the octet constants rather than restating it', () => {
+    expect(PAYLOAD_OCTETS).toBe(140);
+    expect(CONCAT_UDH_OCTETS).toBe(6);
+    expect(CONCAT_IE_OCTETS).toBe(5);
+    expect(Math.floor((PAYLOAD_OCTETS * 8) / 7)).toBe(SEGMENT_LIMITS.gsm7.single);
+    expect(Math.floor(((PAYLOAD_OCTETS - CONCAT_UDH_OCTETS) * 8) / 7)).toBe(
+      SEGMENT_LIMITS.gsm7.multipart,
+    );
+    expect(Math.floor(PAYLOAD_OCTETS / 2)).toBe(SEGMENT_LIMITS.ucs2.single);
+    expect(Math.floor((PAYLOAD_OCTETS - CONCAT_UDH_OCTETS) / 2)).toBe(
+      SEGMENT_LIMITS.ucs2.multipart,
+    );
+  });
+
+  it('publishes the two GSM-7 tables verbatim', () => {
+    // 128 characters, ESC excluded (it is the escape prefix, not writable).
+    expect(GSM7_BASIC_CHARS).toHaveLength(127);
+    expect(GSM7_EXTENDED_CHARS).toBe('\f^{}\\[~]|€');
+    for (const character of GSM7_BASIC_CHARS) expect(isGsm7Encodable(character)).toBe(true);
+    for (const character of GSM7_EXTENDED_CHARS) expect(isGsm7Encodable(character)).toBe(true);
+    expect(isGsm7Encodable('あ')).toBe(false);
+  });
+});
+
+describe('previewSegments', () => {
+  it('counts down the remaining room in the current segment', () => {
+    expect(previewSegments({ text: gsm(0) })).toMatchObject({
+      characters: 0,
+      segments: 1,
+      perSegment: 160,
+      remaining: 160,
+    });
+    expect(previewSegments({ text: gsm(159) })).toMatchObject({ remaining: 1, segments: 1 });
+    expect(previewSegments({ text: gsm(160) })).toMatchObject({ remaining: 0, segments: 1 });
+    // The 161st septet tips it into two 153-septet parts: 153 + 8 used.
+    expect(previewSegments({ text: gsm(161) })).toMatchObject({
+      segments: 2,
+      perSegment: 153,
+      remaining: 145,
+    });
+  });
+
+  it('takes the remainder from the same greedy walk that fixed the part count', () => {
+    // 152 plain septets then '€' (2 septets): the escape cannot straddle the
+    // 153-septet boundary, so part 1 ends at 152 and part 2 opens with it.
+    // A naive perSegment*segments - length would say 152 free; the real answer
+    // is 151, because one septet of part 1 was stranded.
+    const text = `${gsm(152)}€${gsm(7)}`;
+    const preview = previewSegments({ text, coding: 0 });
+    expect(preview.length).toBe(161);
+    expect(preview.segments).toBe(2);
+    // Part 1 holds 152 of its 153 septets; part 2 opens with the escape pair
+    // and then 7 more, so 144 are free — not 145.
+    expect(preview.remaining).toBe(144);
+    // Naive arithmetic (perSegment * segments - length) would say 145.
+    expect(preview.perSegment * preview.segments - preview.length).toBe(145);
+  });
+
+  it('counts code points as characters but alphabet units as length', () => {
+    expect(previewSegments({ text: '🙂🙂' })).toMatchObject({
+      characters: 2,
+      length: 4,
+      alphabet: 'ucs2',
+    });
+    expect(previewSegments({ text: '€' })).toMatchObject({
+      characters: 1,
+      length: 2,
+      alphabet: 'gsm7',
+    });
+  });
+
+  it('never disagrees with the accounting applied to a stored engine row', () => {
+    for (const text of [gsm(1), gsm(160), gsm(161), ucs2(70), ucs2(71), '🙂', `${gsm(70)}€`]) {
+      const preview = previewSegments({ text });
+      const stored = describeSegments({ text });
+      expect(preview.segments).toBe(stored.segments);
+      expect(preview.alphabet).toBe(stored.alphabet);
+      expect(preview.length).toBe(stored.length);
+    }
   });
 });

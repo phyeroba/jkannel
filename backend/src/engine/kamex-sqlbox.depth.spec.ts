@@ -117,8 +117,13 @@ describe('date-range filtering on the engine time column', () => {
         'jkannel_sqlbox_sent_sms_smsc_time_idx',
       ]),
     );
-    expect(calls[0].sql).toContain('ON sent_sms(time DESC, sql_id DESC)');
-    expect(calls[1].sql).toContain('ON sent_sms(smsc_id, time DESC)');
+    // calls[0] is the invalid-index sweep (an interrupted CONCURRENTLY build
+    // leaves an index IF NOT EXISTS would then skip forever); the CREATEs follow.
+    const created = calls.filter((call) => call.sql.includes('CREATE INDEX'));
+    expect(created[0].sql).toContain('ON sent_sms(time DESC, sql_id DESC)');
+    expect(created[1].sql).toContain('ON sent_sms(smsc_id, time DESC)');
+    // The manual endpoint keeps taking the plain (blocking) lock it always did.
+    expect(created[0].sql.startsWith('CREATE INDEX IF NOT EXISTS')).toBe(true);
   });
 });
 

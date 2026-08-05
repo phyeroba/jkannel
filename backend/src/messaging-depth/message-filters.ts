@@ -1,5 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
-import { SqlboxListOptions, isKnownStatusToken } from '../engine/kamex-sqlbox.repository';
+import {
+  SQLBOX_SORT_COLUMNS,
+  SqlboxListOptions,
+  isKnownStatusToken,
+  parseSqlboxSort,
+} from '../engine/kamex-sqlbox.repository';
 
 /**
  * THE message filter contract, in one place.
@@ -38,6 +43,8 @@ export type MessageFilters = Pick<
   | 'direction'
   | 'fromEpoch'
   | 'toEpoch'
+  | 'sort'
+  | 'offset'
 >;
 
 /** The query parameters this parser reads, for documentation and error text. */
@@ -51,7 +58,12 @@ export const MESSAGE_FILTER_PARAMS = [
   'direction',
   'from',
   'to',
+  'sort',
+  'offset',
 ] as const;
+
+/** Sortable field names, re-exported so a caller can advertise them in a 400. */
+export const MESSAGE_SORT_FIELDS = Object.keys(SQLBOX_SORT_COLUMNS);
 
 const DIRECTIONS = ['MO', 'MT', 'DLR'] as const;
 
@@ -177,7 +189,19 @@ export function parseMessageFilters(q: any = {}, limits: MessageFilterLimits): M
     direction,
     fromEpoch,
     toEpoch,
+    // Validated here (not in the repository) so an unsupported sort field is a
+    // 400 on the grid AND on the export, from the same check.
+    sort: present(query.sort) ? sortExpression(query.sort) : undefined,
+    offset: present(query.offset)
+      ? parseBoundedInt(query.offset, 'offset', 0, 5_000_000, 0)
+      : undefined,
   };
+}
+
+/** Normalises a sort expression after validating every field in it. */
+function sortExpression(value: unknown): string {
+  const terms = parseSqlboxSort(value);
+  return terms.map((term) => `${term.direction === 'DESC' ? '-' : ''}${term.field}`).join(',');
 }
 
 /** Human-readable rendering of an applied filter set, for an export's header. */
@@ -192,5 +216,7 @@ export function describeMessageFilters(filters: MessageFilters): string | undefi
     parts.push(`from=${new Date(filters.fromEpoch * 1000).toISOString()}`);
   if (filters.toEpoch !== undefined)
     parts.push(`to=${new Date(filters.toEpoch * 1000).toISOString()}`);
+  if (filters.sort) parts.push(`sort=${filters.sort}`);
+  if (filters.offset !== undefined) parts.push(`offset=${filters.offset}`);
   return parts.length ? parts.join(', ') : undefined;
 }

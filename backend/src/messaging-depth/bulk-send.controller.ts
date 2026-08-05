@@ -7,11 +7,13 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { Actor, BulkSendService, BULK_SEND_MAX_RECIPIENTS } from './bulk-send.service';
+import { parseMessageSchedule } from './message-scheduling';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -66,6 +68,12 @@ export class BulkSendController {
    * each recipient at dispatch time, honouring route configuration, deployment
    * state and live bind health. `customerId` attributes the campaign so its
    * quota, credit, sender IDs and route bindings are enforced per message.
+   *
+   * `scheduledAt` (ISO 8601) and `validityMinutes` schedule the whole campaign:
+   * every recipient inherits them and each one's `send_sms` row carries the
+   * corresponding `deferred` / `validity`. A past `scheduledAt`, or a validity
+   * that would expire at or before it, is a 400. See message-scheduling.ts for
+   * what deferral actually guarantees — on the `smsc = fake` bind, nothing.
    */
   @Post() @RequirePermissions('configuration.manage') create(@Req() r: Request, @Body() b: any) {
     return this.service.createJob(actor(r), {
@@ -78,17 +86,37 @@ export class BulkSendController {
         b?.customerId === undefined || b?.customerId === null || b?.customerId === ''
           ? undefined
           : uuid(b.customerId, 'customerId'),
+      schedule: parseMessageSchedule(b),
     });
   }
 
+  /**
+   * Campaign grid. Accepts the shared grid vocabulary: `search`, `sort`
+   * (`-createdAt`, `name`, `status`, ...), `filter.<field>`, `limit`/`offset`,
+   * `?fields=`, and keyset pagination via `?cursor=` / `?paginate=cursor`.
+   */
   @Get() @RequirePermissions('messages.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.service.listJobs(actor(r), q);
+  }
+
+  /**
+   * CSV of the campaigns the grid would show for the SAME filters. Declared
+   * before `:id` so the literal path wins the route match.
+   */
+  @Get('export.csv') @RequirePermissions('messages.view') async exportJobs(
+    @Req() r: Request,
+    @Query() q: any = {},
+    @Res() response?: any,
+  ) {
+    const exported = await this.service.exportJobsCsv(actor(r), q);
+    sendCsv(response, exported);
   }
 
   @Get(':id') @RequirePermissions('messages.view') get(@Req() r: Request, @Param('id') id: string) {
     return this.service.getJob(actor(r), uuid(id, 'id'));
   }
 
+  /** Recipient grid for one campaign; same vocabulary as {@link list}. */
   @Get(':id/recipients') @RequirePermissions('messages.view') recipients(
     @Req() r: Request,
     @Param('id') id: string,
@@ -96,4 +124,26 @@ export class BulkSendController {
   ) {
     return this.service.listRecipients(actor(r), uuid(id, 'id'), q);
   }
+
+  /** CSV of the recipients the grid would show for the SAME filters. */
+  @Get(':id/recipients/export.csv') @RequirePermissions('messages.view') async exportRecipients(
+    @Req() r: Request,
+    @Param('id') id: string,
+    @Query() q: any = {},
+    @Res() response?: any,
+  ) {
+    const exported = await this.service.exportRecipientsCsv(actor(r), uuid(id, 'id'), q);
+    sendCsv(response, exported);
+  }
+}
+
+/** Shared CSV response shape, matching the message export's headers. */
+function sendCsv(
+  response: any,
+  exported: { filename: string; rowCount: number; content: string },
+): void {
+  response.setHeader('content-type', 'text/csv; charset=utf-8');
+  response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
+  response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+  response.send(exported.content);
 }

@@ -8,7 +8,10 @@ import {
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { GridDefinition } from '../platform/list-query';
+import { GridResult, runGrid } from '../platform/grid-runner';
 import { MessageSendService } from './message-send.service';
+import { MessageSchedule, describeSchedule } from './message-scheduling';
 
 export interface Actor {
   tenantId: string;
@@ -29,6 +32,14 @@ export interface CreateBulkSendInput {
   sender?: string | null;
   /** Customer the campaign is attributed to and entitlement-checked against. */
   customerId?: string | null;
+  /**
+   * Campaign-level deferred delivery + expiry, already validated by
+   * {@link parseMessageSchedule}. EVERY recipient inherits it: the offset is
+   * recomputed per recipient at the instant its `send_sms` row is inserted, so
+   * a campaign that takes ten minutes to drain still targets the one instant
+   * the operator picked rather than drifting with the dispatch.
+   */
+  schedule?: MessageSchedule | null;
 }
 
 /**
@@ -42,6 +53,11 @@ export function defaultBulkSender(): string {
   return configured || 'JKANNEL';
 }
 
+/**
+ * @deprecated Both grids now return {@link GridResult} from the shared grid
+ * runner, which carries `nextCursor`/`pagination` as well. Kept because it is
+ * an exported type other modules may still reference.
+ */
 export interface GridPage<T> {
   items: T[];
   total: number;
@@ -55,8 +71,131 @@ export const BULK_SEND_MAX_RECIPIENTS = 5000;
 const BULK_SEND_LOCK_NAMESPACE = 0x2c3d;
 
 const JOB_COLUMNS =
-  'id,name,smsc_id,sender,customer_id::text,status,total,submitted,failed,detail,created_by,created_at,completed_at';
+  'id,name,smsc_id,sender,customer_id::text,status,total,submitted,failed,detail,scheduled_at,validity_minutes,created_by,created_at,completed_at';
 const RECIPIENT_COLUMNS = 'id,job_id,receiver,text,status,foreign_id,error,created_at';
+
+/**
+ * Job statuses the runner will pick up. `scheduled` is a queued job whose
+ * campaign carries a future `scheduled_at`; it dispatches on the SAME tick as a
+ * plain queued job (the deferral lives on the engine row, not in a JKANNEL
+ * timer) and exists so the grid can show and filter "this campaign was
+ * submitted for later" rather than presenting it as an ordinary send.
+ */
+const DISPATCHABLE_STATUSES = ['queued', 'scheduled'];
+
+/**
+ * The jobs grid. Cursor pagination is opted into here specifically: a campaign
+ * list is one of the two tables in this module that grows without bound, and a
+ * deep `OFFSET` over it degrades into a scan-and-discard. Served by
+ * `bulk_send_jobs (tenant_id, created_at DESC, id)` from migration 040.
+ */
+export const BULK_JOB_GRID: GridDefinition = {
+  searchColumns: ['name', 'smsc_id', 'sender', 'detail'],
+  sortColumns: {
+    createdAt: 'created_at',
+    created_at: 'created_at',
+    completedAt: 'completed_at',
+    scheduledAt: 'scheduled_at',
+    name: 'name',
+    status: 'status',
+    total: 'total',
+    submitted: 'submitted',
+    failed: 'failed',
+    smscId: 'smsc_id',
+    sender: 'sender',
+  },
+  filterColumns: {
+    status: 'status',
+    smscId: 'smsc_id',
+    smsc_id: 'smsc_id',
+    sender: 'sender',
+    customerId: 'customer_id',
+    name: 'name',
+  },
+  defaultOrderBy: 'created_at DESC',
+  defaultLimit: 50,
+  maxLimit: 200,
+};
+
+/**
+ * The recipients grid. Same reasoning as {@link BULK_JOB_GRID}, more acutely: a
+ * single campaign holds up to {@link BULK_SEND_MAX_RECIPIENTS} rows and a
+ * tenant accumulates them forever. Served by
+ * `bulk_send_recipients (tenant_id, job_id, created_at, id)`.
+ */
+export const BULK_RECIPIENT_GRID: GridDefinition = {
+  searchColumns: ['receiver', 'foreign_id', 'error'],
+  sortColumns: {
+    createdAt: 'created_at',
+    created_at: 'created_at',
+    receiver: 'receiver',
+    status: 'status',
+    foreignId: 'foreign_id',
+  },
+  filterColumns: {
+    status: 'status',
+    receiver: 'receiver',
+    foreignId: 'foreign_id',
+    foreign_id: 'foreign_id',
+  },
+  defaultOrderBy: 'created_at ASC, id ASC',
+  defaultLimit: 50,
+  maxLimit: 500,
+};
+
+/** CSV column order for the jobs export. */
+const JOB_EXPORT_COLUMNS = [
+  'id',
+  'name',
+  'status',
+  'smsc_id',
+  'sender',
+  'customer_id',
+  'total',
+  'submitted',
+  'failed',
+  'scheduled_at',
+  'validity_minutes',
+  'detail',
+  'created_by',
+  'created_at',
+  'completed_at',
+] as const;
+
+/** CSV column order for the recipients export. */
+const RECIPIENT_EXPORT_COLUMNS = [
+  'id',
+  'job_id',
+  'receiver',
+  'status',
+  'foreign_id',
+  'error',
+  'created_at',
+  'text',
+] as const;
+
+/**
+ * A bare `?status=` is accepted as shorthand for `?filter.status=`, because
+ * that is what both grids took before they adopted the shared mechanism and a
+ * saved console link should not stop working.
+ */
+function withLegacyStatus(query: Record<string, unknown>): Record<string, unknown> {
+  if (typeof query.status !== 'string' || !query.status.trim()) return query;
+  if (query['filter.status'] !== undefined) return query;
+  return { ...query, 'filter.status': query.status };
+}
+
+function csv(rows: Array<Record<string, unknown>>, columns: readonly string[]): string {
+  const escape = (value: unknown) => {
+    if (value === null || value === undefined) return '""';
+    if (value instanceof Date) return `"${value.toISOString()}"`;
+    return `"${String(value).replace(/"/g, '""')}"`;
+  };
+  return [
+    columns.join(','),
+    ...rows.map((row) => columns.map((column) => escape(row[column])).join(',')),
+  ].join('\r\n');
+}
 
 /**
  * Bulk send / campaign jobs. A tenant queues one message body to many
@@ -110,6 +249,12 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
 
     const smscId = input.smscId?.trim() || null;
     const sender = input.sender?.trim() || defaultBulkSender();
+    const schedule = input.schedule ?? null;
+    const scheduledAt = schedule?.scheduledAtMs != null ? new Date(schedule.scheduledAtMs) : null;
+    // 'scheduled' is descriptive, not a gate: the runner dispatches it on the
+    // next tick exactly like 'queued', and the wait lives on each recipient's
+    // engine row. Distinguishing it in the grid is the point.
+    const status = scheduledAt && scheduledAt.getTime() > Date.now() ? 'scheduled' : 'queued';
 
     const job = await this.database.tenantTransaction(actor.tenantId, async (client) => {
       // A pinned bind must belong to the tenant; an unpinned job is resolved by
@@ -127,8 +272,8 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
       }
       const created = (
         await client.query(
-          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,sender,customer_id,status,total,created_by)
-           VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING ${JOB_COLUMNS}`,
+          `INSERT INTO bulk_send_jobs(tenant_id,name,smsc_id,sender,customer_id,status,total,created_by,scheduled_at,validity_minutes)
+           VALUES($1,$2,$3,$4,$5,$8,$6,$7,$9,$10) RETURNING ${JOB_COLUMNS}`,
           [
             actor.tenantId,
             input.name,
@@ -137,6 +282,9 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
             input.customerId ?? null,
             recipients.length,
             actor.userId,
+            status,
+            scheduledAt,
+            schedule?.validityMinutes ?? null,
           ],
         )
       ).rows[0];
@@ -160,6 +308,8 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
             sender,
             customerId: input.customerId ?? null,
             total: recipients.length,
+            status,
+            schedule: schedule ? (describeSchedule(schedule) ?? null) : null,
           }),
         ],
       );
@@ -177,20 +327,46 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
     return job;
   }
 
-  listJobs(actor: Actor, query: Record<string, unknown> = {}): Promise<GridPage<any>> {
-    const { limit, offset } = pageArgs(query);
-    const status = typeof query.status === 'string' ? query.status : undefined;
-    return this.database.tenantTransaction(actor.tenantId, async (client) => {
-      const result = await client.query(
-        `SELECT ${JOB_COLUMNS}, count(*) OVER() AS __total FROM bulk_send_jobs
-          WHERE ($1::text IS NULL OR status=$1)
-          ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-        [status ?? null, limit, offset],
-      );
-      const total = result.rows.length ? Number(result.rows[0].__total) : 0;
-      const items = result.rows.map(({ __total, ...row }) => row);
-      return { items, total, limit, offset };
+  /**
+   * Campaign grid: search, sort, `filter.<field>`, `?fields=` projection, and
+   * BOTH pagination modes — offset by default for compatibility, keyset when
+   * the caller passes `?cursor=` or `?paginate=cursor`.
+   *
+   * Tenant isolation is RLS, not a predicate: every statement runs inside
+   * `tenantTransaction`, which sets `app.tenant_id`, and `bulk_send_jobs` has
+   * FORCE ROW LEVEL SECURITY. That is also why the migration-040 indexes lead
+   * with `tenant_id` — the RLS predicate is on every plan whether or not the
+   * SQL here mentions it.
+   */
+  listJobs(actor: Actor, query: Record<string, unknown> = {}): Promise<GridResult<any>> {
+    const raw = withLegacyStatus(query);
+    return this.database.tenantTransaction(actor.tenantId, (client) =>
+      runGrid<any>(
+        { select: `SELECT ${JOB_COLUMNS}`, from: 'FROM bulk_send_jobs' },
+        BULK_JOB_GRID,
+        raw,
+        (sql, params) => client.query(sql, params as any[]).then((r) => r.rows),
+        { idExpr: 'id', cursorDefaultSort: { field: 'createdAt', direction: 'DESC' } },
+      ),
+    );
+  }
+
+  /** CSV of the campaigns the grid would show for the SAME query. */
+  async exportJobsCsv(actor: Actor, query: Record<string, unknown> = {}) {
+    const page = await this.listJobs(actor, {
+      ...query,
+      limit: query.limit ?? BULK_JOB_GRID.maxLimit,
+      // A cursor page is a slice of a scroll, not an export; an export always
+      // takes the top of the filtered set so the file is reproducible.
+      cursor: undefined,
+      paginate: undefined,
+      fields: undefined,
     });
+    return {
+      filename: `jkannel-bulk-send-jobs-${new Date().toISOString().slice(0, 10)}.csv`,
+      rowCount: page.items.length,
+      content: csv(page.items as Array<Record<string, unknown>>, JOB_EXPORT_COLUMNS),
+    };
   }
 
   async getJob(actor: Actor, id: string) {
@@ -219,27 +395,46 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Recipient grid for one campaign. Same mechanism as {@link listJobs}. */
   listRecipients(
     actor: Actor,
     jobId: string,
     query: Record<string, unknown> = {},
-  ): Promise<GridPage<any>> {
-    const { limit, offset } = pageArgs(query);
-    const status = typeof query.status === 'string' ? query.status : undefined;
+  ): Promise<GridResult<any>> {
+    const raw = withLegacyStatus(query);
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const exists = (await client.query('SELECT 1 FROM bulk_send_jobs WHERE id=$1', [jobId]))
         .rows[0];
       if (!exists) throw new NotFoundException('Bulk send job not found');
-      const result = await client.query(
-        `SELECT ${RECIPIENT_COLUMNS}, count(*) OVER() AS __total FROM bulk_send_recipients
-          WHERE job_id=$1 AND ($2::text IS NULL OR status=$2)
-          ORDER BY created_at LIMIT $3 OFFSET $4`,
-        [jobId, status ?? null, limit, offset],
+      return runGrid<any>(
+        {
+          select: `SELECT ${RECIPIENT_COLUMNS}`,
+          from: 'FROM bulk_send_recipients',
+          where: 'WHERE job_id=$1',
+          params: [jobId],
+        },
+        BULK_RECIPIENT_GRID,
+        raw,
+        (sql, params) => client.query(sql, params as any[]).then((r) => r.rows),
+        { idExpr: 'id', cursorDefaultSort: { field: 'createdAt', direction: 'ASC' } },
       );
-      const total = result.rows.length ? Number(result.rows[0].__total) : 0;
-      const items = result.rows.map(({ __total, ...row }) => row);
-      return { items, total, limit, offset };
     });
+  }
+
+  /** CSV of the recipients the grid would show for the SAME query. */
+  async exportRecipientsCsv(actor: Actor, jobId: string, query: Record<string, unknown> = {}) {
+    const page = await this.listRecipients(actor, jobId, {
+      ...query,
+      limit: query.limit ?? BULK_RECIPIENT_GRID.maxLimit,
+      cursor: undefined,
+      paginate: undefined,
+      fields: undefined,
+    });
+    return {
+      filename: `jkannel-bulk-send-${jobId}-recipients-${new Date().toISOString().slice(0, 10)}.csv`,
+      rowCount: page.items.length,
+      content: csv(page.items as Array<Record<string, unknown>>, RECIPIENT_EXPORT_COLUMNS),
+    };
   }
 
   /** Drains queued jobs across every enabled tenant. */
@@ -256,7 +451,8 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           .tenantTransaction(tenant.id, async (client) =>
             (
               await client.query<{ id: string }>(
-                "SELECT id FROM bulk_send_jobs WHERE status='queued' ORDER BY created_at LIMIT 20",
+                'SELECT id FROM bulk_send_jobs WHERE status = ANY($1) ORDER BY created_at LIMIT 20',
+                [DISPATCHABLE_STATUSES],
               )
             ).rows.map((row) => row.id),
           )
@@ -306,9 +502,11 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           sender: string | null;
           customer_id: string | null;
           created_by: string | null;
+          scheduled_at: Date | string | null;
+          validity_minutes: number | string | null;
         }>(
-          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status='queued' RETURNING id,smsc_id,sender,customer_id::text,created_by",
-          [jobId],
+          "UPDATE bulk_send_jobs SET status='running' WHERE id=$1 AND status = ANY($2) RETURNING id,smsc_id,sender,customer_id::text,created_by,scheduled_at,validity_minutes",
+          [jobId, DISPATCHABLE_STATUSES],
         )
       ).rows[0];
       if (!job) return null;
@@ -318,11 +516,24 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
           [jobId],
         )
       ).rows;
+      const scheduledAtMs = job.scheduled_at ? new Date(job.scheduled_at).getTime() : null;
+      const validityMinutes =
+        job.validity_minutes === null || job.validity_minutes === undefined
+          ? null
+          : Number(job.validity_minutes);
       return {
         smscId: job.smsc_id,
         sender: job.sender ?? defaultBulkSender(),
         customerId: job.customer_id,
         createdBy: job.created_by ?? 'bulk-send',
+        // Every recipient inherits the campaign's schedule. It travels as the
+        // absolute instant, not as an offset, so the per-recipient deferral is
+        // recomputed against that instant at each INSERT and a slow drain
+        // cannot smear the campaign across the schedule.
+        schedule:
+          scheduledAtMs === null && validityMinutes === null
+            ? null
+            : { scheduledAtMs, validityMinutes },
         recipients,
       };
     });
@@ -358,6 +569,7 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
             customerId: claim.customerId,
             channel: 'bulk',
             reference: jobId,
+            schedule: claim.schedule,
           },
         );
         outcomes.push({ id: recipient.id, ok: true, foreignId: queued.sqlId });
@@ -408,13 +620,6 @@ export class BulkSendService implements OnModuleInit, OnModuleDestroy {
     });
     return { submitted, failed, status };
   }
-}
-
-/** Bounds pagination arguments for the grid endpoints. */
-function pageArgs(query: Record<string, unknown>): { limit: number; offset: number } {
-  const limit = Math.min(Math.max(Number(query.limit ?? 50) || 50, 1), 200);
-  const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
-  return { limit, offset };
 }
 
 /** Stable non-negative 31-bit hash of a uuid for the advisory lock key. */

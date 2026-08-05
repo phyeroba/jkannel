@@ -1,4 +1,9 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { describeSegments } from './message-segments';
 
@@ -10,6 +15,22 @@ export interface SqlboxSubmission {
   dlrMask?: number;
   dlrUrl?: string;
   foreignId?: string;
+  /**
+   * `send_sms.deferred` — RELATIVE MINUTES to hold the message for, counted by
+   * sqlbox from the moment it picks the row up. null leaves the column NULL,
+   * which sqlbox decodes as SMS_PARAM_UNDEFINED ("no preference").
+   *
+   * This is a request to the CARRIER (it becomes submit_sm.schedule_delivery_time
+   * on an SMPP bind), not a hold anywhere inside JKANNEL or Kannel — see
+   * messaging-depth/message-scheduling.ts for the full, honest semantics,
+   * including the fact that the `smsc = fake` bind ignores it entirely.
+   */
+  deferredMinutes?: number | null;
+  /**
+   * `send_sms.validity` — RELATIVE MINUTES after which the carrier should stop
+   * trying (submit_sm.validity_period on an SMPP bind). Same NULL semantics.
+   */
+  validityMinutes?: number | null;
 }
 export interface SqlboxListOptions {
   limit?: number;
@@ -35,6 +56,27 @@ export interface SqlboxListOptions {
   toEpoch?: number;
   /** Excludes DLR receipt rows, leaving only real messages. */
   excludeDlr?: boolean;
+  /**
+   * Delivery-report view. Forces `direction = 'DLR'` and — the point of the
+   * flag — decodes each receipt's OWN `dlr_mask` into a real delivery status
+   * (delivered / failed / rejected / buffered / accepted) instead of the
+   * catch-all `delivery_report`. Without it a status filter on the DLR grid can
+   * only ever match `delivery_report`, which is why that grid offered "all" and
+   * nothing else.
+   */
+  deliveryReport?: boolean;
+  /**
+   * Whitelisted sort expression, e.g. `-time` or `receiver,-sql_id`. Defaults
+   * to `-sql_id`, which is the insertion order the keyset cursor pages on.
+   * See {@link SQLBOX_SORT_COLUMNS}.
+   */
+  sort?: string;
+  /**
+   * Offset paging, for the sorts a `sql_id` keyset cannot express. Supplying it
+   * switches the response to `{total, offset}` and costs a window count; the
+   * default (cursor) path deliberately pays for neither.
+   */
+  offset?: number;
   /**
    * Engine-level SMSC identifiers the caller's tenant owns. SQLBox tables are
    * engine-owned and carry no tenant column, so tenant isolation is applied by
@@ -180,22 +222,150 @@ const LATEST_DLR_JOIN = `LEFT JOIN LATERAL (
        LIMIT 1
     ) d ON true`;
 
-/** Derived status. An MT row with no DLR yet is pending, not failed. */
+/** Decodes a Kannel DLR event mask into a delivery status. `expr` must be SQL. */
+const decodeDlrMask = (expr: string) => `CASE
+      WHEN ${expr} = 1 THEN 'delivered'
+      WHEN ${expr} = 2 THEN 'failed'
+      WHEN ${expr} = 4 THEN 'buffered'
+      WHEN ${expr} = 8 THEN 'accepted'
+      WHEN ${expr} = 16 THEN 'rejected'
+      ELSE 'unknown' END`;
+
+/** Derived status for the message log. An MT row with no DLR yet is pending. */
 const DELIVERY_STATUS_SQL = `CASE
       WHEN m.momt = 'DLR' THEN 'delivery_report'
       WHEN d.dlr_mask IS NULL THEN 'pending'
-      WHEN d.dlr_mask = 1 THEN 'delivered'
-      WHEN d.dlr_mask = 2 THEN 'failed'
-      WHEN d.dlr_mask = 4 THEN 'buffered'
-      WHEN d.dlr_mask = 8 THEN 'accepted'
-      WHEN d.dlr_mask = 16 THEN 'rejected'
-      ELSE 'unknown' END`;
+      ELSE (${decodeDlrMask('d.dlr_mask')}) END`;
+
+/**
+ * Derived status for the DELIVERY-REPORT view, where every row IS a receipt and
+ * its own `dlr_mask` is the outcome — the one place reading `dlr_mask` off the
+ * row itself is correct, because a DLR row's mask is the event that happened
+ * rather than the events an MT row subscribed to.
+ */
+const RECEIPT_STATUS_SQL = `CASE
+      WHEN m.momt IS DISTINCT FROM 'DLR' THEN 'unknown'
+      WHEN m.dlr_mask IS NULL THEN 'unknown'
+      ELSE (${decodeDlrMask('m.dlr_mask')}) END`;
 
 // dlr_event is the delivery EVENT: the DLR row's own mask, or the correlated
 // DLR's mask for an MT row. Never the MT row's requested dlr_mask.
-const DERIVED_COLUMNS = `CASE WHEN m.momt = 'DLR' THEN m.dlr_mask ELSE d.dlr_mask END AS dlr_event,d.time AS dlr_time,${DELIVERY_STATUS_SQL} AS delivery_status`;
+const DERIVED_COLUMNS = (statusSql: string) =>
+  `CASE WHEN m.momt = 'DLR' THEN m.dlr_mask ELSE d.dlr_mask END AS dlr_event,d.time AS dlr_time,${statusSql} AS delivery_status`;
 
-const CLASSIFIED_MESSAGES = `SELECT ${MESSAGE_COLUMNS},${DERIVED_COLUMNS} FROM sent_sms m ${LATEST_DLR_JOIN}`;
+/**
+ * The classified projection. `receipts` swaps the derived `delivery_status` for
+ * the receipt's own decoded outcome; everything else — columns, correlation,
+ * predicates — is shared, so the delivery-report grid cannot drift away from
+ * the message grid it is a view of.
+ */
+const classifiedMessages = (mode: 'history' | 'receipts' = 'history') =>
+  `SELECT ${MESSAGE_COLUMNS},${DERIVED_COLUMNS(
+    mode === 'receipts' ? RECEIPT_STATUS_SQL : DELIVERY_STATUS_SQL,
+  )} FROM sent_sms m ${LATEST_DLR_JOIN}`;
+
+const CLASSIFIED_MESSAGES = classifiedMessages('history');
+
+/**
+ * Sortable columns for the message / delivery-report grids: API name -> SQL
+ * expression against the classified sub-select `q`. Whitelisted because the
+ * expression is interpolated, never bound.
+ *
+ * `sql_id` is the physical insertion order and the only key the numeric cursor
+ * can page on; every sort therefore carries `q.sql_id DESC` as its final
+ * tiebreaker so a page boundary is always total.
+ */
+export const SQLBOX_SORT_COLUMNS: Readonly<Record<string, string>> = {
+  time: 'q.time',
+  timestamp: 'q.time',
+  sql_id: 'q.sql_id',
+  id: 'q.sql_id',
+  sender: 'q.sender',
+  receiver: 'q.receiver',
+  smscId: 'q.smsc_id',
+  direction: 'q.momt',
+  deliveryStatus: 'q.delivery_status',
+  externalRef: 'q.foreign_id',
+};
+
+/** The default ordering; also the only one the `sql_id` cursor is valid for. */
+export const SQLBOX_DEFAULT_SORT = '-sql_id';
+
+export interface SqlboxSortTerm {
+  field: string;
+  direction: 'ASC' | 'DESC';
+}
+
+/**
+ * Parses a `sort` expression against {@link SQLBOX_SORT_COLUMNS}. An unknown
+ * field is a 400 naming the allowed set rather than a silently ignored sort
+ * that hands back rows in an order the caller did not ask for.
+ */
+export function parseSqlboxSort(value: unknown): SqlboxSortTerm[] {
+  if (value === undefined || value === null || String(value).trim() === '') return [];
+  const tokens = (Array.isArray(value) ? value : String(value).split(','))
+    .map((token) => String(token).trim())
+    .filter(Boolean);
+  return tokens.map((token) => {
+    const direction: 'ASC' | 'DESC' = token.startsWith('-') ? 'DESC' : 'ASC';
+    const field = token.replace(/^[-+]/, '');
+    if (!SQLBOX_SORT_COLUMNS[field])
+      throw new BadRequestException(
+        `Unsupported sort field "${field}" (allowed: ${Object.keys(SQLBOX_SORT_COLUMNS).join(', ')})`,
+      );
+    return { field, direction };
+  });
+}
+
+/** True when the sort is the default one the sql_id keyset cursor can page. */
+function isDefaultSort(terms: SqlboxSortTerm[]): boolean {
+  if (!terms.length) return true;
+  return (
+    terms.length === 1 &&
+    SQLBOX_SORT_COLUMNS[terms[0].field] === 'q.sql_id' &&
+    terms[0].direction === 'DESC'
+  );
+}
+
+/**
+ * The sent_sms indexes, as (create-clause) -> statement builders so the same
+ * definitions serve both the manual endpoint and the boot path.
+ *
+ * A production audit found sent_sms carrying ONLY its primary key while the
+ * message list ordered by `time DESC` and every DLR correlation joined on
+ * `foreign_id`. Each entry below names the query it exists for.
+ */
+const SENT_SMS_INDEX_STATEMENTS: Array<(create: string) => string> = [
+  // list(): unscoped `time >= x AND time <= y` range plus the sql_id paging.
+  // EXPLAIN: Index Scan Backward instead of Seq Scan + Sort.
+  (create) =>
+    `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_time_idx ON sent_sms(time DESC, sql_id DESC)`,
+  // list() as the console actually issues it: smsc_id = ANY(tenant binds) AND a
+  // time range. Leading equality then range = one index scan per bind.
+  (create) =>
+    `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_smsc_time_idx ON sent_sms(smsc_id, time DESC)`,
+  // trace() / findSentForResend(): WHERE foreign_id = $1.
+  (create) =>
+    `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_foreign_id_idx ON sent_sms(foreign_id)`,
+  // The latest-DLR LATERAL that derives delivery status: partial on receipts,
+  // ordered so the correlation is a top-1 index lookup per MT row rather than a
+  // scan of every receipt sharing the foreign_id.
+  (create) =>
+    `${create} IF NOT EXISTS jkannel_sqlbox_sent_sms_dlr_correlation_idx ON sent_sms(foreign_id, time DESC, sql_id DESC) WHERE momt = 'DLR'`,
+];
+
+export const SENT_SMS_INDEX_NAMES = [
+  'jkannel_sqlbox_sent_sms_time_idx',
+  'jkannel_sqlbox_sent_sms_smsc_time_idx',
+  'jkannel_sqlbox_sent_sms_foreign_id_idx',
+  'jkannel_sqlbox_sent_sms_dlr_correlation_idx',
+] as const;
+
+/** Identifier quoting for the one place a name reaches SQL unbound (DROP INDEX). */
+function quoteIdentifier(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
 export interface SqlboxRetentionOptions {
   olderThanDays?: number;
   dryRun?: boolean;
@@ -207,7 +377,7 @@ export interface VolumeBySmsc {
 }
 
 @Injectable()
-export class KamexSqlboxRepository implements OnModuleDestroy {
+export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBootstrap {
   private readonly connectionString = process.env.KAMEX_SQLBOX_DATABASE_URL;
   private readonly pool = this.connectionString
     ? new Pool({
@@ -245,10 +415,14 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
    */
   private deliveryStatusOf(row: any, source: 'sent_sms' | 'send_sms'): DeliveryStatus {
     if (source === 'send_sms') return 'queued';
+    // The classified query's answer wins when there is one: in the message log
+    // it says 'delivery_report' for a receipt row, and in the delivery-report
+    // view it says what that receipt actually reported. Only a query that did
+    // NOT correlate (no delivery_status column at all) falls through.
+    if (typeof row.delivery_status === 'string' && row.delivery_status)
+      return row.delivery_status as DeliveryStatus;
     if (row.momt === 'DLR') return 'delivery_report';
-    return typeof row.delivery_status === 'string'
-      ? (row.delivery_status as DeliveryStatus)
-      : 'unknown';
+    return 'unknown';
   }
   /** Nullable numeric engine column -> number | null (never NaN, never 0-for-null). */
   private static number(value: unknown): number | null {
@@ -339,8 +513,11 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       params.push(options.smscId);
       clauses.push(`${prefix}smsc_id = $${params.length}`);
     }
-    if (options.direction) {
-      params.push(options.direction);
+    // The delivery-report view IS the receipt rows, by definition; it pins the
+    // direction so a caller cannot widen it back out with ?direction=MT.
+    const direction = options.deliveryReport ? 'DLR' : options.direction;
+    if (direction) {
+      params.push(direction);
       clauses.push(`${prefix}momt = $${params.length}`);
     }
     // Inclusive on both ends: an operator asking for 09:00-10:00 expects a
@@ -374,10 +551,25 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
   /**
    * Message history with each MT row classified by its latest delivery report,
    * so the log can be filtered to failed / pending / delivered and so on.
+   *
+   * Two paging modes, and which one you get is decided by the options rather
+   * than by a flag:
+   *
+   *   default   keyset on `sql_id DESC`; returns `nextCursor`, no row count.
+   *             This is the hot path and it must stay free of `count(*)`:
+   *             sent_sms is the fastest-growing table in the system and a
+   *             window count over a filtered range is a scan of that range.
+   *   `offset`  supplied, or a non-default `sort` requested: OFFSET paging with
+   *             a `count(*) OVER()` total, because a `sql_id` cursor cannot
+   *             express a page boundary in someone else's ordering. Deep
+   *             offsets degrade — that is inherent to OFFSET and is why the
+   *             default is a keyset.
    */
   async list(options: SqlboxListOptions | number = 100) {
     const settings = typeof options === 'number' ? { limit: options } : options;
     const size = Math.min(Math.max(settings.limit ?? 100, 1), 500);
+    const sort = parseSqlboxSort(settings.sort);
+    const keyset = isDefaultSort(sort) && settings.offset === undefined;
     const params: any[] = [];
     const where = this.filters(settings, params, 'm.');
     const statuses = resolveDeliveryStatuses(settings.deliveryStatus ?? settings.status);
@@ -386,15 +578,50 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
       params.push(statuses);
       outer = `WHERE q.delivery_status = ANY($${params.length})`;
     }
+    // q.sql_id DESC always closes the ORDER BY: without a unique tiebreaker two
+    // rows sharing a timestamp could swap places between pages and be shown
+    // twice or not at all.
+    const orderBy = [
+      ...sort.map((term) => `${SQLBOX_SORT_COLUMNS[term.field]} ${term.direction}`),
+      'q.sql_id DESC',
+    ].join(', ');
+    const projection = keyset ? 'SELECT *' : 'SELECT *, count(*) OVER() AS __total';
+
     params.push(size + 1);
+    const limitClause = `LIMIT $${params.length}`;
+    let offsetClause = '';
+    let offset = 0;
+    if (!keyset) {
+      offset = Math.min(Math.max(settings.offset ?? 0, 0), 5_000_000);
+      params.push(offset);
+      offsetClause = ` OFFSET $${params.length}`;
+    }
+
     const result = await this.required().query(
-      `SELECT * FROM (${CLASSIFIED_MESSAGES} ${where}) q ${outer} ORDER BY q.sql_id DESC LIMIT $${params.length}`,
+      `${projection} FROM (${classifiedMessages(settings.deliveryReport ? 'receipts' : 'history')} ${where}) q ${outer} ORDER BY ${orderBy} ${limitClause}${offsetClause}`,
       params,
     );
-    const rows = result.rows.slice(0, size).map((row) => this.normalize(row, 'sent_sms'));
+    const page = result.rows.slice(0, size);
+    const total = page.length ? Number(page[0].__total) : 0;
+    // __total is a paging artefact, not a message field; it must not leak into
+    // `raw` and from there into a CSV export column.
+    const rows = page.map(({ __total, ...row }: any) => this.normalize(row, 'sent_sms'));
+    if (keyset)
+      return {
+        items: rows,
+        nextCursor: result.rows.length > size ? Number(result.rows[size].sql_id) : null,
+        total: null as number | null,
+        limit: size,
+        offset: null as number | null,
+      };
     return {
       items: rows,
-      nextCursor: result.rows.length > size ? Number(result.rows[size].sql_id) : null,
+      // A non-default sort has no sql_id keyset; say so rather than hand back a
+      // cursor that would page in the wrong order.
+      nextCursor: null,
+      total,
+      limit: size,
+      offset,
     };
   }
   /**
@@ -557,34 +784,88 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     ]);
     return { ...status, deletedRows: result.rowCount ?? 0, applied: true };
   }
-  async ensureIndexes() {
-    // Serves the from/to date-range filter (`time >= x AND time <= y`) and the
-    // sql_id ordering the grid pages on, in one index.
-    await this.required().query(
-      'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_time_idx ON sent_sms(time DESC, sql_id DESC)',
+  async ensureIndexes(options: { concurrently?: boolean } = {}) {
+    // CONCURRENTLY trades a second table pass for not taking ACCESS EXCLUSIVE
+    // on sent_sms. On a table that is receiving every message the engine sends,
+    // a plain CREATE INDEX would block sqlbox's inserts for the whole build —
+    // which is exactly what the boot path must not do. It cannot run inside a
+    // transaction block; pg's pool queries are autocommit, so this is fine.
+    const create = options.concurrently ? 'CREATE INDEX CONCURRENTLY' : 'CREATE INDEX';
+    // An interrupted CONCURRENTLY build leaves an INVALID index behind, and
+    // IF NOT EXISTS would then happily skip it forever — the table would look
+    // indexed and plan as though it were not. Clear those first.
+    await this.dropInvalidIndexes();
+    for (const statement of SENT_SMS_INDEX_STATEMENTS)
+      await this.required().query(statement(create));
+    return { source: 'kamex-sqlbox', indexes: [...SENT_SMS_INDEX_NAMES] };
+  }
+
+  /** Drops any of our indexes Postgres has marked invalid (see ensureIndexes). */
+  private async dropInvalidIndexes(): Promise<string[]> {
+    const invalid = await this.required().query<{ relname: string }>(
+      `SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE NOT i.indisvalid AND c.relname = ANY($1)`,
+      [[...SENT_SMS_INDEX_NAMES]],
     );
-    // Serves a date range narrowed to the tenant's binds, which is what every
-    // console read actually issues (allowedSmscIds is never optional there).
-    await this.required().query(
-      'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_smsc_time_idx ON sent_sms(smsc_id, time DESC)',
-    );
-    await this.required().query(
-      'CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_foreign_id_idx ON sent_sms(foreign_id)',
-    );
-    // Serves the latest-DLR LATERAL used to derive delivery status: partial on
-    // the receipts, ordered so the correlation is an index-only top-1 lookup.
-    await this.required().query(
-      "CREATE INDEX IF NOT EXISTS jkannel_sqlbox_sent_sms_dlr_correlation_idx ON sent_sms(foreign_id, time DESC, sql_id DESC) WHERE momt = 'DLR'",
-    );
-    return {
-      source: 'kamex-sqlbox',
-      indexes: [
-        'jkannel_sqlbox_sent_sms_time_idx',
-        'jkannel_sqlbox_sent_sms_smsc_time_idx',
-        'jkannel_sqlbox_sent_sms_foreign_id_idx',
-        'jkannel_sqlbox_sent_sms_dlr_correlation_idx',
-      ],
-    };
+    for (const row of invalid.rows)
+      await this.required().query(`DROP INDEX IF EXISTS ${quoteIdentifier(row.relname)}`);
+    return invalid.rows.map((row) => row.relname);
+  }
+
+  /**
+   * Creates the sent_sms indexes at boot.
+   *
+   * ROOT CAUSE THIS CLOSES. `ensureIndexes()` was reachable only through
+   * `POST /messages/indexes`, and a production audit found it had never been
+   * run: sent_sms — the fastest-growing table in the system, ordered by `time
+   * DESC` on every list and joined on `foreign_id` for every DLR correlation —
+   * carried nothing but its primary key. A fresh deployment would be equally
+   * unindexed, because nothing in the boot sequence asked.
+   *
+   * Every property here is deliberate:
+   *   - IDEMPOTENT: CREATE INDEX IF NOT EXISTS, so a restart is free.
+   *   - NON-BLOCKING: {@link onApplicationBootstrap} does not await it. An
+   *     index build on a large table takes minutes; the API must be serving
+   *     traffic during it.
+   *   - NON-FATAL: any failure (no permission, SQLBox not up yet, build
+   *     cancelled) is logged and swallowed. A missing index makes queries slow,
+   *     never wrong; refusing to boot over one would be the worse outcome.
+   *   - SKIPPED UNDER TEST: NODE_ENV=test never touches a database here.
+   *   - OPT-OUTABLE: SQLBOX_AUTO_INDEX=false for a DBA who wants to own DDL.
+   */
+  async ensureIndexesAtBoot(): Promise<{ status: string; detail?: string; indexes?: string[] }> {
+    if (process.env.NODE_ENV === 'test') return { status: 'skipped', detail: 'NODE_ENV=test' };
+    if (process.env.SQLBOX_AUTO_INDEX === 'false')
+      return { status: 'skipped', detail: 'SQLBOX_AUTO_INDEX=false' };
+    if (!this.pool)
+      return { status: 'skipped', detail: 'KAMEX_SQLBOX_DATABASE_URL is not configured' };
+    try {
+      const probe = await this.probe();
+      if (!probe.available) return { status: 'skipped', detail: probe.evidence };
+      const result = await this.ensureIndexes({ concurrently: true });
+      this.log('info', 'sqlbox indexes ensured at boot', { indexes: result.indexes });
+      return { status: 'ensured', indexes: result.indexes };
+    } catch (error) {
+      const detail = String((error as Error)?.message ?? error);
+      this.log('error', 'could not ensure sqlbox indexes at boot; continuing unindexed', {
+        detail,
+      });
+      return { status: 'failed', detail };
+    }
+  }
+
+  /**
+   * Fire-and-forget on purpose: an index build must never sit between the
+   * process starting and the first request being served.
+   */
+  onApplicationBootstrap(): void {
+    void this.ensureIndexesAtBoot();
+  }
+
+  private log(level: 'info' | 'error', message: string, extra: Record<string, unknown> = {}): void {
+    const line = JSON.stringify({ level, message, source: 'kamex-sqlbox', ...extra });
+    if (level === 'error') console.error(line);
+    else console.log(line);
   }
   /** Lists queued (pending) messages from send_sms as a paginated grid. */
   async listQueue(options: SqlboxListOptions = {}) {
@@ -752,9 +1033,22 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
     return result.rows.map((row) => this.normalize(row, 'sent_sms'));
   }
 
+  /**
+   * Spools one MT message into `send_sms`.
+   *
+   * `deferred` / `validity` are written as the engine defines them: RELATIVE
+   * MINUTES, NULL for "unset". sqlbox turns them into absolute instants when it
+   * picks the row up and the SMSC driver puts them on the wire. A null offset
+   * writes NULL rather than 0 — 0 is a real value meaning "no delay/expire now"
+   * and must stay distinguishable from "the caller expressed no preference".
+   *
+   * Honesty note carried next to the INSERT on purpose: writing `deferred` does
+   * not make JKANNEL, sqlbox or bearerbox hold the message. It asks the CARRIER
+   * to. See messaging-depth/message-scheduling.ts.
+   */
   async submit(value: SqlboxSubmission) {
     const result = await this.required().query<{ sql_id: string }>(
-      `INSERT INTO send_sms(momt,sender,receiver,msgdata,time,smsc_id,dlr_mask,dlr_url,foreign_id) VALUES('MT',$1,$2,$3,extract(epoch from now())::bigint,$4,$5,$6,$7) RETURNING sql_id::text`,
+      `INSERT INTO send_sms(momt,sender,receiver,msgdata,time,smsc_id,dlr_mask,dlr_url,foreign_id,deferred,validity) VALUES('MT',$1,$2,$3,extract(epoch from now())::bigint,$4,$5,$6,$7,$8,$9) RETURNING sql_id::text`,
       [
         value.sender,
         value.receiver,
@@ -763,8 +1057,16 @@ export class KamexSqlboxRepository implements OnModuleDestroy {
         value.dlrMask ?? 31,
         value.dlrUrl ?? null,
         value.foreignId ?? null,
+        value.deferredMinutes ?? null,
+        value.validityMinutes ?? null,
       ],
     );
-    return { sqlId: result.rows[0].sql_id, status: 'queued', source: 'kamex-sqlbox' };
+    return {
+      sqlId: result.rows[0].sql_id,
+      status: 'queued',
+      source: 'kamex-sqlbox',
+      deferredMinutes: value.deferredMinutes ?? null,
+      validityMinutes: value.validityMinutes ?? null,
+    };
   }
 }

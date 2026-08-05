@@ -55,6 +55,9 @@ describe('BulkSendController', () => {
         smscId: 'carrier-a',
         message: 'hi',
         recipients: ['+256700000000', '+256711111111'],
+        // An unscheduled campaign still carries an explicit empty schedule, so
+        // the service never has to distinguish "not asked for" from "absent".
+        schedule: { scheduledAtMs: null, validityMinutes: null },
       },
     );
   });
