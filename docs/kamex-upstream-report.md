@@ -205,11 +205,26 @@ fails on every start against an existing database, logging
 `CREATE` only ever helps a fresh database — which matters if a column is ever added to
 those tables, since existing deployments will not pick it up.
 
-**Credentials in query strings.** Confirmed from our side, and we cannot avoid it:
-`/graceful-restart` accepts the admin password only as a query parameter, so our
-configuration deployments put it in a URL that `gwlib/http.c` then logs in full at debug
-level. We contain it by binding the admin port to loopback only. A `POST` form or header
-alternative would let us stop doing this.
+**Credentials in query strings — logged at ordinary verbosity, not only at debug.**
+Confirmed from our side, and we cannot avoid emitting them: `/graceful-restart` and
+`/status.json` accept the password only as a query parameter.
+
+We had assumed this was contained, on the grounds that we run `log-level = 1` rather
+than debug and bind the admin port to loopback. **We measured it, and the assumption was
+wrong.** A live engine at `log-level = 1` carried **945 occurrences of `password=`** in
+24 hours of captured process output.
+
+Loopback binding protects the *port*. It does nothing for the *logs*, which in any
+container deployment are captured by the runtime and routinely shipped to an aggregator
+that is not loopback-scoped. So the real exposure is not "an operator who turned debug
+on": a default deployment writes its admin and status passwords into its log stream
+continuously, in cleartext. Anyone who can read logs — a shipper, an on-call engineer, a
+support bundle, a filesystem backup — has the credentials.
+
+A `POST` body or header alternative for these endpoints would let downstream tools stop
+emitting them. Failing that, redacting a query parameter named `password` before the
+request line is written would fix it for every existing client at once, without any
+client change, and looks inexpensive.
 
 ---
 
