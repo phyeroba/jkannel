@@ -1266,3 +1266,31 @@ th {
     animation: none;
   }
 }
+
+/* Shared time range (spec §2.1). Low-chrome because it is persistent chrome,
+   not a page control — it must be findable without competing with the page. */
+.range-control select {
+  padding: 5px 8px;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.range-control select:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* A breadcrumb ancestor is a link; the final segment is not a link to itself. */
+.breadcrumbs a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.breadcrumbs a:hover {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.breadcrumbs [aria-current='page'] {
+  color: var(--text-strong);
+  font-weight: 600;
+}

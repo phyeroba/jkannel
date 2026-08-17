@@ -95,8 +95,8 @@ Foundational: every later screen depends on these.
       and well; make it a primitive so new screens inherit it.
 - [ ] **1.4 Global search** across carrier, SMSC, session, message ID and MSISDN
       (permission-scoped).
-- [ ] **1.5 Breadcrumbs** preserving hierarchy (Carriers / MTN Uganda / MTN-P1 / TRX-02).
-- [ ] **1.6 Global time-range control** shared across analytical screens, with
+- [x] **1.5 Breadcrumbs** preserving hierarchy (Carriers / MTN Uganda / MTN-P1 / TRX-02).
+- [x] **1.6 Global time-range control** shared across analytical screens, with
       the range preserved when navigating between Traffic → SMSC → Diagnostics
       (§6 UI requirement).
 - [ ] **1.7 Nav restructure** to the 9 sections in §1 above.
@@ -206,4 +206,5 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | Plan committed | b844ab5 |
 | 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | ada2c86 |
 | 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | 7febcff |
-| 2026-08-06 | 1.3 UX state model (DataState + displayValue) | — |
+| 2026-08-06 | 1.3 UX state model (DataState + displayValue) | dae5c89 |
+| 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | — |

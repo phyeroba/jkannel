@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { navigation, type NavigationItem } from '../navigation';
 import AppIcon from '../components/AppIcon.vue';
 import { canAccess, logout, session } from '../stores/session';
+import { clearBreadcrumbTrail, resolveBreadcrumbs } from '../stores/breadcrumbs';
+import { RANGE_PRESETS, selectedRange, setRangePreset } from '../stores/time-range';
 import { apiRequest } from '../api';
 
 interface NotificationRecord {
@@ -112,6 +114,20 @@ function expandActiveGroup() {
   persistCollapsed();
 }
 watch(activeGroup, expandActiveGroup, { immediate: true });
+
+/**
+ * Breadcrumbs (spec §2.1). A view publishes its hierarchy once its entity has
+ * loaded; until then the route's static crumbs show.
+ *
+ * The trail is cleared on every navigation rather than left for the next screen
+ * to overwrite. A stale `MTN Uganda / MTN-P1` sitting above an unrelated page is
+ * worse than no breadcrumb at all — it is a wrong answer to "where am I".
+ */
+const breadcrumbs = computed(() => resolveBreadcrumbs(route));
+watch(
+  () => route.path,
+  () => clearBreadcrumbTrail(),
+);
 const groupId = (group: string) => `nav-group-${group.toLowerCase()}`;
 const searchResults = computed(() =>
   visibleNavigation.value.filter((item) =>
@@ -395,7 +411,18 @@ onUnmounted(() => {
           <AppIcon name="search" /><span>Search JKANNEL</span><kbd>Ctrl K</kbd>
         </button>
         <div class="top-actions">
-          <span
+          <label class="range-control">
+            <span class="sr-only">Time range for analytical screens</span>
+            <select
+              :value="selectedRange.id"
+              data-testid="global-time-range"
+              @change="setRangePreset(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="preset in RANGE_PRESETS" :key="preset.id" :value="preset.id">
+                {{ preset.label }}
+              </option>
+            </select> </label
+          ><span
             v-if="environmentLabel"
             class="environment"
             :class="`tone-${systemInfo?.environmentTone}`"
@@ -565,8 +592,12 @@ onUnmounted(() => {
       <main id="workspace" class="workspace" tabindex="-1">
         <nav class="breadcrumbs" aria-label="Breadcrumb">
           <RouterLink to="/dashboard/operations">Home</RouterLink
-          ><template v-for="crumb in route.meta.breadcrumb" :key="crumb"
-            ><span>/</span><span>{{ crumb }}</span></template
+          ><template v-for="(crumb, index) in breadcrumbs" :key="`${crumb.label}-${index}`"
+            ><span aria-hidden="true">/</span
+            ><RouterLink v-if="crumb.to" :to="crumb.to">{{ crumb.label }}</RouterLink
+            ><span v-else :aria-current="index === breadcrumbs.length - 1 ? 'page' : undefined">{{
+              crumb.label
+            }}</span></template
           >
         </nav>
         <div class="page-heading">
