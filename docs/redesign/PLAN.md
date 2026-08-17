@@ -65,15 +65,15 @@ The design system replaces the Vuexy violet `#7367f0` with **DocFlow Blue
 ink, status hues, sidebar navy, spacing, shadows) was lifted *from* our shipped
 stylesheets and already matches.
 
-- [ ] **0.1** Adopt the `--blue-50…900` ramp in `frontend/src/style.css`; repoint
+- [x] **0.1** Adopt the `--blue-50…900` ramp in `frontend/src/style.css`; repoint
       `--brand`, `--brand-2`, `--brand-press`, `--brand-soft`, `--shadow-brand`.
       Keep every other token. Verify light + dark.
-- [ ] **0.2** Regenerate `frontend/public/favicon.svg` in `--blue-500` (the design
+- [x] **0.2** Regenerate `frontend/public/favicon.svg` in `--blue-500` (the design
       system ships it still violet, deliberately unmodified, and says to
       regenerate when the frontend adopts the accent).
-- [ ] **0.3** Sweep hard-coded `#7367f0` / violet rgba literals out of
+- [x] **0.3** Sweep hard-coded `#7367f0` / violet rgba literals out of
       `design-authority.css` and any component styles; they must all read tokens.
-- [ ] **0.4** Add the design system's missing semantic aliases
+- [x] **0.4** Add the design system's missing semantic aliases
       (`--surface-page`, `--surface-card`, `--border-default`, `--text-muted`,
       `--radius-*`, `--shadow-focus`, `--ease-standard`) so component code can be
       shared with the kit.
@@ -203,4 +203,5 @@ Foundational: every later screen depends on these.
 
 | Date | Item | Commit |
 |---|---|---|
-| 2026-08-06 | Plan committed | — |
+| 2026-08-06 | Plan committed | b844ab5 |
+| 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | — |

@@ -10,15 +10,64 @@
   --text: #6f6b7d;
   --text-strong: #444050;
   --muted: #a5a2ad;
-  --brand: #7367f0;
-  --brand-2: #6354e0;
-  --brand-soft: rgba(115, 103, 240, 0.14);
+
+  /* ---------------------------------------------------------------------
+     Accent ramp — DocFlow Blue.
+     Replaces the Vuexy violet #7367f0 this console shipped with, as a
+     house-wide alignment with the JKANNEL design system (see
+     design/JKANNEL design system/tokens/colors.css, which is the source of
+     these values). Everything else in this file — surfaces, ink, status
+     hues, sidebar navy, shadows — was lifted FROM here into that system and
+     is unchanged; the accent is the only thing moving.
+
+     The full ramp is declared, not just the three shades in use, because
+     charts, tints and future states pick from it and a partial ramp is how
+     one-off hex literals creep back in.
+     --------------------------------------------------------------------- */
+  --blue-50: #eef7fc;
+  --blue-100: #d5ebf7;
+  --blue-200: #aed8ef;
+  --blue-300: #78bde4;
+  --blue-400: #3fa1d6;
+  --blue-500: #1a86c8;
+  --blue-600: #146ba3;
+  --blue-700: #12567f;
+  --blue-800: #124a6b;
+  --blue-900: #123c56;
+
+  --brand: var(--blue-500);
+  --brand-2: var(--blue-600);
+  --brand-press: var(--blue-700);
+  --brand-soft: rgba(26, 134, 200, 0.14);
+  --brand-border: var(--blue-200);
+  /* Bloom under primary buttons and the active nav pill. A token because it
+     was previously a violet literal repeated in three stylesheets. */
+  --shadow-brand: 0 4px 12px rgba(26, 134, 200, 0.3);
+
   --good: #28c76f;
   --warn: #ff9f43;
   --bad: #ea5455;
   --info: #00cfe8;
   --shadow: 0 4px 18px rgba(75, 70, 92, 0.1);
   --shadow-lg: 0 10px 34px rgba(75, 70, 92, 0.16);
+
+  /* ---------------------------------------------------------------------
+     Semantic aliases used by the design system's component sources. Declared
+     here so a component can be lifted from the kit without rewriting its
+     custom properties, and so both codebases name the same things the same
+     way. They are aliases, never independent values.
+     --------------------------------------------------------------------- */
+  --surface-page: var(--bg);
+  --surface-card: var(--surface);
+  --border-default: var(--border);
+  --text-muted: var(--muted);
+  --primary: var(--brand);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --shadow-focus: 0 0 0 3px rgba(26, 134, 200, 0.35);
+  --ease-standard: 0.18s ease;
 }
 :root[data-theme='dark'] {
   color: #b0b3c7;
@@ -30,11 +79,18 @@
   --text: #b0b3c7;
   --text-strong: #e5e7f0;
   --muted: #7e819e;
-  --brand: #7367f0;
-  --brand-2: #8b80f5;
-  --brand-soft: rgba(115, 103, 240, 0.22);
+  /* Dark mode lifts the accent one step (--blue-400) so it holds contrast on
+     the #25293c canvas, and raises the tint alpha .14 -> .20. The status hues
+     are deliberately IDENTICAL in both themes — only the tint changes. */
+  --brand: var(--blue-400);
+  --brand-2: var(--blue-300);
+  --brand-press: var(--blue-500);
+  --brand-soft: rgba(63, 161, 214, 0.2);
+  --brand-border: var(--blue-700);
+  --shadow-brand: 0 4px 12px rgba(63, 161, 214, 0.28);
   --shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
   --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.28);
+  --shadow-focus: 0 0 0 3px rgba(63, 161, 214, 0.4);
 }
 * {
   box-sizing: border-box;
