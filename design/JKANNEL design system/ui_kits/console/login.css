@@ -1,0 +1,61 @@
+/* Login split-screen: the parts of design-authority.css that only the
+   unauthenticated pages use. Imported by the console UI kit. */
+.login-page { min-height: 100vh; display: grid; grid-template-columns: 40% 1fr; background: var(--surface); }
+.login-visual { position: relative; overflow: hidden; background: var(--brand); display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 34px 40px; }
+.login-logo { display: flex; align-items: center; gap: 11px; color: #fff; }
+.login-logo strong { font-size: 34px; letter-spacing: -0.01em; color: #fff; }
+.login-illustration { display: none; }
+.illustration-ring, .illustration-core { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; }
+.illustration-ring { width: 300px; height: 300px; border: 1.5px solid var(--border); }
+.illustration-core { width: 210px; height: 210px; background: var(--surface-2); }
+.login-stat { position: absolute; width: 186px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; box-shadow: var(--shadow-lg); }
+.login-stat.first { left: 4px; top: 36px; }
+.login-stat.second { right: 0; bottom: 20px; }
+.login-stat strong, .login-stat small { display: block; }
+.login-stat strong { font-size: 13px; color: var(--text-strong); }
+.login-stat small { font-size: 11px; color: var(--muted); }
+.mini-bars { display: flex; align-items: end; gap: 4px; height: 34px; margin: 12px 0 8px; }
+.mini-bars i { flex: 1; border-radius: 3px 3px 0 0; background: var(--brand); opacity: 0.78; }
+.bars-two i { background: var(--info); }
+.login-stat > div:last-child { display: flex; align-items: baseline; gap: 7px; }
+.login-stat b { font-size: 19px; color: var(--text-strong); }
+.login-stat em { font-size: 12px; color: var(--good); font-style: normal; font-weight: 600; }
+.login-live { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); width: 130px; background: var(--brand); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow-lg); color: #fff; }
+.login-live small, .login-live strong { display: block; }
+.login-live small { font-size: 11px; opacity: 0.85; }
+.login-live strong { font-size: 20px; margin-top: 2px; }
+.login-caption { display: none; }
+.login-form-wrap { display: flex; align-items: center; justify-content: center; padding: 44px; background: var(--surface); }
+.login-card { width: 100%; max-width: 340px; }
+.login-console-badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft); padding: 5px 11px; border-radius: 8px; }
+.login-card h1 { font-size: 26px; letter-spacing: -0.02em; margin: 20px 0 6px; }
+.login-card > p { font-size: 14px; color: var(--text); margin: 0 0 24px; }
+.login-card form > label:not(.remember-row), .password-label label { display: block; font-size: 13px; font-weight: 500; color: var(--text-strong); margin: 0 0 6px; }
+.login-card form > input, .password-field input { width: 100%; height: 42px; background: var(--surface); border: 1px solid var(--input-border); border-radius: 8px; padding: 0 13px; color: var(--text-strong); font-size: 14px; outline: none; margin: 0 0 18px; }
+.password-label { display: flex; justify-content: space-between; align-items: center; }
+.password-label span { font-size: 12.5px; color: var(--brand); }
+.password-field { position: relative; margin-bottom: 18px; }
+.password-field input { margin: 0; padding-right: 40px; }
+.password-field button { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); display: flex; border: 0; background: transparent; color: var(--muted); padding: 4px; cursor: pointer; }
+.remember-row { display: flex !important; align-items: center; gap: 8px; font-size: 13px !important; font-weight: 400 !important; color: var(--text); margin: 0 0 20px !important; cursor: pointer; }
+.remember-row input { width: 17px; height: 17px; margin: 0; accent-color: var(--brand); }
+.login-card .primary-button { width: 100%; height: 44px; font-size: 14.5px; font-weight: 600; }
+@media (max-width: 900px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-visual { display: none; }
+  .login-form-wrap { min-height: 100vh; padding: 24px; }
+}
+
+/* Dashboard action row: the production console pulls this row onto the heading
+   line with a -56px margin. That only clears the page subtitle when the
+   workspace is wide enough for both, so the pull is guarded here. */
+.dashboard-actions {
+  display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap;
+  gap: 12px; margin: 0 0 20px; color: var(--muted); font-size: 12px;
+}
+@media (min-width: 1200px) {
+  .dashboard-actions { justify-content: flex-end; margin: -56px 0 24px; flex-wrap: nowrap; }
+}
+
+.row-actions { white-space: nowrap; }
+.row-actions .secondary-button { margin-right: 6px; }

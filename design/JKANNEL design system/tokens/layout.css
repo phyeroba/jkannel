@@ -1,0 +1,218 @@
+/* App shell: 260px sidebar + fluid shell, floating topbar card, status bar.
+   Values from frontend/src/style.css refined by design-authority.css. */
+:root {
+  --sidebar-w: 260px;
+  --topbar-h: 52px;
+  --topbar-band: 60px;
+  --statusbar-h: 34px;
+  --content-max: 1280px;
+}
+
+.app-frame { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+
+.sidebar {
+  position: sticky; top: 0; height: 100vh; z-index: 30;
+  display: flex; flex-direction: column; overflow: hidden;
+  padding: 16px 12px;
+  background: var(--sidebar); color: var(--sidebar-ink); border: 0;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 12px 16px; line-height: 1.15; }
+.brand-mark {
+  display: grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 9px; background: var(--brand); color: #fff;
+  box-shadow: 0 5px 14px rgba(26, 134, 200, 0.35);
+}
+.brand strong { display: block; color: #fff; font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+.brand small { display: block; color: var(--sidebar-muted); font-size: 10.5px; letter-spacing: 0.05em; }
+
+.sidebar nav { display: grid; gap: 2px; align-content: start; flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 20px; }
+.nav-group { display: grid; gap: 2px; align-content: start; }
+/* A group header is a nav row that happens to open a section. */
+.nav-label {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 11px;
+  width: 100%; margin: 0; padding: 9px 12px; border: 0; border-radius: var(--r-md);
+  background: none; color: var(--sidebar-ink); font: inherit; font-size: 14px;
+  font-weight: 500; letter-spacing: 0; text-transform: none; line-height: var(--leading-snug);
+  text-align: left; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+}
+.nav-label[aria-expanded='true'] { color: #fff; font-weight: 600; }
+.nav-label:hover { background: rgba(255, 255, 255, 0.07); }
+.nav-chevron { flex: none; opacity: 0.55; transition: transform 0.18s ease; }
+.nav-label.collapsed .nav-chevron { transform: rotate(-90deg); }
+/* Top-level entries (Dashboard) sit at the same inset as group headers. */
+.nav-primary { display: grid; gap: 2px; }
+/* Children of an open group indent under their header, as a sub-list. */
+.nav-items { display: grid; gap: 2px; padding: 2px 0 6px 20px; }
+.sidebar nav .nav-items a { font-size: 13.5px; }
+.sidebar nav .nav-items a > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar nav { padding: 8px 0 20px; }
+.sidebar nav a {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 11px;
+  padding: 9px 12px; border-radius: var(--r-md); color: var(--sidebar-ink);
+  text-decoration: none; font-size: 14px; font-weight: 500; line-height: var(--leading-snug);
+}
+.sidebar nav a > svg { flex: none; }
+.sidebar nav a:hover { background: var(--sidebar-hover); color: #fff; }
+.sidebar nav a.active { background: var(--brand); color: #fff; font-weight: 600; box-shadow: var(--shadow-brand); }
+.nav-badge { background: var(--bad); color: #fff; border-radius: var(--r-pill); padding: 2px 7px; font-size: 10.5px; }
+.sidebar-footer {
+  flex: none; margin-top: auto; display: flex; align-items: center; gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08); padding: 16px 9px 2px;
+}
+.sidebar-footer strong, .sidebar-footer small { display: block; font-size: 12px; }
+.sidebar-footer small { color: var(--sidebar-muted); }
+
+/* A column flex shell, not a grid: a sticky topbar inside a fixed-height grid row
+   cannot travel, so the bar's containing block must be the full shell. */
+.shell { min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
+/* Full-bleed and pinned: the bar spans the shell edge to edge, sits flush at the
+   top of the scroll container and separates from content with a hairline rather
+   than a floating card. */
+.topbar {
+  position: sticky; top: 0; z-index: 30; flex: none; height: var(--topbar-band);
+  display: flex; align-items: center; gap: 18px;
+  margin: 0; padding: 0 24px;
+  background: var(--surface); border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none;
+}
+.search-trigger {
+  flex: 1 1 auto; min-width: 40px; max-width: 540px; overflow: hidden; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center; gap: 9px; padding: 7px 0; border: 0; background: transparent;
+  color: var(--muted); text-align: left; cursor: pointer;
+}
+/* The prompt names every searchable object, so it must truncate, never wrap. */
+.search-trigger > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-trigger kbd { flex: none; }
+/* The shell controls never shrink: the search trigger absorbs the squeeze because
+   it can truncate, while the range value must always stay legible. */
+.top-actions { margin-left: auto; max-height: 100%; flex: 0 0 auto; min-width: max-content; display: flex; align-items: center; gap: 12px; }
+/* The bar sheds text before it sheds controls: shortcut hint, then the profile
+   name, freshness word and environment label — the range value never goes. */
+@media (max-width: 1180px) {
+  .topbar .search-trigger kbd { display: none; }
+  .profile-text { display: none; }
+  .freshness span:not(.status-dot) { display: none; }
+}
+.environment {
+  padding: 5px 9px; border: 0; border-radius: var(--r-md); font-size: 12px; font-weight: 600;
+  color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+.profile { display: flex; gap: 8px; align-items: center; }
+.profile strong { display: block; font-size: 13.5px; color: var(--text-strong); }
+.profile small { display: block; font-size: 12px; color: var(--muted); }
+.avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--brand); color: #fff; font-weight: 700; }
+
+.workspace { flex: 1 1 auto; padding: var(--inset-workspace); min-width: 0; }
+.breadcrumbs { display: flex; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.breadcrumbs a { color: var(--brand); text-decoration: none; }
+.page-heading { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; }
+.page-heading h1 { font-size: var(--fs-display); letter-spacing: var(--tracking-tight); color: var(--text-strong); margin: 0 0 6px; }
+.page-heading p { color: var(--muted); margin: 0; }
+
+.statusbar {
+  flex: none; height: var(--statusbar-h);
+  display: flex; align-items: center; gap: 24px; padding: 0 24px;
+  background: var(--surface); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted);
+}
+.statusbar span:last-child { margin-left: auto; }
+
+/* Two-column workspace split. A class, not inline style, so the ≤1050px
+   single-column collapse from frontend/src/style.css can apply. */
+.split-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--gap-panel); }
+.split-grid.wide-left { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.split-grid.wide-right { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+@media (max-width: 1050px) {
+  .split-grid, .split-grid.wide-left, .split-grid.wide-right { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ============================================================
+   Mobile. The console is desktop-first, so below 900px the fixed
+   sidebar column becomes an off-canvas drawer behind a hamburger,
+   the topbar drops to icons, and every dense grid gets a scroll
+   container rather than being crushed.
+   ============================================================ */
+.nav-toggle { display: none; }
+.sidebar-scrim { display: none; }
+
+@media (max-width: 900px) {
+  .app-frame { grid-template-columns: minmax(0, 1fr); }
+
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; height: 100%;
+    width: min(300px, 84vw); z-index: 40;
+    transform: translateX(-100%); transition: transform 0.2s ease;
+  }
+  .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
+  .sidebar-scrim { display: block; position: fixed; inset: 0; z-index: 35; background: var(--scrim); }
+
+  .nav-toggle { display: inline-flex; margin-left: -6px; }
+  .topbar { margin: 0; padding: 0 12px; gap: 8px; }
+  .topbar .search-trigger kbd { display: none; }
+  .top-actions { gap: 4px; }
+  .topbar-env, .topbar-conn, .profile-text { display: none; }
+  .statusbar { gap: 14px; padding: 0 14px; font-size: 11px; }
+  .statusbar span:nth-child(2) { display: none; }
+
+  .workspace { padding: 16px 14px 28px; }
+  .page-heading { flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 16px; }
+  .page-heading h1 { font-size: 22px; }
+  .breadcrumbs { flex-wrap: wrap; }
+
+  /* Panels lose their side inset so tables get the full width. */
+  .panel { padding: 16px 14px; }
+  .panel-header { flex-wrap: wrap; gap: 10px; }
+  .table-wrap { margin: 14px -14px -16px; }
+  /* A dense grid scrolls sideways instead of crushing its columns. */
+  .table-wrap table { min-width: 620px; }
+  th, td { padding: 10px 12px; }
+  .toolbar { grid-template-columns: minmax(0, 1fr); }
+  .pager { flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+  /* Tab strips and range pickers scroll rather than wrap mid-word. */
+  .range-select { display: flex; max-width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .range-button { white-space: nowrap; }
+  .notification-panel { left: 12px; right: 12px; top: 64px; width: auto; }
+}
+
+@media (max-width: 560px) {
+  .topbar .search-trigger > span { display: none; }
+  .search-trigger { flex: 0 0 auto; grid-template-columns: 20px; }
+  .top-actions { margin-left: auto; }
+}
+
+/* Global shell controls the operations console adds (spec §2.1): a strongly
+   distinguished environment indicator, a telemetry freshness pill, and the
+   global range control. */
+.env-chip {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  padding: 5px 11px; border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.env-chip .env-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.env-production { color: #fff; background: var(--bad); }
+.env-staging { color: var(--text-strong); background: var(--warn); }
+.env-dr { color: #fff; background: var(--sidebar); }
+
+.freshness {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 4px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600;
+  background: var(--surface-2); color: var(--text-strong);
+}
+.freshness .status-dot { margin: 0; }
+.freshness-warn { color: var(--warn); }
+.freshness-bad { color: var(--bad); }
+
+.topbar-range select { flex: none; min-width: 72px; border: 1px solid var(--input-border); border-radius: var(--r-md); padding: 5px 8px; background: var(--input); color: var(--text-strong); font-size: 12px; }
+
+/* A stale-telemetry banner sits above workspace content, never replacing it. */
+.stale-banner {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 16px;
+  padding: 11px 14px; border-radius: var(--r-lg); font-size: 13.5px;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
+}
+
+@media (max-width: 900px) {
+  .env-chip { padding: 4px 8px; font-size: 11px; }
+  .env-chip span:not(.env-dot) { display: none; }
+  .freshness span:not(.status-dot) { display: none; }
+  .topbar-range { display: none; }
+}

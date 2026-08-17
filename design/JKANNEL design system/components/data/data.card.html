@@ -1,0 +1,40 @@
+<!-- @dsCard group="Components" viewport="700x330" name="Data" subtitle="Console grid and dependency-free charts" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="../../assets/icons.js" defer></script>
+<style>body{padding:18px;background:var(--bg);}</style>
+</head>
+<body>
+<div style="display:grid;gap:14px">
+  <article class="panel">
+    <header class="panel-header"><div><h2>Delivery reports</h2><p>Latest DLRs by carrier</p></div></header>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Message</th><th>Carrier</th><th>Status</th><th style="text-align:right">Parts</th></tr></thead>
+        <tbody>
+          <tr><td><span class="row-id">msg_01HXQ4K2</span>+256 772 000 118</td><td>MTN UG</td><td><span class="status-badge good">delivered</span></td><td style="text-align:right">2</td></tr>
+          <tr><td><span class="row-id">msg_01HXQ4K7</span>+256 700 004 512</td><td>Airtel UG</td><td><span class="status-badge warn">pending</span></td><td style="text-align:right">1</td></tr>
+          <tr><td><span class="row-id">msg_01HXQ4M1</span>+256 752 771 043</td><td>MTN UG</td><td><span class="status-badge bad">failed</span></td><td style="text-align:right">3</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <article class="panel"><header class="panel-header"><div><h2>Throughput</h2></div></header>
+      <div class="chart" style="height:110px;padding-top:14px">
+        <div style="height:34%"></div><div style="height:55%"></div><div style="height:43%"></div><div style="height:72%"></div><div style="height:61%"></div><div style="height:88%"></div><div style="height:76%"></div><div style="height:100%"></div>
+      </div>
+    </article>
+    <article class="panel"><header class="panel-header"><div><h2>Split by carrier</h2></div></header>
+      <div style="display:grid;gap:12px;margin-top:14px">
+        <div><div style="display:flex;justify-content:space-between;font-size:13px"><span>MTN UG</span><strong class="figures">62%</strong></div><span class="breakdown-track"><span class="breakdown-fill" style="width:62%"></span></span></div>
+        <div><div style="display:flex;justify-content:space-between;font-size:13px"><span>Airtel UG</span><strong class="figures">38%</strong></div><span class="breakdown-track"><span class="breakdown-fill" style="width:38%;background:var(--info)"></span></span></div>
+      </div>
+    </article>
+  </div>
+</div>
+</body>
+</html>

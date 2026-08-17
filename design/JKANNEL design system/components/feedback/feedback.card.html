@@ -1,0 +1,24 @@
+<!-- @dsCard group="Components" viewport="700x300" name="Feedback" subtitle="Dialog and command palette on the console scrim" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="../../assets/icons.js" defer></script>
+<style>body{margin:0;height:300px;position:relative;background:var(--bg)}
+.dialog-backdrop{position:absolute;padding-top:24px}</style>
+</head>
+<body>
+<div class="dialog-backdrop">
+  <div class="command-dialog" role="dialog">
+    <header><h2>Search JKANNEL</h2><kbd>Esc</kbd></header>
+    <input placeholder="Jump to a workspace, message ID or SMSC" value="live" style="margin-top:12px" />
+    <div class="search-results">
+      <a href="#">Live Queue<span>Messaging</span></a>
+      <a href="#">Delivery Reports<span>Messaging</span></a>
+      <a href="#">Logs &amp; Audit<span>Platform</span></a>
+    </div>
+  </div>
+</div>
+</body>
+</html>

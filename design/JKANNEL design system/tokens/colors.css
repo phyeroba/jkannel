@@ -1,0 +1,106 @@
+/* Ported 1:1 from frontend/src/style.css (:root and [data-theme='dark'])
+   plus the sidebar/brand values that design-authority.css lands on top. */
+:root {
+  /* ---- Accent ramp: DocFlow Blue, shared with the DocFlow design system ---- */
+  --blue-50:  #eef7fc;
+  --blue-100: #d5ebf7;
+  --blue-200: #aed8ef;
+  --blue-300: #78bde4;
+  --blue-400: #3fa1d6;
+  --blue-500: #1a86c8; /* brand primary */
+  --blue-600: #146ba3;
+  --blue-700: #12567f;
+  --blue-800: #124a6b;
+  --blue-900: #123c56;
+
+  /* Surfaces */
+  --bg: #f8f7fa;
+  --surface: #fff;
+  --surface-2: #fbfbfc;
+  --border: #ebe9f1;
+  --input: #ffffff;
+  --input-border: #dbdade;
+
+  /* Ink */
+  --text: #6f6b7d;
+  --text-strong: #444050;
+  --muted: #a5a2ad;
+  --ink-faint: #b9b7c0;
+
+  /* Brand — DocFlow Blue on JKANNEL's surfaces */
+  --brand: var(--blue-500);
+  --brand-2: var(--blue-600);
+  --brand-press: var(--blue-700);
+  --brand-soft: rgba(26, 134, 200, 0.14);
+  --brand-border: var(--blue-200);
+
+  /* Status */
+  --good: #28c76f;
+  --warn: #ff9f43;
+  --bad: #ea5455;
+  --info: #00cfe8;
+  --neutral: #a5a2ad;
+  --neutral-soft: rgba(75, 70, 92, 0.08);
+  --good-soft: rgba(40, 199, 111, 0.14);
+  --warn-soft: rgba(255, 159, 67, 0.14);
+  --bad-soft: rgba(234, 84, 85, 0.14);
+  --info-soft: rgba(0, 207, 232, 0.14);
+
+  /* Sidebar (constant navy in both themes) */
+  --sidebar: #2f3349;
+  --sidebar-ink: #cfd3ec;
+  --sidebar-muted: #7d819e;
+  --sidebar-label: #ffffff;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+
+  /* Elevation */
+  --shadow: 0 4px 18px rgba(75, 70, 92, 0.1);
+  --shadow-lg: 0 10px 34px rgba(75, 70, 92, 0.16);
+  --shadow-brand: 0 4px 12px rgba(26, 134, 200, 0.3);
+  --scrim: rgba(3, 10, 20, 0.68);
+}
+
+:root[data-theme='dark'],
+[data-theme='dark'] {
+  --bg: #25293c;
+  --surface: #2f3349;
+  --surface-2: #343a55;
+  --border: #3b4056;
+  --input: #2f3349;
+  --input-border: #44496a;
+
+  --text: #b0b3c7;
+  --text-strong: #e5e7f0;
+  --muted: #7e819e;
+  --ink-faint: #7e819e;
+
+  --brand: var(--blue-400);
+  --brand-2: var(--blue-300);
+  --brand-press: var(--blue-500);
+  --brand-soft: rgba(63, 161, 214, 0.22);
+  --brand-border: var(--blue-700);
+
+  --good-soft: rgba(40, 199, 111, 0.2);
+  --warn-soft: rgba(255, 159, 67, 0.2);
+  --bad-soft: rgba(234, 84, 85, 0.2);
+  --info-soft: rgba(0, 207, 232, 0.2);
+
+  --sidebar: #2b2c40;
+
+  --shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.28);
+}
+
+/* DocFlow-parallel semantic aliases: same roles, JKANNEL values. */
+:root, [data-theme='dark'] {
+  --surface-page: var(--bg);
+  --surface-card: var(--surface);
+  --surface-hover: var(--surface-2);
+  --border-default: var(--border);
+  --text-body: var(--text);
+  --text-heading: var(--text-strong);
+  --text-muted: var(--muted);
+  --primary: var(--brand);
+  --primary-hover: var(--brand-2);
+  --primary-soft: var(--brand-soft);
+}

@@ -1,0 +1,49 @@
+:root {
+  /* 4/8 rhythm, as used across the console */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 14px;
+  --sp-6: 16px;
+  --sp-7: 18px;
+  --sp-8: 20px;
+  --sp-9: 24px;
+  --sp-10: 28px;
+  --sp-12: 38px;
+
+  /* Radii */
+  --r-xs: 6px;    /* environment chip */
+  --r-sm: 7px;    /* nav item, metric icon */
+  --r-md: 8px;    /* buttons, inputs */
+  --r-lg: 10px;   /* cards, panels, topbar */
+  --r-xl: 14px;   /* dialogs, auth cards */
+  --r-pill: 999px;
+
+  /* Grid + inset */
+  --gap-grid: 14px;
+  --gap-panel: 16px;
+  --inset-workspace: 22px 24px 38px;
+  --pad-card: 20px;
+  --pad-metric: 18px;
+  /* Motion — functional only (0.15–0.18s across the console) */
+  --ease-standard: ease;
+  --dur-fast: 150ms;
+  --dur-base: 180ms;
+
+  /* Focus ring (base.css uses this value as an outline) */
+  --shadow-focus: 0 0 0 3px rgba(26, 134, 200, 0.35);
+}
+
+/* DocFlow-parallel aliases: same concepts, JKANNEL values. Use either name. */
+:root {
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-pill: var(--r-pill);
+}

@@ -1,0 +1,39 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  font-family: var(--font-ui);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+}
+
+body {
+  margin: 0; min-width: 320px; min-height: 100vh;
+  background: var(--bg); color: var(--text);
+  font-size: var(--fs-body); line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { color: var(--text-strong); letter-spacing: var(--tracking-tight); }
+h2 { font-size: var(--fs-card-title); margin: 0 0 4px; }
+p { text-wrap: pretty; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { color: var(--brand-2); }
+button, input, select, textarea { font: inherit; }
+button, a { transition: 0.18s ease; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand) 35%, transparent);
+  outline-offset: 2px;
+}
+kbd {
+  font-family: var(--font-mono); font-size: 10px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 5px;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; }
+}

@@ -1,0 +1,35 @@
+<!-- @dsCard group="Components" viewport="700x260" name="Forms" subtitle="Inputs, password reveal, filter selects, toolbar" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="../../assets/icons.js" defer></script>
+<style>body{padding:18px;background:var(--bg);}</style>
+</head>
+<body>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
+  <div>
+    <label class="field"><span>Email or Username</span><input value="operator" /></label>
+    <div class="field" style="position:relative">
+      <span style="font-size:13px;font-weight:500;color:var(--text-strong)">Password</span>
+      <div style="position:relative">
+        <input type="password" value="••••••••••••" style="padding-right:40px" />
+        <button type="button" aria-label="Show password" style="position:absolute;right:9px;top:50%;transform:translateY(-50%);display:flex;border:0;background:transparent;color:var(--muted);padding:4px;cursor:pointer"><i data-ico="eye"></i></button>
+      </div>
+    </div>
+  </div>
+  <div style="display:grid;gap:12px">
+    <article class="panel toolbar" style="box-shadow:var(--shadow)">
+      <label class="filter-search"><input placeholder="Search messages" /></label>
+      <label class="filter-select"><span>Status</span><select><option>Any</option><option>Delivered</option></select></label>
+      <button class="secondary-button">Export CSV</button>
+    </article>
+    <div class="range-select">
+      <button class="range-button active">24h</button><button class="range-button">7d</button><button class="range-button">30d</button>
+    </div>
+    <p class="notice">Configuration generated. Deploy it to bring the bind up.</p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,193 @@
+/* Component classes as shipped in frontend/src/style.css +
+   design-authority.css. Light theme cards are borderless with a soft shadow. */
+
+/* --- Panels & cards --- */
+.panel, .metric-card {
+  background: var(--surface); border: 0; border-radius: var(--r-lg); box-shadow: var(--shadow);
+}
+.panel { padding: var(--pad-card); }
+/* Ported from frontend/src/style.css: a panel in a grid track must be allowed to
+   shrink below its table's min-content width, or the track overflows the grid. */
+.wide { min-width: 0; }
+.dashboard-grid, .metrics-grid, .panel { min-width: 0; }
+.panel-header, .panel > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.panel h2 { margin: 0 0 4px; font-size: var(--fs-card-title); color: var(--text-strong); }
+.panel p { color: var(--muted); margin: 0; }
+
+.metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gap-grid); margin-bottom: var(--gap-panel); }
+@media (max-width: 1050px) {
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .metrics-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* Compact KPI tile: icon chip beside the figure, one small caption. A word-value
+   like "Degraded" must read in full, so the figure may shrink rather than clip. */
+.metric-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.metric-card strong.metric-word { font-size: clamp(14px, 1.4vw, 19px); }
+.metric-body { display: grid; gap: 1px; min-width: 0; }
+.metric-card strong { display: block; min-width: 0; font-size: 19px; line-height: 1.15; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric-card small { display: block; font-size: 12.5px; line-height: 1.3; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric-icon { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-md); background: var(--brand-soft); color: var(--brand); }
+.metric-icon.good { background: var(--good-soft); color: var(--good); }
+.metric-icon.warn { background: var(--warn-soft); color: var(--warn); }
+.metric-icon.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* --- Buttons --- */
+.primary-button, .secondary-button, .danger-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border-radius: var(--r-md); padding: 10px 15px; font-weight: 700; cursor: pointer;
+}
+.primary-button { border: 1px solid var(--brand); background: var(--brand); color: #fff; box-shadow: 0 4px 12px var(--brand-soft); }
+.primary-button:hover { background: var(--brand-2); border-color: var(--brand-2); }
+.primary-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.secondary-button { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.secondary-button:hover { background: var(--surface-2); }
+.danger-button {
+  border: 1px solid color-mix(in srgb, var(--bad) 38%, var(--border));
+  color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--surface));
+}
+.icon-button { border: 0; background: transparent; color: var(--text); cursor: pointer; min-height: 36px; padding: 7px 9px; border-radius: var(--r-md); }
+.icon-button:hover { background: var(--surface-2); }
+.text-button, .text-link { border: 0; background: transparent; color: var(--brand); text-decoration: none; cursor: pointer; }
+
+/* --- Forms --- */
+.filter-search input, .filter-select select, .filter-select input, .composer input, .field input, .field select, .field textarea {
+  width: 100%; border: 1px solid var(--input-border); background: var(--input);
+  color: var(--text-strong); border-radius: var(--r-md); padding: 10px;
+}
+.field { display: grid; gap: 6px; margin: 0 0 18px; }
+.field > label, .field > span { font-size: var(--fs-body-sm); font-weight: 500; color: var(--text-strong); }
+.filter-search { display: block; }
+.filter-select { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto; gap: 12px; margin-bottom: 14px; padding: 14px; }
+.grid-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+/* Country/territory scope chips above a register. */
+.chip {
+  display: inline-flex; align-items: baseline; gap: 8px; padding: 9px 13px;
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer;
+}
+.chip strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.04em; }
+.chip span { color: var(--muted); font-size: 12.5px; }
+.chip:hover { border-color: var(--brand); }
+.chip-active { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.chip-active strong { color: var(--brand); }
+.form-error { margin: 0 0 14px; color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); padding: 9px; border-radius: 7px; }
+.notice {
+  padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--good) 35%, var(--border));
+  background: color-mix(in srgb, var(--good) 10%, var(--surface)); border-radius: var(--r-md); color: var(--good);
+}
+.range-select { display: inline-flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: var(--r-md); }
+.range-button { border: 0; background: transparent; color: var(--muted); padding: 5px 11px; border-radius: var(--r-xs); font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.range-button.active { background: var(--surface); color: var(--brand); box-shadow: var(--shadow); }
+
+/* --- Tables --- */
+/* Grid: tinted uppercase header band, hairline row rules, generous row height,
+   hover feedback, and roomy first/last cells. */
+.table-wrap { overflow: auto; margin: 16px -20px -20px; border-top: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 14px 16px; font-size: var(--fs-body-sm); }
+th {
+  color: var(--muted); font-size: var(--fs-table-head); font-weight: 700;
+  text-transform: uppercase; letter-spacing: var(--tracking-label);
+  background: var(--surface-2); border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+td { border-top: 1px solid var(--border); vertical-align: middle; }
+thead + tbody tr:first-child td { border-top: 0; }
+th:first-child, td:first-child { padding-left: 20px; }
+th:last-child, td:last-child { padding-right: 20px; }
+tbody tr:hover td { background: var(--surface-2); }
+tbody tr.selectable { cursor: pointer; }
+tbody tr.selected td { background: var(--brand-soft); }
+.row-id { display: block; color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.empty-cell { text-align: center; color: var(--muted); padding: 30px; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 34px; color: var(--muted); font-size: 13.5px; }
+
+/* --- Status language --- */
+.status-badge { display: inline-block; padding: 4px 8px; border-radius: var(--r-pill); font-size: 12px; text-transform: capitalize; }
+.status-badge.good { color: var(--good); background: var(--good-soft); }
+.status-badge.warn { color: var(--warn); background: var(--warn-soft); }
+.status-badge.bad { color: var(--bad); background: var(--bad-soft); }
+.status-badge.info { color: var(--info); background: var(--info-soft); }
+.status-badge.muted { color: var(--muted); background: var(--surface-2); }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-dot.good { background: var(--good); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.bad { background: var(--bad); }
+.health-list { list-style: none; margin: 16px 0 0; padding: 0; }
+.health-list li { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.health-list strong, .health-list small { display: block; font-size: 13px; }
+.health-list strong { color: var(--text-strong); }
+.health-list small { color: var(--muted); }
+
+/* --- Charts --- */
+.chart { height: 210px; display: flex; align-items: end; gap: 4px; padding: 28px 8px 0; border-bottom: 1px solid var(--border); }
+.chart div { flex: 1; background: linear-gradient(var(--brand), color-mix(in srgb, var(--brand) 35%, transparent)); border-radius: 5px 5px 0 0; }
+.chart-empty { margin: 40px 0; text-align: center; color: var(--muted); }
+.mini-chart-grid line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; }
+.mini-chart-tick { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.mini-chart-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); }
+.mini-chart-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.breakdown-track { height: 10px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
+.breakdown-fill { display: block; height: 100%; border-radius: var(--r-pill); background: var(--brand); }
+
+/* --- Overlays --- */
+.dialog-backdrop {
+  position: fixed; inset: 0; background: var(--scrim); z-index: 80;
+  display: grid; place-items: start center; padding: 12vh 15px 24px; overflow: auto;
+}
+/* A tall form must never push its own footer out of reach: the card is capped and
+   its body scrolls while the header and footer stay put. */
+.command-dialog {
+  width: min(620px, calc(100vw - 30px)); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-xl); padding: 20px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  display: flex; flex-direction: column; max-height: calc(100vh - 12vh - 48px);
+}
+.command-dialog > header { flex: none; }
+.dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; margin-top: 12px; }
+.dialog-foot { flex: none; display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+/* Fallback for dialogs whose content sits directly in the card (command palette). */
+.command-dialog > .search-results { min-height: 0; overflow: auto; }
+@media (max-height: 620px) { .dialog-backdrop { padding-top: 24px; } .command-dialog { max-height: calc(100vh - 48px); } }
+/* Half-width detail sheet opened from a register row (Drawer). */
+.drawer-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 70; display: flex; justify-content: flex-end; }
+.drawer-sheet {
+  width: 50vw; max-width: 100%; height: 100%; display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.28); animation: drawer-in 180ms ease-out;
+}
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.drawer-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 16px;
+  padding: 18px 22px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.drawer-head h2 { margin: 0; font-size: 19px; font-weight: 600; color: var(--text-strong); }
+.drawer-head p { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
+.drawer-head > div:first-child { flex: 1 1 220px; min-width: 220px; }
+.drawer-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
+.drawer-body { flex: 1; overflow: auto; padding: 20px 22px 28px; display: grid; gap: 22px; align-content: start; }
+.drawer-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--border); }
+@media (max-width: 900px) { .drawer-sheet { width: 100vw; } }
+
+.search-results { display: grid; gap: 6px; margin-top: 12px; }
+.search-results a { display: flex; justify-content: space-between; padding: 10px; border-radius: var(--r-md); color: var(--text); background: var(--surface-2); }
+/* Clickable notification rows (design-authority.css). */
+.notification-item-button {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+  background: none; border: none; border-radius: var(--r-lg); padding: 10px 8px;
+  cursor: pointer; font: inherit; color: inherit;
+}
+.notification-item-button:hover, .notification-item-button:focus-visible { background: var(--brand-soft); outline: none; }
+
+.notification-panel {
+  position: fixed; z-index: 50; right: 18px; top: 70px; width: 340px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: 16px; box-shadow: var(--shadow);
+}
+
+/* Page-level primary actions (create/add), beside the title. */
+.page-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
+.page-actions > button { white-space: nowrap; }
+@media (max-width: 900px) { .page-actions { width: 100%; } .page-actions > button { flex: 1; } }

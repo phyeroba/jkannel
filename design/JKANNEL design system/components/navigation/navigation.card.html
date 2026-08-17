@@ -1,0 +1,20 @@
+<!-- @dsCard group="Components" viewport="700x120" name="Navigation" subtitle="Segmented tab strip and range picker" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>body{margin:0;padding:20px;background:var(--surface);display:flex;flex-direction:column;gap:14px;align-items:flex-start}</style>
+</head>
+<body>
+<div class="range-select" role="tablist">
+  <button class="range-button active">Escalation policies <span class="figures" style="opacity:.65">3</span></button>
+  <button class="range-button">Maintenance windows <span class="figures" style="opacity:.65">3</span></button>
+  <button class="range-button">Correlated alerts <span class="figures" style="opacity:.65">2</span></button>
+  <button class="range-button">Notification readiness</button>
+</div>
+<div class="range-select">
+  <button class="range-button">24h</button><button class="range-button active">7d</button><button class="range-button">30d</button><button class="range-button">90d</button>
+</div>
+</body>
+</html>

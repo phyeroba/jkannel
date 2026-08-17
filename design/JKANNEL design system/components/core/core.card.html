@@ -1,0 +1,50 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Core" subtitle="Buttons, metric tiles, panels, status pills" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="../../assets/icons.js" defer></script>
+<style>body{padding:18px;background:var(--bg);}</style>
+</head>
+<body>
+<div style="display:grid;gap:14px">
+  <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+    <button class="primary-button"><i data-ico="sms" data-size="16"></i>Send message</button>
+    <button class="secondary-button">Refresh dashboard</button>
+    <button class="danger-button">Delete route</button>
+    <button class="primary-button" disabled>Signing in…</button>
+    <button class="icon-button" aria-label="Notifications"><i data-ico="bell"></i></button>
+    <button class="icon-button" aria-label="Dark mode"><i data-ico="moon"></i></button>
+  </div>
+  <div class="metrics-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin:0">
+    <article class="metric-card">
+      <div class="metric-top"><span>Queue depth</span><span class="metric-icon"><i data-ico="queue" data-size="20"></i></span></div>
+      <strong>1,284</strong><small>Messages waiting in SQLBox</small>
+    </article>
+    <article class="metric-card">
+      <div class="metric-top"><span>DLRs (latest daily)</span><span class="metric-icon good"><i data-ico="check" data-size="20"></i></span></div>
+      <strong>98.7%</strong><small>DLRs in latest daily snapshot</small>
+    </article>
+    <article class="metric-card">
+      <div class="metric-top"><span>Alerts</span><span class="metric-icon warn"><i data-ico="alert" data-size="20"></i></span></div>
+      <strong>unavailable</strong><small>Alerts not observable</small>
+    </article>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+    <article class="panel">
+      <header class="panel-header"><div><h2>Platform health</h2><p>Observed dependency state</p></div><a class="text-link" href="#">View</a></header>
+      <ul class="health-list" style="margin-top:10px">
+        <li><span class="status-dot warn"></span><span><strong>kamex 1.8.3</strong><small>transport reachable</small></span><span class="status-badge warn">degraded</span></li>
+        <li style="border-bottom:0"><span class="status-dot good"></span><span><strong>JKANNEL API</strong><small>REST control plane responding</small></span><span class="status-badge good">healthy</span></li>
+      </ul>
+    </article>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-content:start;padding-top:6px">
+      <span class="status-badge good">healthy</span><span class="status-badge info">delivered</span>
+      <span class="status-badge warn">pending</span><span class="status-badge bad">failed</span>
+      <span class="status-badge muted">expired</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

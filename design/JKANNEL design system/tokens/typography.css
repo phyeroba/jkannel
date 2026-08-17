@@ -1,0 +1,39 @@
+:root {
+  --font-ui: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Console scale (design_spec/HANDOFF.md §2) */
+  --fs-display: 26px;   /* page h1 in the shipped console */
+  --fs-h1: 22px;
+  --fs-card-title: 17px;
+  --fs-body: 15px;
+  --fs-body-sm: 14px;
+  --fs-label: 13.5px;
+  --fs-caption: 12.5px;
+  --fs-table-head: 11.5px;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --tracking-label: 0.06em;
+
+  --lh-tight: 1.12;
+  --lh-body: 1.6;
+  --tracking-tight: -0.02em;
+  --tracking-caps: 0.08em;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+}
+
+.t-display { font-size: var(--fs-display); font-weight: 700; letter-spacing: var(--tracking-tight); color: var(--text-strong); }
+.t-h1 { font-size: var(--fs-h1); font-weight: 700; letter-spacing: var(--tracking-tight); color: var(--text-strong); }
+.t-card-title { font-size: var(--fs-card-title); font-weight: 600; color: var(--text-strong); }
+.t-body { font-size: var(--fs-body); color: var(--text); }
+.t-label { font-size: var(--fs-label); font-weight: 600; color: var(--text-strong); }
+.t-caption { font-size: var(--fs-caption); font-weight: 500; color: var(--muted); }
+.t-caps { font-size: var(--fs-table-head); font-weight: 700; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--muted); }
+.mono, .t-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.figures { font-variant-numeric: tabular-nums; }

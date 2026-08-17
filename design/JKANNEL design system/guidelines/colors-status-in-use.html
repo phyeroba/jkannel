@@ -1,0 +1,22 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Status in use" subtitle="Soft-tint pills and dots carry every state word" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<script src="../assets/icons.js" defer></script>
+<style>body{padding:16px;background:var(--bg);}</style>
+</head>
+<body>
+<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+  <span class="status-badge good">healthy</span><span class="status-badge good">delivered</span>
+  <span class="status-badge info">acked</span><span class="status-badge warn">pending</span>
+  <span class="status-badge warn">degraded</span><span class="status-badge bad">failed</span>
+  <span class="status-badge bad">offline</span><span class="status-badge muted">expired</span>
+</div>
+<ul class="health-list" style="margin-top:14px">
+  <li><span class="status-dot good"></span><span><strong>SQLBox message store</strong><small>PostgreSQL SQLBox reachable</small></span><span class="status-badge good">available</span></li>
+  <li style="border-bottom:0"><span class="status-dot bad"></span><span><strong>Carrier bind</strong><small>bind rejected — retrying</small></span><span class="status-badge bad">offline</span></li>
+</ul>
+</body>
+</html>

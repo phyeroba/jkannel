@@ -1,0 +1,505 @@
+KAMEX
+Carrier Gateway Operations Console
+Detailed UI/UX Functional Specification & Use Case Flows
+Purpose: Guide a thorough redesign of the operational interface for a Kannel-derived SMS gateway.Scope: Carrier connectivity, SMSC/SMPP operations, traffic, queues, DLRs, routing, diagnostics, service monitoring and audit.Explicitly out of scope: CPaaS customer provisioning, commercial billing, plans, customer API credentials and customer portal functions.
+1. Product Definition
+Kamex UI is the operational control plane for engineers and NOC teams running the Kamex messaging gateway. The redesign should hide Kannel configuration-file concepts from normal operators and instead present domain concepts that match telecom operations: Carrier → SMSC → SMPP Session → Route → Queue → Message → Delivery Receipt.
+The interface must optimize for rapid situational awareness, safe operational intervention, fast fault isolation, and traceability. Kannel/Kamex internals may remain available to backend services and privileged engineering diagnostics, but should not define the primary user experience.
+1.1 Design principles
+Operations first: every major screen answers health, impact, cause and next action.
+Progressive disclosure: show status and actionable summaries first; expose protocol detail on drill-down.
+No routine file editing: configuration files, raw Kannel groups and directives are not the primary UI abstraction.
+Safe control: disruptive actions require permissions, impact warnings, reason capture and audit logging.
+Correlation by default: connect alerts, carrier events, SMPP errors, queue changes, message traces and logs.
+Real-time but calm: live data should update without visually destabilizing tables or charts.
+Privacy aware: mask MSISDN/message content by default; unmasking is privileged and audited.
+NOC friendly: usable on desktop workstations and large wall displays, with dark-mode readiness.
+1.2 Personas and roles
+  Persona | Primary goals | Typical privileges
+  NOC Operator | Detect outages, monitor queues/TPS, acknowledge alerts, perform approved recovery actions | Read operational data; reconnect/resume; acknowledge alerts
+  Messaging Engineer | Troubleshoot SMPP, routing, DLR and carrier behavior | Deep diagnostics; tests; route/failover controls
+  Gateway Administrator | Manage operational connectivity objects and service controls | Create/update SMSC operational metadata; service actions; thresholds
+  Support Engineer | Trace individual messages and explain failures | Message trace, DLR/error lookup, masked logs
+  Auditor / Read-only | Review availability, incidents and actions | Read-only dashboards, events and audit trail
+1.3 Scope boundary with CPaaS console
+  Kamex owns | CPaaS console owns
+  Carrier/SMSC connectivity | Client/customer onboarding
+  SMPP sessions and health | Subscriptions, packages and billing
+  Network/carrier routing and failover | Customer-facing routing products/policies
+  Gateway queues and throughput | Customer quotas and commercial limits
+  DLR operational quality | Customer reporting/portal analytics
+  Message diagnostics | Customer API credentials
+  Gateway/service monitoring | Commercial sender onboarding
+  Operational alerts and audit | Invoices, payments and account lifecycle
+2. Information Architecture
+Recommended primary navigation:
+  Section | Screens | Purpose
+  Overview | Dashboard; Alerts | Global health and active operational risk
+  Connectivity | Carriers; SMSCs; SMPP Sessions | Carrier-facing connectivity and session operations
+  Traffic | Live Traffic; Queues; DLR Performance | Real-time message flow and congestion
+  Routing | Carrier Routes; Failover; Route Simulator | Network route behavior and continuity
+  Diagnostics | Message Trace; SMPP Errors; Events; Logs; Test Tools | Fault isolation and investigation
+  System | Services; Nodes; Performance; Audit Trail | Gateway platform health and accountability
+2.1 Global UI shell
+Persistent environment indicator (e.g., Production / DR / Staging) with strong visual distinction.
+Global time-range control for analytical screens; display gateway timezone and allow user-local rendering.
+Global search for carrier, SMSC, session, message ID and MSISDN where permitted.
+Alert bell with severity counts and direct incident navigation.
+Connection/live-data indicator showing whether telemetry is current, delayed or disconnected.
+User/role menu and audit-aware privileged-mode indicator.
+Breadcrumbs that preserve hierarchy, e.g., Carriers / MTN Uganda / MTN-P1 / TRX-02.
+3. Dashboard Specification
+3.1 Purpose
+Provide a 10-second assessment of whether the gateway and carrier estate are healthy, where impact exists, and which issue needs attention first.
+3.2 Recommended layout
+  Zone | Components | Interaction
+  Health strip | Gateway health; SMSCs up/total; current MT TPS; MO TPS; queue; DLR success; active critical alerts | Click metric to open filtered detail
+  Carrier connectivity | Carrier cards/table with health, sessions, TPS, queue, DLR | Click carrier for carrier overview
+  Traffic trend | MT/MO/DLR time series; current vs normal band where available | Brush/zoom; filter carrier/SMSC
+  Queue pressure | Top queues by depth, age and growth | Open queue; show estimated drain time
+  Carrier quality | Delivery rate, P95 DLR latency, reject/throttle rate | Rank worst performers first
+  Active incidents | Critical/warning alerts with duration, impact and acknowledgement | Open alert detail / acknowledge
+  System health | Core services/nodes and telemetry freshness | Drill to System
+3.3 Health semantics
+Healthy: service/SMSC is available and key performance indicators remain inside defined thresholds.
+Degraded: available but experiencing elevated errors, latency, queue growth, session loss or capacity pressure.
+Critical: unavailable or materially unable to process expected traffic.
+Unknown: telemetry stale or insufficient; never represent unknown as healthy.
+4. Carrier & SMSC Management
+4.1 Carrier object
+Carrier is an operational aggregation object representing a mobile network/operator and its associated SMSCs and sessions.
+  Carrier overview element | Required data
+  Identity | Carrier name, country/market, network code/metadata, operational status
+  Connectivity | SMSC count, healthy/failed sessions, last connectivity event
+  Capacity | Configured/known capacity, current TPS, utilization, throttling
+  Quality | Delivery %, rejection %, DLR median/P95, no-DLR rate
+  Traffic | MT, MO and DLR volumes/TPS
+  Incidents | Open alerts and recent carrier events
+4.2 SMSC list
+  Column | Behavior
+  SMSC | Name/ID; click to detail
+  Carrier | Parent carrier
+  Protocol | SMPP or other supported connector
+  State | Connected / degraded / disconnected / suspended
+  Sessions | Healthy / total
+  Current TPS | Outbound and optional inbound
+  Capacity | Known/configured ceiling and utilization
+  Queue | Depth plus oldest age
+  DLR | Delivery rate and latency indicator
+  Last event | Disconnect/rebind/throttle timestamp
+  Actions | Context menu based on role and current state
+UC-CON-01 — Investigate an unhealthy carrier
+  Field | Specification
+  Primary actor | NOC Operator / Messaging Engineer
+  Trigger | Carrier card turns degraded/critical or an alert links to the carrier.
+  Preconditions | Telemetry is available and user has read permission.
+  Postconditions | Carrier remains monitored; any action or acknowledgement is recorded.
+Main flow
+User opens the carrier from Dashboard or Connectivity.
+System shows aggregate health and highlights unhealthy SMSCs/sessions.
+User reviews the synchronized traffic, queue, DLR and error trends around the incident time.
+User opens the affected SMSC and inspects session state and recent events.
+User follows a correlated event/error to diagnostics or logs when deeper evidence is required.
+User either performs an authorized recovery action or records/acknowledges the incident.
+Exceptions / alternate flows
+If telemetry is stale, show Unknown state and telemetry warning rather than inferred health.
+If multiple SMSCs are degraded, rank them by traffic impact and queue growth.
+UI requirements
+Sticky incident context/time window while drilling down.
+Show 'what changed' summary: session loss, queue increase, delivery drop, throttling spike.
+Provide related alerts/events in the same view.
+UC-SMSC-01 — Reconnect an SMSC
+  Field | Specification
+  Primary actor | Authorized NOC Operator / Gateway Administrator
+  Trigger | Operator determines an SMSC requires reconnection.
+  Preconditions | SMSC exists; user has reconnect permission; gateway control channel is healthy.
+  Postconditions | SMSC is either connected/degraded or remains failed with a recorded result.
+Main flow
+User opens SMSC detail and selects Reconnect.
+System displays current state, affected sessions, queue depth and estimated operational impact.
+User enters/selects a reason and confirms.
+System sends the controlled reconnect command and immediately changes action state to 'In progress'.
+UI streams resulting events: disconnect, bind attempt, bind result, health checks.
+System reports success or failure and refreshes traffic/session health.
+Audit trail records actor, reason, timestamps, prior state and result.
+Exceptions / alternate flows
+If a reconnect is already in progress, disable duplicate action.
+If the control service is unavailable, fail safely without changing displayed state.
+If bind fails, present the protocol response and suggested diagnostic links.
+UI requirements
+Never use optimistic 'Connected' status until bind/health telemetry confirms it.
+Confirmation dialog must show impact, not just 'Are you sure?'.
+Provide one-click navigation to related events/logs after failure.
+UC-SMSC-02 — Suspend and resume traffic
+  Field | Specification
+  Primary actor | Messaging Engineer / Gateway Administrator
+  Trigger | Planned maintenance, carrier request, abnormal behavior or incident response.
+  Preconditions | User has traffic-control permission.
+  Postconditions | Traffic is intentionally suspended or resumed with full audit history.
+Main flow
+User chooses Suspend Traffic on the SMSC.
+System explains whether suspension stops new submissions only or affects sessions, according to backend capability.
+User provides reason and confirms.
+SMSC receives a prominent Suspended badge; queue and incoming rate remain visible.
+When safe, user selects Resume Traffic.
+System confirms state transition and monitors queue drain and error rate.
+Exceptions / alternate flows
+If queue growth becomes critical while suspended, create/escalate an alert.
+UI requirements
+Clearly distinguish operator-suspended from carrier-disconnected states.
+5. SMPP Session Monitoring
+  Session field | Display/behavior
+  Bind state | OPEN, BOUND_TX/RX/TRX, UNBOUND, CLOSED; map to human-readable status
+  Endpoint | Remote IP/host and port; mask credentials completely
+  Uptime | Current bind/session uptime
+  Last activity | Last protocol activity timestamp
+  Enquire link | Last request/response, round-trip time, missed responses
+  Counters | submit_sm, submit_sm_resp, deliver_sm, deliver_sm_resp, generic_nack
+  Latency | Protocol response latency median/P95 where available
+  Reconnects | Count over selected time range
+  Timeouts | Count/rate and latest occurrence
+  Errors | Top SMPP command status codes
+UC-SMPP-01 — Diagnose repeated SMPP disconnects
+  Field | Specification
+  Primary actor | Messaging Engineer
+  Trigger | Alert indicates session flapping or operator notices frequent reconnects.
+  Preconditions | Session telemetry and event history exist.
+  Postconditions | Likely fault domain is identified and evidence is available for remediation/escalation.
+Main flow
+User opens affected SMPP session.
+System displays bind timeline and reconnect frequency.
+User aligns disconnects with enquire_link timeouts, socket errors, SMPP responses and traffic level.
+User opens a disconnect event to see protocol/network context.
+User compares sibling sessions on the same SMSC to determine whether failure is session-specific or carrier-wide.
+User exports/copies a concise incident diagnostic summary for carrier escalation if needed.
+Exceptions / alternate flows
+If raw logs are unavailable, UI clearly states evidence limits and still shows structured events.
+UI requirements
+Timeline visualization is preferred over forcing operators to infer sequence from separate tables.
+Offer 'compare sessions' for same SMSC.
+6. Live Traffic
+Real-time MT, MO and DLR rates with selectable carrier/SMSC/session filters.
+Current, average, peak and capacity utilization for selected interval.
+Stable live tables: update values in place; do not reorder rows every refresh unless user enables ranking.
+Traffic matrix by carrier/SMSC with queue and delivery quality alongside throughput.
+Historical overlay or baseline/anomaly band when sufficient data exists.
+UC-TRF-01 — Investigate unexpected traffic drop
+  Field | Specification
+  Primary actor | NOC Operator
+  Trigger | Low-traffic anomaly alert or visual drop on dashboard.
+  Preconditions | Historical/current traffic telemetry exists.
+  Postconditions | Traffic issue is localized or alert is closed as understood.
+Main flow
+User opens Live Traffic at the alert time range.
+System identifies which carrier/SMSC contributed most to the drop.
+User checks whether session state, queue, rejection rate or upstream input changed concurrently.
+User drills into affected connectivity or diagnostics.
+User acknowledges the alert or performs recovery.
+Exceptions / alternate flows
+If the expected baseline is unavailable, label the alert as threshold-based rather than anomaly-based.
+UI requirements
+Preserve selected time range when navigating between Traffic, SMSC and Diagnostics.
+7. Queue Operations
+  Queue metric | Requirement
+  Depth | Current messages waiting
+  Oldest age | Age of oldest queued message
+  Ingress/egress | Messages/sec entering and leaving
+  Growth rate | Net messages/sec and trend
+  Drain estimate | Calculated from recent stable egress; mark unreliable if rate is volatile/zero
+  Retries | Messages awaiting retry and retry rate
+  Expiry | Recent expired count/rate
+  Destination | Associated carrier/SMSC/route
+UC-QUE-01 — Investigate a growing queue
+  Field | Specification
+  Primary actor | NOC Operator / Messaging Engineer
+  Trigger | Queue threshold or growth-rate alert fires.
+  Preconditions | Queue metrics and destination mapping are available.
+  Postconditions | Queue is recovering, controlled, or escalated.
+Main flow
+User opens the queue alert.
+System shows depth, age, growth rate and affected destination.
+System correlates current egress TPS, session health, throttling and errors.
+User determines whether cause is carrier outage, capacity restriction, intentional suspension or internal service degradation.
+User performs allowed action such as reconnect, resume or reroute, or escalates.
+System tracks whether queue growth stops and estimates drain time.
+Exceptions / alternate flows
+If egress is zero, drain time is displayed as unavailable rather than infinity.
+If reroute is unsupported for already queued messages, UI states this explicitly.
+UI requirements
+Show queue recovery progress after action.
+Destructive purge, if ever supported, must be separately permissioned and strongly confirmed.
+8. DLR & Carrier Quality
+Delivery funnel: submitted → accepted by SMSC → DLR received → delivered/failed/pending.
+Status breakdown: DELIVRD, UNDELIV, EXPIRED, REJECTD, UNKNOWN, pending, no-DLR.
+Latency percentiles: median/P50, P95 and P99 where meaningful.
+Compare carriers/SMSCs over identical time windows.
+Trend quality independently from raw traffic volume.
+Expose carrier-specific DLR/error mappings without forcing users to know vendor codes.
+UC-DLR-01 — Investigate deterioration in delivery rate
+  Field | Specification
+  Primary actor | NOC Operator / Messaging Engineer
+  Trigger | Delivery rate falls below threshold or anomaly detector flags change.
+  Preconditions | DLR and submission data are correlated.
+  Postconditions | Cause is narrowed to delivery failure, DLR delay/loss, routing/connectivity or unknown.
+Main flow
+User opens DLR Performance from the alert.
+System compares current delivery rate to prior/baseline period.
+User identifies affected carrier/SMSC and dominant failure statuses.
+User checks DLR latency and no-DLR rate to distinguish delayed receipts from true delivery failure.
+User opens correlated SMPP/carrier errors and events.
+User optionally traces sample affected messages to validate the pattern.
+Exceptions / alternate flows
+If the observation window is too recent for final DLRs, system warns that results are immature.
+UI requirements
+Make DLR maturity/window warnings prominent to avoid false incident conclusions.
+9. Carrier Routing & Failover
+Kamex should expose network-level routes and failover behavior, not customer/commercial routing.
+  Route detail | Requirement
+  Match | Destination prefix/network/market and any gateway-level technical conditions
+  Targets | Primary, secondary and emergency SMSCs
+  State | Active target and health of alternatives
+  Capacity | Available/used TPS per target where known
+  Failover | Automatic/manual mode, trigger, last transition and reason
+  Traffic | Current route TPS and queue
+UC-RTE-01 — Simulate a carrier route
+  Field | Specification
+  Primary actor | NOC Operator / Messaging Engineer
+  Trigger | User needs to know where a destination would be sent without transmitting a message.
+  Preconditions | Routing data is loaded.
+  Postconditions | No message is sent; route decision is available for troubleshooting.
+Main flow
+User opens Route Simulator and enters destination/MSISDN plus optional technical attributes.
+System normalizes the number and identifies market/network/prefix.
+System evaluates current gateway routing rules.
+UI shows matched route, selected SMSC, fallback order, health and capacity indicators.
+System explains why the route matched and whether any target is currently unavailable.
+Exceptions / alternate flows
+If no route matches, return a clear 'No route' result and diagnostic reason.
+UI requirements
+Simulator must be explicitly labeled non-transmitting.
+UC-RTE-02 — Manually fail over a carrier route
+  Field | Specification
+  Primary actor | Messaging Engineer / Gateway Administrator
+  Trigger | Primary SMSC is degraded or carrier instructs traffic movement.
+  Preconditions | Alternate route is configured and user has failover permission.
+  Postconditions | Route is operating on selected target with auditable reason.
+Main flow
+User opens route and selects Fail Over.
+System displays current and proposed target health, capacity, queue implications and affected route.
+User supplies reason and confirms.
+System changes active route through the control plane.
+UI monitors traffic transfer, errors and queue behavior.
+System records transition and creates an operational event.
+Exceptions / alternate flows
+If alternate target is unhealthy or lacks capacity, block or strongly warn according to policy.
+UI requirements
+Always show current active path prominently; never hide manual override state.
+10. Message Trace
+Search by Kamex message ID, SMSC/carrier message ID, MSISDN and time range subject to privacy permissions.
+Present lifecycle as a chronological trace, not a raw log dump.
+Stages may include ingress, route decision, queue, submit_sm, submit_sm_resp, carrier message ID, deliver_sm/DLR, callback/hand-off where relevant.
+Show per-stage timestamps and calculated latency.
+Link each stage to related structured event/log evidence.
+Mask message content and MSISDN by default; privileged reveal is time-limited and audited.
+UC-MSG-01 — Trace a failed or delayed SMS
+  Field | Specification
+  Primary actor | Support Engineer / Messaging Engineer
+  Trigger | A message ID/MSISDN is supplied for investigation.
+  Preconditions | User has trace permission and sufficient search criteria.
+  Postconditions | Operator has a defensible explanation of where processing succeeded, failed or remains pending.
+Main flow
+User searches using message identifier or MSISDN/time window.
+System returns matching messages with masked identifiers and status.
+User selects a message.
+System renders end-to-end lifecycle and highlights the first abnormal/missing stage.
+User inspects route, SMSC response, DLR status and correlated errors.
+User copies a sanitized diagnostic summary or navigates to carrier/SMSC issue.
+Exceptions / alternate flows
+If no message exists, distinguish 'not found' from retention-expired or insufficient permission.
+If multiple messages match an MSISDN, require narrowing rather than guessing.
+UI requirements
+Provide copyable IDs and timestamps without exposing credentials or unnecessary PII.
+11. SMPP Error Intelligence
+Decode SMPP command status into symbolic name and human explanation.
+Aggregate occurrence count/rate by SMSC/session and time.
+Show first seen, last seen and trend.
+Correlate with TPS, throttling, queue and session events.
+Support carrier/vendor-specific error mappings in addition to SMPP standard codes.
+Provide recommended diagnostic checks, clearly labeled as guidance rather than automated root-cause certainty.
+UC-ERR-01 — Investigate carrier throttling
+  Field | Specification
+  Primary actor | NOC Operator / Messaging Engineer
+  Trigger | ESME_RTHROTTLED or equivalent rate rises materially.
+  Preconditions | Error aggregation and traffic metrics exist.
+  Postconditions | Throttling is understood and operational response is tracked.
+Main flow
+User opens the throttling alert/error.
+System shows affected SMSC/session, rate and timeline.
+System overlays submitted TPS, accepted TPS and queue growth.
+User compares current throughput to known carrier capacity.
+User determines whether traffic should be rate-reduced, rerouted or escalated to carrier.
+User monitors recovery after action.
+UI requirements
+Error detail should link directly to affected queue, session and traffic chart.
+12. Events, Logs & Correlation
+12.1 Structured events
+Connection lost/restored; bind failed/succeeded; session flapping.
+Enquire-link timeout; socket/network failure.
+SMSC suspended/resumed/reconnected.
+Route failover/manual override.
+Queue threshold crossed/recovered.
+DLR degradation/recovery.
+Service restart/failure/recovery.
+Operator actions and control-plane failures.
+12.2 Logs
+Live tail with pause, search and severity/component filters.
+Filter by carrier, SMSC, session, message ID, MSISDN (permissioned), service and error code.
+Context window around selected event rather than forcing users to manually locate timestamps.
+Deep-link from message trace/event/SMPP error to filtered logs.
+Clear retention boundaries and indication when older logs are unavailable.
+13. Alerts & Incident Experience
+  Alert category | Examples
+  Availability | SMSC down; session bind failure; service/node unavailable
+  Connectivity quality | Session flapping; enquire-link timeout; elevated reconnects
+  Capacity | High utilization; carrier throttling; queue growth
+  Delivery quality | DLR rate drop; no-DLR spike; latency increase
+  Traffic anomaly | Unexpected low/high traffic relative to baseline
+  Infrastructure | CPU/memory/disk/file descriptors/DB connection pressure
+  Telemetry | Metrics/log/event stream stale or unavailable
+UC-ALT-01 — Acknowledge and work an alert
+  Field | Specification
+  Primary actor | NOC Operator
+  Trigger | An active alert appears.
+  Preconditions | Alert is active and user has acknowledgement permission.
+  Postconditions | Alert lifecycle is traceable from detection to recovery.
+Main flow
+User opens alert detail.
+System shows severity, start time, duration, affected objects, impact metrics and correlated evidence.
+User acknowledges the alert with optional note.
+User follows recommended diagnostic links and performs authorized remediation.
+System automatically updates alert state when recovery conditions are met, or allows policy-based manual resolution.
+Timeline retains acknowledgement, actions and recovery.
+Exceptions / alternate flows
+If the condition recurs after recovery, create/reopen according to incident policy and retain previous history.
+UI requirements
+Avoid alert storms by grouping repeated events under one incident where appropriate.
+Show active duration and business/traffic impact, not severity alone.
+14. System & Service Monitoring
+  Object | Key metrics/status
+  Bearerbox/Kamex core | Process state, uptime, CPU/RAM, message rate, internal health
+  SMSBox instances | State, uptime, request rate, latency, errors
+  DLR datastore | Reachability, latency, connections, storage pressure
+  Database | Reachability, pool usage, slow/error indicators
+  Metrics collector | Scrape/ingest freshness and failures
+  Nodes | CPU, memory, disk, network I/O, load, process health, software version
+UC-SYS-01 — Diagnose a degraded gateway service
+  Field | Specification
+  Primary actor | NOC Operator / Gateway Administrator
+  Trigger | Service health changes to degraded/critical.
+  Preconditions | System telemetry is available.
+  Postconditions | Service is recovered or incident is escalated with evidence.
+Main flow
+User opens System from alert/dashboard.
+System identifies affected service/node and dependency status.
+User checks resource pressure, recent restart/crash events and dependent services.
+User opens related logs or performs an authorized restart if policy permits.
+UI monitors service recovery and downstream SMSC/traffic impact.
+Exceptions / alternate flows
+If the monitoring subsystem itself is affected, label dependent statuses Unknown.
+UI requirements
+Dependency visualization should distinguish root service failure from downstream symptoms.
+15. Diagnostic Test Tools
+  Tool | Expected behavior
+  SMPP connectivity test | Validate TCP reachability and, where safe/supported, controlled bind diagnostics without exposing password
+  Test SMS | Send an explicitly tagged operational test through selected route/SMSC with audit record
+  Route simulator | Resolve destination and route without transmission
+  DLR lookup | Search carrier message ID/Kamex ID and show receipt lifecycle
+  Encoding/segment analyzer | Detect GSM-7/UCS-2, character count, segment count and payload implications
+  Number/prefix lookup | Normalize number and identify configured market/network/prefix
+UC-TST-01 — Send a controlled test SMS
+  Field | Specification
+  Primary actor | Messaging Engineer
+  Trigger | Engineer needs to verify live end-to-end delivery.
+  Preconditions | User has test-send permission; destination policy permits test.
+  Postconditions | Test result is traceable and audited.
+Main flow
+User opens Test SMS and selects SMSC/route or allows route resolution.
+User enters approved test destination and message.
+System shows expected encoding, segment count and selected route.
+User confirms transmission.
+System sends the test and immediately opens its message trace.
+UI follows submit response and DLR until final status or timeout.
+Exceptions / alternate flows
+If test sending is disabled in the environment, UI explains policy and leaves non-transmitting diagnostics available.
+UI requirements
+Visually distinguish test traffic from production traffic in traces/events.
+16. Audit & Operational Governance
+Audit all reconnect, suspend/resume, failover, service restart, test-send, alert acknowledgement and privileged PII reveal actions.
+Record actor, role, timestamp, target object, previous state, requested action, reason, result and correlation/incident ID where available.
+Audit data is read-only in the UI and filterable by actor, action, object and time.
+High-risk actions should support maker-checker/approval later without redesigning the interaction model.
+17. UX State Model & Interaction Rules
+  State | UI treatment
+  Loading | Skeletons for cards/tables; do not show zero values that look real
+  Live | Freshness timestamp/stream indicator
+  Stale | Warning banner and age of last successful telemetry
+  Empty | Explain why no data exists and next useful action
+  Partial | Show available data plus explicit unavailable components
+  Error | Actionable error message with retry/correlation ID where useful
+  In progress | Disable duplicate destructive action and stream progress
+  Permission denied | Explain required permission without revealing sensitive data
+17.1 Tables
+Server-side filtering/pagination for high-volume event/log/message datasets.
+Pin operationally important columns; allow column chooser for engineering detail.
+Persist user filters per screen where appropriate.
+Do not encode health by color alone; include text/icon/state label.
+Allow CSV export only where policy permits and record export of sensitive operational data.
+17.2 Time and refresh
+Use absolute timestamp plus relative age on hover/detail.
+Default operational dashboards to short windows; analytical views retain selectable history.
+Pause live refresh automatically while user is selecting/copying table content where necessary.
+Display metric sampling interval and telemetry freshness in diagnostics.
+18. Non-Functional Requirements for the UI
+  Area | Requirement
+  Performance | Dashboard initial meaningful render target ≤2s on normal internal network; interactions should acknowledge within ~200ms where local/UI-only.
+  Real-time | Critical state changes should surface within telemetry/control-plane limits; UI must show freshness.
+  Availability | Read-only monitoring should degrade gracefully if control actions are unavailable.
+  Security | RBAC; no credentials in browser payloads; CSRF/session protections; privileged action re-authentication where policy requires.
+  Privacy | Mask MSISDN/content; configurable retention; audited reveal/export.
+  Accessibility | Keyboard navigation, semantic labels, non-color status cues, sufficient contrast.
+  Responsive | Primary target desktop ≥1280px; usable on tablet for monitoring; wallboard mode for dashboard.
+  Observability | Frontend/API failures carry correlation IDs and are themselves monitorable.
+19. Screen-Level Acceptance Checklist
+Can the operator identify current health and data freshness immediately?
+Can every degraded state be drilled into without losing time/filter context?
+Does the screen distinguish symptom, impact and likely evidence?
+Are all operational actions state-aware, permission-aware and auditable?
+Are protocol codes translated into human-readable meaning while retaining raw values?
+Can the operator reach related events/logs/message traces in one or two clicks?
+Are unknown/stale states represented honestly?
+Is sensitive information masked by default?
+Can a user recover from an action failure without refreshing the entire application?
+Does the design avoid exposing Kannel configuration-file concepts unless explicitly in engineering diagnostics?
+20. Suggested Redesign Delivery Sequence
+  Phase | Screens | Why
+  1 — Operational foundation | Global shell; Dashboard; Alerts; Carrier/SMSC list/detail; SMPP Sessions | Defines design system and core operational hierarchy
+  2 — Traffic assurance | Live Traffic; Queues; DLR Performance | Adds capacity/congestion and quality workflows
+  3 — Troubleshooting | Message Trace; SMPP Errors; Events; Logs | Makes the console materially useful for support/NOC diagnosis
+  4 — Network control | Carrier Routes; Failover; Route Simulator; controlled SMSC actions | Adds safe operational intervention
+  5 — Platform operations | Services; Nodes; Performance; Audit; Test Tools | Completes gateway operations experience
+  6 — Intelligence | Anomaly detection; cross-signal correlation; incident summaries; capacity forecasting | Build after trustworthy telemetry and workflows exist
+21. Core Domain Model for UI/API Alignment
+  Entity | Key relationships
+  Carrier | Has many SMSCs; aggregates quality/traffic/incidents
+  SMSC | Belongs to carrier; has many sessions; owns/receives queues; route target
+  SMPP Session | Belongs to SMSC; emits protocol counters/events/errors
+  Carrier Route | Matches network/prefix; has ordered SMSC targets; tracks active target
+  Queue | Associated with destination/SMSC/route; exposes depth/age/rates
+  Message Trace | References route, SMSC, carrier message ID, DLR and related events
+  DLR | References message and carrier/SMSC; has raw and normalized status
+  Operational Event | References one or more domain objects and correlation ID
+  Alert/Incident | Groups condition/events, affected objects, acknowledgement and recovery
+  Service/Node | Hosts gateway components and produces health/performance telemetry
+  Audit Entry | Records privileged user action and result
+22. Definition of Done for UI Redesign
+The redesign is complete when a NOC operator can monitor the gateway, identify an unhealthy carrier/SMSC/session, understand traffic and queue impact, diagnose common SMPP/DLR faults, safely execute permitted recovery actions, trace an individual message, and reconstruct the incident from events/audit without editing Kannel configuration files or routinely using SSH/log-tail commands.
