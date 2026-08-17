@@ -182,3 +182,95 @@ describe('application shell', () => {
     );
   });
 });
+
+/**
+ * Both of these chips previously asserted something they had no source for. The
+ * environment read the literal string "Development" wherever it ran — so the
+ * production deployment announced itself as Development — and the state chip
+ * reported whether OUR OWN API answered, which says nothing about whether the
+ * engine figures on screen are current.
+ */
+describe('application shell — deployment and telemetry indicators', () => {
+  const systemInfo = (overrides: Record<string, unknown> = {}) =>
+    envelope({
+      environmentLabel: 'Production',
+      environmentTone: 'critical',
+      environmentDeclared: true,
+      version: '0.1.0',
+      build: 'abc1234',
+      gatewayTimezone: 'Africa/Kampala',
+      telemetry: {
+        state: 'live',
+        ageSeconds: 8,
+        detail: 'Engine observed 8s ago.',
+        pollingSuppressed: false,
+        cause: null,
+      },
+      ...overrides,
+    });
+
+  const shellWith = async (info: Response) => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('/system/info')) return info.clone();
+      if (url.includes('/system/telemetry')) return envelope({ state: 'live', ageSeconds: 8 });
+      return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+    });
+    const wrapper = await mountShell(fetchMock as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  };
+
+  it('shows the real deployment designation, not a hard-coded one', async () => {
+    const wrapper = await shellWith(systemInfo());
+    const chip = wrapper.get('[data-testid="environment-chip"]');
+    expect(chip.text()).toContain('Production');
+    // Tone is driven by the backend so production cannot look as safe as a laptop.
+    expect(chip.classes()).toContain('tone-critical');
+  });
+
+  it('marks an inferred designation as inferred rather than stating it as fact', async () => {
+    // NODE_ENV cannot tell a DR site from production; presenting the guess as
+    // certainty is the mistake this indicator exists to prevent.
+    const wrapper = await shellWith(systemInfo({ environmentDeclared: false }));
+    expect(wrapper.get('[data-testid="environment-chip"]').text()).toContain('?');
+    expect(wrapper.get('[data-testid="environment-chip"] .sr-only').text()).toContain('inferred');
+  });
+
+  it('renders nothing at all before the first successful read, rather than guessing', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('unreachable');
+    });
+    const wrapper = await mountShell(fetchMock as never);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="environment-chip"]').exists()).toBe(false);
+  });
+
+  it('reports telemetry freshness in words as well as colour', async () => {
+    // §17.1: health must never be encoded by colour alone.
+    const wrapper = await shellWith(systemInfo());
+    const indicator = wrapper.get('[data-testid="telemetry-indicator"]');
+    expect(indicator.text()).toContain('Live');
+    expect(indicator.get('.status-dot').classes()).toContain('good');
+  });
+
+  it('says "Suppressed", not "Disconnected", when JKANNEL stopped polling', async () => {
+    // The distinction is the whole point: a suppressed poll and a dead engine
+    // look identical from a timestamp but have completely different fixes.
+    const wrapper = await shellWith(
+      systemInfo({
+        telemetry: {
+          state: 'disconnected',
+          ageSeconds: 240,
+          detail: 'Check KAMEX_STATUS_PASSWORD.',
+          pollingSuppressed: true,
+          cause: 'credentials',
+        },
+      }),
+    );
+    const indicator = wrapper.get('[data-testid="telemetry-indicator"]');
+    expect(indicator.text()).toContain('Suppressed');
+    expect(indicator.attributes('title')).toContain('KAMEX_STATUS_PASSWORD');
+  });
+});

@@ -10,6 +10,9 @@ import { AlertEscalationService } from './alert-escalation.service';
 import { MaintenanceWindowService } from './maintenance-window.service';
 import { AlertCorrelationService } from './alert-correlation.service';
 import { EngineSnapshotCache } from './engine-snapshot.cache';
+import { SystemInfoController } from '../platform/system-info.controller';
+import { SystemInfoService } from '../platform/system-info.service';
+import { TelemetryFreshnessService } from '../platform/telemetry-freshness.service';
 import { EngineMetricsService } from './engine-metrics.service';
 import { SmscStatusPoller } from './smsc-status.poller';
 import { AlertRuleEvaluatorScheduler } from './alert-rule-evaluator.scheduler';
@@ -51,6 +54,7 @@ import { NotificationReadinessService } from './notification-readiness.service';
     CorrelationController,
     NotificationReadinessController,
     AlertLifecycleController,
+    SystemInfoController,
   ],
   providers: [
     DatabaseService,
@@ -67,6 +71,8 @@ import { NotificationReadinessService } from './notification-readiness.service';
     EngineMetricsService,
     SmscStatusPoller,
     AlertRuleEvaluatorScheduler,
+    SystemInfoService,
+    TelemetryFreshnessService,
   ],
   exports: [
     AlertLifecycleRepository,
@@ -78,6 +84,7 @@ import { NotificationReadinessService } from './notification-readiness.service';
     AlertEscalationService,
     EngineSnapshotCache,
     SmscStatusPoller,
+    TelemetryFreshnessService,
   ],
 })
 export class MonitoringDepthModule {}

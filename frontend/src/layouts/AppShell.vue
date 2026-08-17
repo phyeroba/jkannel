@@ -152,6 +152,91 @@ async function checkApi() {
     apiOnline.value = false;
   }
 }
+/**
+ * Deployment identity and telemetry freshness (spec §2.1).
+ *
+ * Both chips previously lied. The environment read the literal string
+ * "Development" regardless of where it was running — so the production
+ * deployment announced itself as Development — and the state chip reported
+ * whether OUR OWN API answered, which says nothing about whether the engine
+ * data on screen is current.
+ */
+interface TelemetryFreshness {
+  state: 'live' | 'delayed' | 'disconnected' | 'unknown';
+  ageSeconds: number | null;
+  detail: string;
+  pollingSuppressed: boolean;
+  cause: string | null;
+}
+interface SystemInfo {
+  environmentLabel: string;
+  environmentTone: 'critical' | 'warning' | 'neutral';
+  environmentDeclared: boolean;
+  version: string;
+  build: string | null;
+  gatewayTimezone: string;
+  telemetry: TelemetryFreshness;
+}
+const systemInfo = ref<SystemInfo | null>(null);
+const telemetry = ref<TelemetryFreshness | null>(null);
+let telemetryTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Until the first successful read, show nothing rather than a guess. */
+const environmentLabel = computed(() => systemInfo.value?.environmentLabel ?? null);
+const environmentTitle = computed(() => {
+  const info = systemInfo.value;
+  if (!info) return '';
+  const identity = `JKANNEL ${info.version}${info.build ? ` (${info.build})` : ''}`;
+  const declared = info.environmentDeclared
+    ? 'Designation is configured.'
+    : 'Designation was INFERRED from NODE_ENV, which cannot tell a DR site from production. ' +
+      'Set JKANNEL_ENVIRONMENT to declare it.';
+  return `${identity} · engine timezone ${info.gatewayTimezone} · ${declared}`;
+});
+const telemetryDotClass = computed(() => {
+  switch (telemetry.value?.state) {
+    case 'live':
+      return 'good';
+    case 'delayed':
+      return 'warn';
+    case 'disconnected':
+      return 'bad';
+    default:
+      return 'unknown';
+  }
+});
+/** Text as well as colour — §17.1 forbids encoding health by colour alone. */
+const telemetryLabel = computed(() => {
+  switch (telemetry.value?.state) {
+    case 'live':
+      return 'Live';
+    case 'delayed':
+      return 'Delayed';
+    case 'disconnected':
+      return telemetry.value?.pollingSuppressed ? 'Suppressed' : 'Disconnected';
+    case 'unknown':
+      return 'Unknown';
+    default:
+      return 'Checking';
+  }
+});
+async function refreshSystemInfo() {
+  try {
+    const info = await apiRequest<SystemInfo>('/system/info');
+    systemInfo.value = info;
+    telemetry.value = info.telemetry;
+  } catch {
+    /* Leave the chip blank rather than asserting an environment we cannot read. */
+  }
+}
+async function refreshTelemetry() {
+  try {
+    telemetry.value = await apiRequest<TelemetryFreshness>('/system/telemetry');
+  } catch {
+    /* Keep the previous reading; the poll retries. */
+  }
+}
+
 const unreadCount = ref(0);
 const notifications = ref<NotificationRecord[]>([]);
 const notificationsError = ref('');
@@ -235,10 +320,15 @@ onMounted(() => {
   void checkApi();
   void refreshUnreadCount();
   unreadTimer = setInterval(() => void refreshUnreadCount(), 60_000);
+  void refreshSystemInfo();
+  // 20s, comfortably under the 75s 'delayed' threshold, so the chip changes
+  // state within one interval of the condition rather than after it.
+  telemetryTimer = setInterval(() => void refreshTelemetry(), 20_000);
 });
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown);
   if (unreadTimer) clearInterval(unreadTimer);
+  if (telemetryTimer) clearInterval(telemetryTimer);
 });
 </script>
 <template>
@@ -305,10 +395,28 @@ onUnmounted(() => {
           <AppIcon name="search" /><span>Search JKANNEL</span><kbd>Ctrl K</kbd>
         </button>
         <div class="top-actions">
-          <span class="environment">Development</span
-          ><span class="engine-state"
-            ><span class="status-dot" :class="apiOnline ? 'good' : 'warn'"></span
-            >{{ apiOnline ? 'Connected' : 'Checking' }}</span
+          <span
+            v-if="environmentLabel"
+            class="environment"
+            :class="`tone-${systemInfo?.environmentTone}`"
+            :title="environmentTitle"
+            data-testid="environment-chip"
+            >{{ environmentLabel
+            }}<span v-if="systemInfo && !systemInfo.environmentDeclared" aria-hidden="true">?</span>
+            <span v-if="systemInfo && !systemInfo.environmentDeclared" class="sr-only">
+              (inferred, not configured)
+            </span></span
+          ><span
+            class="engine-state"
+            :title="telemetry?.detail ?? ''"
+            data-testid="telemetry-indicator"
+            ><span class="status-dot" :class="telemetryDotClass"></span>{{ telemetryLabel
+            }}<span
+              v-if="telemetry?.ageSeconds !== null && telemetry?.ageSeconds !== undefined"
+              class="telemetry-age"
+            >
+              {{ telemetry.ageSeconds }}s</span
+            ></span
           ><RouterLink
             class="icon-button"
             to="/help"

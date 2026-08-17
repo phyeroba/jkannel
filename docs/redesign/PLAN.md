@@ -82,10 +82,10 @@ stylesheets and already matches.
 
 Foundational: every later screen depends on these.
 
-- [ ] **1.1 Environment indicator.** No backend source exists. Add
+- [x] **1.1 Environment indicator.** No backend source exists. Add
       `GET /system/info` returning environment, version, build and gateway
       timezone; render a persistent chip with strong visual distinction.
-- [ ] **1.2 Telemetry freshness indicator.** The ingredients exist
+- [x] **1.2 Telemetry freshness indicator.** The ingredients exist
       (`source.status`, `observedAt`, `jkannel_engine_snapshot_age_seconds`,
       `KamexRequestGate`) but nothing rolls them up. Add a single freshness
       endpoint + a shell indicator: live / delayed / disconnected, with age.
@@ -204,4 +204,5 @@ Foundational: every later screen depends on these.
 | Date | Item | Commit |
 |---|---|---|
 | 2026-08-06 | Plan committed | b844ab5 |
-| 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | — |
+| 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | ada2c86 |
+| 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | — |

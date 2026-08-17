@@ -142,13 +142,49 @@
   background: transparent;
   padding: 7px 0;
 }
+/* Deployment designation. Spec §2.1 asks for "strong visual distinction", so
+   the tone is driven by the backend rather than being one fixed colour: an
+   operator glancing at the chrome must be able to tell a production site from a
+   DR site without reading. Green for everything, which is what this was, made
+   production look as safe as a laptop. */
 .environment {
   padding: 5px 9px;
-  color: var(--good);
-  background: color-mix(in srgb, var(--good) 14%, transparent);
   border: 0;
   border-radius: 8px;
   font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.environment.tone-critical {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+.environment.tone-warning {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.environment.tone-neutral {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+/* Age beside the freshness word. Muted because the word carries the state and
+   the number is supporting detail — §17.1 requires the state be readable
+   without relying on the colour. */
+.telemetry-age {
+  margin-left: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .workspace {
   padding: 22px 24px 38px;
