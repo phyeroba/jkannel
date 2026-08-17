@@ -5,6 +5,7 @@ import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../ap
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
 import MessagePriority from '../components/MessagePriority.vue';
+import QueueRatesPanel from '../components/QueueRatesPanel.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import { describeComposerText } from '../utils/message-segments';
@@ -5587,6 +5588,15 @@ onUnmounted(() => {
         </div>
       </footer>
     </section>
+
+    <!--
+      PLAN.md 3.1 / spec §7. The rates panel goes ABOVE the message grid, not on
+      a screen of its own: the grid below lists rows in the SQLBox spool, the
+      panel describes bearerbox's internal per-bind queue, and an operator who
+      met those two numbers on separate pages would have no way to know they are
+      different queues. The panel owns its own fetch and its own states.
+    -->
+    <QueueRatesPanel v-if="isQueue" />
 
     <section v-if="isQueue && !error" class="panel" data-testid="queue-panel">
       <header class="panel-header">

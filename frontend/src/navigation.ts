@@ -180,16 +180,36 @@ export const navigation: NavigationItem[] = [
     permission: 'messages.view',
     group: 'Messaging',
   },
+  // Traffic, in the specification's order (§2): what is moving now, what is
+  // waiting, and whether it arrived. Live Queue is JKANNEL's own recovery
+  // workflow and sits last, after the three observational screens.
   {
-    label: 'Live Queue',
-    to: '/live-queue',
-    icon: 'queue',
+    label: 'Live Traffic',
+    to: '/live-traffic',
+    icon: 'chart',
     permission: 'messages.view',
     group: 'Traffic',
   },
   {
     label: 'Queues',
     to: '/queues',
+    icon: 'queue',
+    permission: 'messages.view',
+    group: 'Traffic',
+  },
+  {
+    // reports.view, not messages.view: the funnel is computed by the reporting
+    // endpoint and that is the permission it enforces. Listing it under a
+    // permission the API does not check would put a dead link in the sidebar.
+    label: 'DLR Performance',
+    to: '/dlr-performance',
+    icon: 'check',
+    permission: 'reports.view',
+    group: 'Traffic',
+  },
+  {
+    label: 'Live Queue',
+    to: '/live-queue',
     icon: 'queue',
     permission: 'messages.view',
     group: 'Traffic',

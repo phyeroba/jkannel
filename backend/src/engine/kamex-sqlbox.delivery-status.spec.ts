@@ -277,11 +277,24 @@ describe('KamexSqlboxRepository spool mutations', () => {
   });
 
   it('groups spool depth by SMSC within the tenant scope', async () => {
-    const { repository, calls } = makeRepository([{ smsc_id: 'local-fake', count: '3' }]);
+    const { repository, calls } = makeRepository([
+      { smsc_id: 'local-fake', count: '3', oldest_epoch: '1754400000' },
+    ]);
     expect(await repository.spoolBySmsc(['local-fake'])).toEqual([
-      { smscId: 'local-fake', count: 3 },
+      // oldestEpoch answers §7's per-destination age: which queue is holding
+      // the old message, not just that the estate has one somewhere.
+      { smscId: 'local-fake', count: 3, oldestEpoch: 1754400000 },
     ]);
     expect(calls[0].sql).toContain('smsc_id = ANY($1)');
+    expect(calls[0].sql).toContain('min(time)');
+  });
+
+  it('reports a null oldest epoch rather than an epoch of zero', async () => {
+    // A spool group can exist with no readable timestamp; 1970 is not an age.
+    const { repository } = makeRepository([
+      { smsc_id: 'local-fake', count: '1', oldest_epoch: null },
+    ]);
+    expect((await repository.spoolBySmsc())[0].oldestEpoch).toBeNull();
   });
 
   it('restricts resend lookups to the tenant SMSCs', async () => {

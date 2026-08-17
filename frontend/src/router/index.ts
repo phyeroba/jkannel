@@ -317,6 +317,33 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Traffic, in the specification's own order: what is moving now, what is
+    // waiting, and whether it arrived (§6, §7, §8). Queues is not here because
+    // it is the existing /queues workspace with the §7 rates panel added to it.
+    path: '/live-traffic',
+    name: 'live-traffic',
+    component: () => import('../views/LiveTrafficView.vue'),
+    meta: {
+      title: 'Live Traffic',
+      description:
+        'MT and MO throughput per bind, updating in place without reordering, with an explicit statement of the receipt rate the engine does not report.',
+      breadcrumb: ['Traffic', 'Live Traffic'],
+      permission: 'messages.view',
+    },
+  },
+  {
+    path: '/dlr-performance',
+    name: 'dlr-performance',
+    component: () => import('../views/DlrPerformanceView.vue'),
+    meta: {
+      title: 'DLR Performance',
+      description:
+        'The delivery funnel and both delivery rates over the shared time range, per bind on identical windows, with a prominent warning when the window is too recent to conclude from.',
+      breadcrumb: ['Traffic', 'DLR Performance'],
+      permission: 'reports.view',
+    },
+  },
+  {
     path: '/roles',
     name: 'roles',
     component: RolesView,

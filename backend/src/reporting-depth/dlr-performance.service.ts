@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { buildDeliveryQuality, type DeliveryFunnel, type DeliveryQuality } from './dlr-performance';
+import {
+  buildDeliveryQuality,
+  RECEIPT_SETTLING_SECONDS,
+  type DeliveryFunnel,
+  type DeliveryQuality,
+} from './dlr-performance';
 
 export interface Actor {
   tenantId: string;
@@ -67,17 +72,32 @@ export class DlrPerformanceService {
         // accepted; DLR rows give the outcomes, joined back to their MT by
         // foreign_id — the correlation key sqlbox stamps with send_sms.sql_id.
         const { rows } = await client.query<Record<string, unknown>>(
+          // DISTINCT ON collapses each message's receipts to its LATEST one
+          // before the join, and this is not an optimisation — it is a
+          // correctness fix.
+          //
+          // Kannel routinely emits an intermediate receipt (4 buffered, 8
+          // accepted) and then a final one (1 delivered) for the same
+          // foreign_id. Joining MT to all of them multiplies the MT row, so a
+          // plain count(*) counts JOIN ROWS rather than messages: one normally
+          // delivered message came out as submitted=2, delivered=1, pending=1
+          // — a 50% delivery rate and a 50% no-receipt rate for a message that
+          // was delivered. Those figures sit side by side on the screen, and
+          // pendingShare also drives the maturity warning, so the warning
+          // fired spuriously too.
           `WITH mt AS (
              SELECT smsc_id, foreign_id
                FROM sent_sms
-              WHERE momt = 'MT' AND time BETWEEN $1 AND $2
+              WHERE momt = 'MT' AND time BETWEEN $1 AND $2 AND foreign_id IS NOT NULL
            ), dlr AS (
-             SELECT d.foreign_id, d.dlr_mask
+             SELECT DISTINCT ON (d.foreign_id) d.foreign_id, d.dlr_mask
                FROM sent_sms d
-              WHERE d.momt = 'DLR' AND d.time BETWEEN $1 AND $2 + 3600
+              WHERE d.momt = 'DLR' AND d.foreign_id IS NOT NULL
+                AND d.time BETWEEN $1 AND $2 + $8
+              ORDER BY d.foreign_id, d.time DESC
            )
            SELECT mt.smsc_id AS engine_id,
-                  count(*)                                              AS submitted,
+                  count(DISTINCT mt.foreign_id)                         AS submitted,
                   count(dlr.foreign_id)                                 AS receipts,
                   count(*) FILTER (WHERE dlr.dlr_mask = $3)             AS delivered,
                   count(*) FILTER (WHERE dlr.dlr_mask = $4)             AS failed,
@@ -87,7 +107,21 @@ export class DlrPerformanceService {
              FROM mt
              LEFT JOIN dlr ON dlr.foreign_id = mt.foreign_id
             GROUP BY mt.smsc_id`,
-          [fromEpoch, toEpoch, DLR_DELIVERED, DLR_FAILED, DLR_REJECTED, DLR_BUFFERED, DLR_ACCEPTED],
+          [
+            fromEpoch,
+            toEpoch,
+            DLR_DELIVERED,
+            DLR_FAILED,
+            DLR_REJECTED,
+            DLR_BUFFERED,
+            DLR_ACCEPTED,
+            // The same settling period the maturity assessment uses. These two
+            // constants previously disagreed — the query looked an hour past
+            // the window while maturity assumed fifteen minutes — so a receipt
+            // arriving in between was counted as permanently pending by one
+            // and as settled by the other.
+            RECEIPT_SETTLING_SECONDS,
+          ],
         );
 
         const names = await client.query<Record<string, unknown>>(
@@ -131,7 +165,13 @@ export class DlrPerformanceService {
           overall: buildDeliveryQuality({ funnel: total, ...window }),
           byBind: byBind.sort((a, b) => b.quality.funnel.submitted - a.quality.funnel.submitted),
           available: true,
-          detail: 'Read from the engine message store.',
+          // Says the thing the `expired` field cannot say for itself. The
+          // comment on toFunnel() used to claim this text carried the caveat
+          // when it did not.
+          detail:
+            'Read from the engine message store. EXPIRED is not distinguishable on this engine: ' +
+            "Kannel's delivery-receipt mask has no expiry bit, so that count is structurally " +
+            'zero rather than measured.',
         };
       });
     } catch (error) {

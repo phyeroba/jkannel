@@ -126,7 +126,7 @@ Foundational: every later screen depends on these.
 - [x] **3.1 Queue metrics** — ingress/egress rate, growth rate, drain estimate
       (explicitly `unavailable` when egress is zero, per §7), expiry. Derivable
       from snapshots we already store.
-- [ ] **3.2 Live Traffic** screen — MT/MO/DLR split (currently one aggregate
+- [x] **3.2 Live Traffic** screen — MT/MO/DLR split (currently one aggregate
       outbound rate), current/average/peak, stable in-place table updates that do
       not reorder rows unless ranking is enabled.
 - [x] **3.3 DLR Performance** — delivery funnel, status breakdown, P50/P95/P99

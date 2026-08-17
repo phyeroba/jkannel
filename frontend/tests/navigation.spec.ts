@@ -10,7 +10,9 @@ describe('primary navigation contract', () => {
         '/dashboard/operations',
         '/messages',
         '/live-queue',
+        '/live-traffic',
         '/queues',
+        '/dlr-performance',
         '/delivery-reports',
         '/bulk-send',
         '/smsc',
@@ -43,7 +45,7 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(34);
+    expect(navigation).toHaveLength(36);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -69,6 +71,18 @@ describe('primary navigation contract', () => {
       .filter((item) => item.group === 'Connectivity')
       .map((item) => item.to);
     expect(connectivity).toEqual(['/carriers', '/smsc', '/sessions-smpp']);
+  });
+
+  it('orders Traffic as the specification does, and gates DLR on the permission its API checks', () => {
+    const traffic = navigation.filter((item) => item.group === 'Traffic').map((item) => item.to);
+    // §2's three observational screens first; Live Queue is JKANNEL's own
+    // recovery workflow and sits after them.
+    expect(traffic).toEqual(['/live-traffic', '/queues', '/dlr-performance', '/live-queue']);
+    // The funnel is served by the reporting controller, which requires
+    // reports.view — not messages.view like the rest of the group.
+    expect(navigation.find((item) => item.to === '/dlr-performance')?.permission).toBe(
+      'reports.view',
+    );
   });
 
   it('keeps the API reference reachable for every authenticated user', () => {

@@ -1046,6 +1046,7 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       oldestEpoch: result.rows[0].oldest_epoch ? Number(result.rows[0].oldest_epoch) : null,
     };
   }
+
   /**
    * Message and DLR counts for a time window, total and per SMSC. Used by the
    * scheduled volume reports; counts are always scoped to the tenant's SMSCs.
@@ -1088,13 +1089,21 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       params.push(allowedSmscIds);
       where = `WHERE smsc_id = ANY($${params.length})`;
     }
-    const result = await this.required().query<{ smsc_id: string | null; count: string }>(
-      `SELECT smsc_id,count(*)::text count FROM send_sms ${where} GROUP BY smsc_id ORDER BY smsc_id`,
+    const result = await this.required().query<{
+      smsc_id: string | null;
+      count: string;
+      oldest_epoch: string | null;
+    }>(
+      // `min(time)` added for §7's per-destination oldest age. The estate-wide
+      // figure from queueSummary() cannot say WHICH queue is holding the old
+      // message, which is the question an operator has when an alert fires.
+      `SELECT smsc_id,count(*)::text count,min(time)::text oldest_epoch FROM send_sms ${where} GROUP BY smsc_id ORDER BY smsc_id`,
       params,
     );
     return result.rows.map((row) => ({
       smscId: row.smsc_id ?? 'unassigned',
       count: Number(row.count),
+      oldestEpoch: row.oldest_epoch ? Number(row.oldest_epoch) : null,
     }));
   }
 

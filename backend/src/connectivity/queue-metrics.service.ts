@@ -72,7 +72,7 @@ export class QueueMetricsService {
         carrierId: (entry.meta.carrier_id as string) ?? null,
         carrierName: (entry.meta.carrier_name as string) ?? null,
         bindState: (entry.meta.state as string) ?? null,
-        oldestSpoolAgeSeconds: null,
+        oldestSpoolAgeSeconds: null as number | null,
         ...deriveQueueRates(entry.samples),
       }));
     });
@@ -97,6 +97,20 @@ export class QueueMetricsService {
           available: true,
           detail: 'Read from the SQLBox spool.',
         };
+        // Per-bind spool age. §7 asks for oldest age per destination, and the
+        // estate-wide figure above cannot say WHICH queue is holding the old
+        // message — the question an operator actually has when an alert fires.
+        const nowSeconds = Date.now() / 1000;
+        const byBind = new Map(
+          (await this.sqlbox.spoolBySmsc()).map((entry) => [entry.smscId, entry]),
+        );
+        for (const destination of destinations) {
+          const entry = byBind.get(destination.engineId);
+          destination.oldestSpoolAgeSeconds =
+            entry?.oldestEpoch && entry.oldestEpoch > 0
+              ? Math.floor(nowSeconds - entry.oldestEpoch)
+              : null;
+        }
       } catch (error) {
         spool.detail = `SQLBox spool unreadable: ${(error as Error).message}`;
       }
