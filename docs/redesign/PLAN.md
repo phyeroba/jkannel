@@ -103,11 +103,11 @@ Foundational: every later screen depends on these.
 
 ### Phase 2 — Carrier aggregate and connectivity (§4, §5)
 
-- [ ] **2.1 Carrier object.** Greenfield: migration for `carriers`
+- [x] **2.1 Carrier object.** Greenfield: migration for `carriers`
       (name, country/market, network code, operational status) and
       `smsc_definitions.carrier_id`. Backfill leaves existing SMSCs unassigned
       rather than guessing.
-- [ ] **2.2 Carrier aggregation read model** — SMSC count, healthy/failed binds,
+- [x] **2.2 Carrier aggregation read model** — SMSC count, healthy/failed binds,
       current TPS, queue, delivery %, open alerts, rolled up per carrier.
 - [ ] **2.3 Carriers register + Carrier detail** screens.
 - [ ] **2.4 SMSC detail** screen to spec §4.2 — state, sessions, TPS, capacity
@@ -209,4 +209,5 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | 1.3 UX state model (DataState + displayValue) | dae5c89 |
 | 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | acfcc4e |
 | 2026-08-06 | 1.4 global estate search | f91f93d |
-| 2026-08-06 | 1.7 nav restructured to the specification IA — **Phase 1 complete** | — |
+| 2026-08-06 | 1.7 nav restructured to the specification IA — **Phase 1 complete** | 2faf9f7 |
+| 2026-08-06 | 2.1 carrier object (migration 048) + 2.2 aggregation read model | — |
