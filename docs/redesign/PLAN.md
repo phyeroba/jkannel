@@ -99,7 +99,7 @@ Foundational: every later screen depends on these.
 - [x] **1.6 Global time-range control** shared across analytical screens, with
       the range preserved when navigating between Traffic → SMSC → Diagnostics
       (§6 UI requirement).
-- [ ] **1.7 Nav restructure** to the 9 sections in §1 above.
+- [x] **1.7 Nav restructure** to the 9 sections in §1 above.
 
 ### Phase 2 — Carrier aggregate and connectivity (§4, §5)
 
@@ -208,4 +208,5 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | 7febcff |
 | 2026-08-06 | 1.3 UX state model (DataState + displayValue) | dae5c89 |
 | 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | acfcc4e |
-| 2026-08-06 | 1.4 global estate search | — |
+| 2026-08-06 | 1.4 global estate search | f91f93d |
+| 2026-08-06 | 1.7 nav restructured to the specification IA — **Phase 1 complete** | — |

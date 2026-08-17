@@ -71,7 +71,8 @@ describe('application shell', () => {
     expect(wrapper.get('a.skip-link').attributes('href')).toBe('#workspace');
     expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(32);
     expect(wrapper.findAll('.nav-icon svg')).toHaveLength(32);
-    expect(wrapper.findAll('.nav-group')).toHaveLength(4);
+    // Six specification sections plus the three JKANNEL adds (PLAN.md §1).
+    expect(wrapper.findAll('.nav-group')).toHaveLength(9);
     // Help is reachable from the top bar as well as the Platform group.
     expect(wrapper.get('[data-testid="topbar-help"]').attributes('href')).toBe('/help');
     expect(wrapper.get('aside[aria-label="Primary navigation"]').text()).toContain('Messaging');

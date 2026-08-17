@@ -58,20 +58,20 @@ const groupLinks = (wrapper: ReturnType<typeof mount>, group: string) =>
   wrapper.findAll(`#nav-group-${group.toLowerCase()} a`);
 
 describe('primary navigation default state and persistence', () => {
-  it('starts a first visit with only Operations expanded', async () => {
+  it('starts a first visit with only Overview expanded', async () => {
     // No stored preference at all.
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
     const wrapper = await mountShell();
 
-    expect(groupLinks(wrapper, 'Operations').length).toBeGreaterThan(0);
+    expect(groupLinks(wrapper, 'Overview').length).toBeGreaterThan(0);
     expect(wrapper.find('#nav-group-messaging').exists()).toBe(false);
-    expect(wrapper.find('#nav-group-insights').exists()).toBe(false);
+    expect(wrapper.find('#nav-group-customers').exists()).toBe(false);
     expect(wrapper.find('#nav-group-platform').exists()).toBe(false);
     expect(
       wrapper.get('[data-testid="nav-group-toggle-messaging"]').attributes('aria-expanded'),
     ).toBe('false');
     expect(
-      wrapper.get('[data-testid="nav-group-toggle-operations"]').attributes('aria-expanded'),
+      wrapper.get('[data-testid="nav-group-toggle-overview"]').attributes('aria-expanded'),
     ).toBe('true');
   });
 
@@ -80,23 +80,33 @@ describe('primary navigation default state and persistence', () => {
     // an empty array is a deliberate "everything open" — not "no preference".
     localStorage.setItem(STORAGE_KEY, '[]');
     const wrapper = await mountShell();
-    for (const group of ['operations', 'messaging', 'insights', 'platform'])
+    for (const group of ['overview', 'messaging', 'customers', 'platform'])
       expect(wrapper.find(`#nav-group-${group}`).exists()).toBe(true);
   });
 
   it('respects a pre-v2 preference that names collapsed groups', async () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(['Insights']));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(['Customers']));
     const wrapper = await mountShell();
     expect(wrapper.find('#nav-group-messaging').exists()).toBe(true);
-    expect(wrapper.find('#nav-group-insights').exists()).toBe(false);
+    expect(wrapper.find('#nav-group-customers').exists()).toBe(false);
   });
 
   it('persists a toggle in the v2 shape so the next visit is not a first visit', async () => {
     const wrapper = await mountShell();
-    await wrapper.get('[data-testid="nav-group-toggle-operations"]').trigger('click');
+    await wrapper.get('[data-testid="nav-group-toggle-overview"]').trigger('click');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       version: 2,
-      collapsed: ['Messaging', 'Insights', 'Platform', 'Operations'],
+      collapsed: [
+        'Connectivity',
+        'Traffic',
+        'Routing',
+        'Diagnostics',
+        'System',
+        'Messaging',
+        'Customers',
+        'Platform',
+        'Overview',
+      ],
     });
 
     await wrapper.get('[data-testid="nav-group-toggle-messaging"]').trigger('click');
@@ -115,7 +125,7 @@ describe('primary navigation default state and persistence', () => {
     // And it follows navigation, not just the initial render.
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, collapsed: ['Insights'] }));
     const second = await mountShell('/reports');
-    expect(second.find('#nav-group-insights').exists()).toBe(true);
+    expect(second.find('#nav-group-customers').exists()).toBe(true);
   });
 });
 

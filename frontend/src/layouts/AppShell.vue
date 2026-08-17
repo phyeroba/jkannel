@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { navigation, type NavigationItem } from '../navigation';
+import { navigation, NAVIGATION_GROUPS, type NavigationItem } from '../navigation';
 import AppIcon from '../components/AppIcon.vue';
 import { canAccess, logout, session } from '../stores/session';
 import { clearBreadcrumbTrail, resolveBreadcrumbs } from '../stores/breadcrumbs';
@@ -32,12 +32,10 @@ const visibleNavigation = computed(() =>
   navigation.filter((item) => canAccess(session.value, item.permission)),
 );
 const navigationGroups = computed(() =>
-  ['Operations', 'Messaging', 'Insights', 'Platform']
-    .map((group) => ({
-      group,
-      items: visibleNavigation.value.filter((item) => item.group === group),
-    }))
-    .filter((section) => section.items.length),
+  NAVIGATION_GROUPS.map((group) => ({
+    group,
+    items: visibleNavigation.value.filter((item) => item.group === group),
+  })).filter((section) => section.items.length),
 );
 
 /**
@@ -58,7 +56,10 @@ const navigationGroups = computed(() =>
  * Writes always use the v2 shape, so a legacy value migrates on first toggle.
  */
 const NAV_STORAGE_KEY = 'jkannel-console-nav-collapsed';
-const DEFAULT_COLLAPSED = ['Messaging', 'Insights', 'Platform'];
+// Everything except Overview. Nine sections expanded at once is a wall, and
+// Overview is where an operator starts a shift — §3.1 asks the dashboard to
+// give a ten-second assessment, which it cannot do from behind a scroll.
+const DEFAULT_COLLAPSED = NAVIGATION_GROUPS.filter((group) => group !== 'Overview');
 
 function readCollapsedPreference(): string[] {
   const raw = localStorage.getItem(NAV_STORAGE_KEY);

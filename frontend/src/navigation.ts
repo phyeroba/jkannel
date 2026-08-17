@@ -1,10 +1,40 @@
+/**
+ * Sidebar sections, in render order. Six from the specification's information
+ * architecture, then the three this product adds.
+ */
+export const NAVIGATION_GROUPS = [
+  'Overview',
+  'Connectivity',
+  'Traffic',
+  'Routing',
+  'Diagnostics',
+  'System',
+  'Messaging',
+  'Customers',
+  'Platform',
+] as const;
+
+export type NavigationGroup = (typeof NAVIGATION_GROUPS)[number];
+
 export interface NavigationItem {
   label: string;
   to: string;
   icon: string;
   /** Absent means every authenticated user may open the workspace. */
   permission?: string;
-  group: 'Operations' | 'Messaging' | 'Insights' | 'Platform';
+  /**
+   * Section in the sidebar. The first six are the information architecture of
+   * the Kamex UI Redesign Functional Specification (§2), built on the
+   * operational hierarchy Carrier -> SMSC -> Session -> Route -> Queue ->
+   * Message -> DLR.
+   *
+   * The last three are JKANNEL's own. The specification puts customer
+   * provisioning, billing and API credentials explicitly out of scope for a
+   * gateway console (§1.3) — but this product ships them and they work, so they
+   * sit alongside the operational sections rather than being removed. See
+   * docs/redesign/PLAN.md §0.
+   */
+  group: NavigationGroup;
   badge?: string;
 }
 
@@ -118,31 +148,31 @@ export const navigation: NavigationItem[] = [
     to: '/dashboard/operations',
     icon: 'home',
     permission: 'dashboard.view',
-    group: 'Operations',
+    group: 'Overview',
   },
   {
     label: 'Monitoring',
     to: '/monitoring',
     icon: 'chart',
     permission: 'monitoring.view',
-    group: 'Operations',
+    group: 'System',
   },
-  { label: 'Alerts', to: '/alerts', icon: 'alert', permission: 'alerts.view', group: 'Operations' },
+  { label: 'Alerts', to: '/alerts', icon: 'alert', permission: 'alerts.view', group: 'Overview' },
   {
     label: 'Alert Lifecycle',
     to: '/alert-lifecycle',
     icon: 'alert',
     permission: 'alerts.view',
-    group: 'Operations',
+    group: 'Overview',
   },
   {
     label: 'Escalation & Maintenance',
     to: '/alert-response',
     icon: 'bell',
     permission: 'alerts.view',
-    group: 'Operations',
+    group: 'Overview',
   },
-  { label: 'Notifications', to: '/notifications', icon: 'bell', group: 'Operations' },
+  { label: 'Notifications', to: '/notifications', icon: 'bell', group: 'Overview' },
   {
     label: 'Messages',
     to: '/messages',
@@ -155,14 +185,14 @@ export const navigation: NavigationItem[] = [
     to: '/live-queue',
     icon: 'queue',
     permission: 'messages.view',
-    group: 'Messaging',
+    group: 'Traffic',
   },
   {
     label: 'Queues',
     to: '/queues',
     icon: 'queue',
     permission: 'messages.view',
-    group: 'Messaging',
+    group: 'Traffic',
   },
   {
     label: 'Delivery Reports',
@@ -197,49 +227,49 @@ export const navigation: NavigationItem[] = [
     to: '/smsc',
     icon: 'server',
     permission: 'smsc.view',
-    group: 'Messaging',
+    group: 'Connectivity',
   },
   {
     label: 'Routing',
     to: '/routing',
     icon: 'route',
     permission: 'routes.view',
-    group: 'Messaging',
+    group: 'Routing',
   },
   {
     label: 'Advanced Routing',
     to: '/routing-advanced',
     icon: 'route',
     permission: 'routes.view',
-    group: 'Messaging',
+    group: 'Routing',
   },
   {
     label: 'Configuration',
     to: '/configuration',
     icon: 'cog',
     permission: 'configuration.view',
-    group: 'Messaging',
+    group: 'Diagnostics',
   },
   {
     label: 'Analytics & Reports',
     to: '/reports',
     icon: 'chart',
     permission: 'reports.view',
-    group: 'Insights',
+    group: 'Customers',
   },
   {
     label: 'Customers',
     to: '/customers',
     icon: 'users',
     permission: 'system.view',
-    group: 'Insights',
+    group: 'Customers',
   },
   {
     label: 'AI Copilot',
     to: '/copilot',
     icon: 'spark',
     permission: 'monitoring.view',
-    group: 'Insights',
+    group: 'Customers',
   },
   {
     label: 'API Gateway',
@@ -261,21 +291,21 @@ export const navigation: NavigationItem[] = [
     to: '/docker',
     icon: 'docker',
     permission: 'system.view',
-    group: 'Platform',
+    group: 'System',
   },
   {
     label: 'Logs & Audit',
     to: '/logs-audit',
     icon: 'terminal',
     permission: 'monitoring.view',
-    group: 'Platform',
+    group: 'System',
   },
   {
     label: 'Log Explorer',
     to: '/log-explorer',
     icon: 'terminal',
     permission: 'system.view',
-    group: 'Platform',
+    group: 'Diagnostics',
   },
   {
     label: 'Plugins',
@@ -289,7 +319,7 @@ export const navigation: NavigationItem[] = [
     to: '/backup',
     icon: 'db',
     permission: 'system.view',
-    group: 'Platform',
+    group: 'System',
   },
   {
     label: 'Users & Roles',
