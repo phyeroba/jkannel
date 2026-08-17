@@ -73,7 +73,8 @@ export class SystemInfoService {
 
     return {
       environment,
-      environmentLabel: process.env.JKANNEL_ENVIRONMENT_LABEL?.trim() || ENVIRONMENT_LABELS[environment],
+      environmentLabel:
+        process.env.JKANNEL_ENVIRONMENT_LABEL?.trim() || ENVIRONMENT_LABELS[environment],
       environmentTone: ENVIRONMENT_TONES[environment],
       environmentDeclared: (known as string[]).includes(declared),
       version: process.env.JKANNEL_VERSION?.trim() || '0.1.0',

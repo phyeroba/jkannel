@@ -93,7 +93,7 @@ Foundational: every later screen depends on these.
       §17 — loading (skeletons, never zero-that-looks-real), live, stale, empty,
       partial, error, in-progress, permission-denied. We already do this ad hoc
       and well; make it a primitive so new screens inherit it.
-- [ ] **1.4 Global search** across carrier, SMSC, session, message ID and MSISDN
+- [x] **1.4 Global search** across carrier, SMSC, session, message ID and MSISDN
       (permission-scoped).
 - [x] **1.5 Breadcrumbs** preserving hierarchy (Carriers / MTN Uganda / MTN-P1 / TRX-02).
 - [x] **1.6 Global time-range control** shared across analytical screens, with
@@ -207,4 +207,5 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | ada2c86 |
 | 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | 7febcff |
 | 2026-08-06 | 1.3 UX state model (DataState + displayValue) | dae5c89 |
-| 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | — |
+| 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | acfcc4e |
+| 2026-08-06 | 1.4 global estate search | — |

@@ -89,7 +89,9 @@ describe('application shell', () => {
     expect(wrapper.get('.search-results').text()).toContain('Routing');
     expect(wrapper.get('.search-results').text()).not.toContain('Messages');
     await input.setValue('workspace-that-does-not-exist');
-    expect(wrapper.get('.search-results').text()).toContain('No matching workspace.');
+    // The estate query is debounced, so the immediate state is 'searching' —
+    // reporting 'nothing matched' before the search has run would be a lie.
+    expect(wrapper.get('.search-results').text()).toContain('Searching the estate…');
     await window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     await window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
@@ -272,5 +274,60 @@ describe('application shell — deployment and telemetry indicators', () => {
     const indicator = wrapper.get('[data-testid="telemetry-indicator"]');
     expect(indicator.text()).toContain('Suppressed');
     expect(indicator.attributes('title')).toContain('KAMEX_STATUS_PASSWORD');
+  });
+});
+
+/**
+ * §2.1 asks for search across "carrier, SMSC, session, message ID and MSISDN
+ * where permitted". The console's search filtered navigation labels — useful
+ * for finding a screen, no help when an operator has a message id from a
+ * support ticket.
+ */
+describe('application shell — estate search', () => {
+  const searchResponse = (body: Record<string, unknown>) =>
+    new Response(JSON.stringify({ success: true, data: body }), { status: 200 });
+
+  const shellSearching = async (body: Record<string, unknown>) => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('/search?')) return searchResponse(body);
+      return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+    });
+    const wrapper = await mountShell(fetchMock as never);
+    await wrapper.get('[data-testid="global-search"]').trigger('click');
+    await wrapper.get('[data-testid="global-search-input"]').setValue('mtn');
+    // Clear the 250ms debounce, then let the request settle.
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  };
+
+  it('lists estate objects beside the workspace matches', async () => {
+    const wrapper = await shellSearching({
+      hits: [
+        {
+          kind: 'smsc',
+          id: 'mtn-p1',
+          title: 'MTN Primary',
+          subtitle: 'SMSC · smpp · active',
+          to: '/smsc?focus=mtn-p1',
+        },
+      ],
+      skipped: [],
+    });
+    const hits = wrapper.findAll('[data-testid="estate-hit"]');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].text()).toContain('MTN Primary');
+    expect(hits[0].attributes('href')).toContain('focus=mtn-p1');
+  });
+
+  it('says which kinds were not searched, so a partial answer is not read as "does not exist"', async () => {
+    const wrapper = await shellSearching({
+      hits: [],
+      skipped: [{ kind: 'message' }, { kind: 'route' }],
+    });
+    const note = wrapper.get('[data-testid="search-skipped"]').text();
+    expect(note).toContain('message');
+    expect(note).toContain('route');
   });
 });

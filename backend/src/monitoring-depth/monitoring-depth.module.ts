@@ -11,6 +11,9 @@ import { MaintenanceWindowService } from './maintenance-window.service';
 import { AlertCorrelationService } from './alert-correlation.service';
 import { EngineSnapshotCache } from './engine-snapshot.cache';
 import { SystemInfoController } from '../platform/system-info.controller';
+import { GlobalSearchController } from '../platform/global-search.controller';
+import { GlobalSearchService } from '../platform/global-search.service';
+import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
 import { SystemInfoService } from '../platform/system-info.service';
 import { TelemetryFreshnessService } from '../platform/telemetry-freshness.service';
 import { EngineMetricsService } from './engine-metrics.service';
@@ -55,6 +58,7 @@ import { NotificationReadinessService } from './notification-readiness.service';
     NotificationReadinessController,
     AlertLifecycleController,
     SystemInfoController,
+    GlobalSearchController,
   ],
   providers: [
     DatabaseService,
@@ -73,6 +77,8 @@ import { NotificationReadinessService } from './notification-readiness.service';
     AlertRuleEvaluatorScheduler,
     SystemInfoService,
     TelemetryFreshnessService,
+    GlobalSearchService,
+    KamexSqlboxRepository,
   ],
   exports: [
     AlertLifecycleRepository,

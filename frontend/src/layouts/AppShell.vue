@@ -134,6 +134,65 @@ const searchResults = computed(() =>
     item.label.toLowerCase().includes(searchQuery.value.toLowerCase()),
   ),
 );
+/**
+ * Estate search (spec §2.1). The workspace filter above stays — finding a screen
+ * by name is still the commonest use — and these are the objects behind them:
+ * SMSCs, routes, message ids and MSISDNs.
+ *
+ * Debounced because every keystroke would otherwise hit the database and
+ * SQLBox. 250ms is below the threshold at which typing feels laggy and well
+ * above a fast typist's inter-key interval.
+ */
+interface EstateHit {
+  kind: string;
+  id: string;
+  title: string;
+  subtitle: string;
+  to: string;
+}
+const estateHits = ref<EstateHit[]>([]);
+const estateSkipped = ref<string[]>([]);
+const estateSearching = ref(false);
+let estateTimer: ReturnType<typeof setTimeout> | undefined;
+/** Guards against an earlier, slower response overwriting a later one. */
+let estateRequestId = 0;
+
+function closeSearch() {
+  searchOpen.value = false;
+  searchQuery.value = '';
+  estateHits.value = [];
+  estateSkipped.value = [];
+}
+
+watch(searchQuery, (value) => {
+  if (estateTimer) clearTimeout(estateTimer);
+  const term = value.trim();
+  if (term.length < 2) {
+    estateHits.value = [];
+    estateSkipped.value = [];
+    estateSearching.value = false;
+    return;
+  }
+  estateSearching.value = true;
+  estateTimer = setTimeout(async () => {
+    const requestId = ++estateRequestId;
+    try {
+      const result = await apiRequest<{
+        hits: EstateHit[];
+        skipped: Array<{ kind: string }>;
+      }>(`/search?q=${encodeURIComponent(term)}`);
+      if (requestId !== estateRequestId) return;
+      estateHits.value = result.hits ?? [];
+      estateSkipped.value = [...new Set((result.skipped ?? []).map((entry) => entry.kind))];
+    } catch {
+      if (requestId !== estateRequestId) return;
+      estateHits.value = [];
+    } finally {
+      if (requestId === estateRequestId) estateSearching.value = false;
+    }
+  }, 250);
+});
+
 const initials = computed(() =>
   (session.value?.displayName ?? 'Operator')
     .split(' ')
@@ -625,21 +684,36 @@ onUnmounted(() => {
       <input
         v-model="searchQuery"
         autofocus
-        placeholder="Search platform modules"
+        placeholder="Search workspaces, SMSCs, routes, message IDs or an MSISDN"
         data-testid="global-search-input"
       />
       <nav class="search-results">
-        <RouterLink
-          v-for="item in searchResults"
-          :key="item.to"
-          :to="item.to"
-          @click="
-            searchOpen = false;
-            searchQuery = '';
-          "
+        <p v-if="searchResults.length" class="search-group-label">Workspaces</p>
+        <RouterLink v-for="item in searchResults" :key="item.to" :to="item.to" @click="closeSearch"
           >{{ item.label }}<span>{{ item.to }}</span></RouterLink
         >
-        <p v-if="!searchResults.length">No matching workspace.</p>
+        <p v-if="estateHits.length" class="search-group-label">Estate</p>
+        <RouterLink
+          v-for="hit in estateHits"
+          :key="`${hit.kind}-${hit.id}`"
+          :to="hit.to"
+          data-testid="estate-hit"
+          @click="closeSearch"
+          >{{ hit.title }}<span>{{ hit.subtitle }}</span></RouterLink
+        >
+        <p v-if="estateSearching" class="search-note">Searching the estate…</p>
+        <p
+          v-else-if="!searchResults.length && !estateHits.length && searchQuery.trim().length >= 2"
+          data-testid="search-empty"
+        >
+          Nothing matched “{{ searchQuery.trim() }}”.
+        </p>
+        <p v-else-if="!searchResults.length && !estateHits.length">No matching workspace.</p>
+        <!-- Partial answers must be labelled as partial: without this the
+             operator reads "no results" as "it does not exist". -->
+        <p v-if="estateSkipped.length" class="search-note" data-testid="search-skipped">
+          Not searched, no permission: {{ estateSkipped.join(', ') }}.
+        </p>
       </nav>
     </section>
   </div>
