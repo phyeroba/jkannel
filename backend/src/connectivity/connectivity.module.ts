@@ -8,6 +8,9 @@ import { SmscDetailService } from './smsc-detail.service';
 import { QueueMetricsController } from './queue-metrics.controller';
 import { QueueMetricsService } from './queue-metrics.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { SafeControlController } from './safe-control.controller';
+import { SafeControlService } from './safe-control.service';
+import { OperationalEventsService } from '../diagnostics/operational-events.service';
 
 /**
  * Connectivity: the operational hierarchy above the engine's flat SMSC list
@@ -18,14 +21,21 @@ import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [CarrierController, SmscDetailController, QueueMetricsController],
+  controllers: [
+    CarrierController,
+    SmscDetailController,
+    QueueMetricsController,
+    SafeControlController,
+  ],
   providers: [
     DatabaseService,
     CarrierService,
     SmscDetailService,
     QueueMetricsService,
     KamexSqlboxRepository,
+    SafeControlService,
+    OperationalEventsService,
   ],
-  exports: [CarrierService, SmscDetailService, QueueMetricsService],
+  exports: [CarrierService, SmscDetailService, QueueMetricsService, SafeControlService],
 })
 export class ConnectivityModule {}

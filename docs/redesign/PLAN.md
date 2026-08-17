@@ -153,12 +153,12 @@ Foundational: every later screen depends on these.
 
 ### Phase 5 — Safe control (§4, §9, §15, §16)
 
-- [ ] **5.1 Impact-first confirmations.** Every disruptive action states impact
+- [x] **5.1 Impact-first confirmations.** Every disruptive action states impact
       and captures a reason before the verb (§1.1, §16). Reconnect/enable/disable
       currently take an idempotency key but **no reason**.
-- [ ] **5.2 Manual route failover** with target health/capacity comparison,
+- [x] **5.2 Manual route failover** with target health/capacity comparison,
       reason capture, audit and an operational event.
-- [ ] **5.3 Suspend / resume traffic** on an SMSC, visually distinct from
+- [x] **5.3 Suspend / resume traffic** on an SMSC, visually distinct from
       carrier-disconnected.
 - [ ] **5.4 Route Simulator screen.** Backend is done (three endpoints); this is
       UI only, and must be labelled explicitly non-transmitting.

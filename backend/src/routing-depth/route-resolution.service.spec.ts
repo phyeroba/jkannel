@@ -318,3 +318,26 @@ describe('RouteResolutionService', () => {
     }
   });
 });
+
+/**
+ * Operator suspension has to reach the SEND PATH, not just the badge.
+ *
+ * UC-SMSC-02 asks for a hold on new submissions distinct from a carrier-dropped
+ * bind. If the filter lived only in the console, "Suspend traffic" would record
+ * an event, show a badge and change nothing — the worst kind of control,
+ * because an operator would believe traffic had stopped.
+ */
+describe('send path honours operator suspension', () => {
+  it('excludes a suspended SMSC in the availability query itself', async () => {
+    const client = makeClient({});
+    await makeService().resolveInClient(client, { msisdn: '256700000000' });
+    const queries = (client as unknown as { query: jest.Mock }).query.mock.calls;
+    const availability = queries
+      .map((call: unknown[]) => String(call[0]))
+      .find((sql: string) => sql.includes('smsc_bind_state'))!;
+    // In the WHERE clause, so a suspended bind is not a candidate at all: it
+    // must not be selected, and must not satisfy an explicitly pinned smscId.
+    expect(availability).toContain('traffic_suspended_at IS NULL');
+    expect(availability).toContain('d.enabled = true');
+  });
+});

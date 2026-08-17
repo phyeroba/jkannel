@@ -79,10 +79,18 @@ export class RouteResolutionService {
   }> {
     const rows = (
       await client.query<SmscRow>(
+        // `traffic_suspended_at IS NULL` is the send-path half of UC-SMSC-02.
+        // Without it, "Suspend traffic" would be a button that records an
+        // event, shows a badge and changes nothing — the worst kind of control,
+        // because an operator would believe traffic had stopped.
+        //
+        // Applied in the WHERE clause rather than to `available`, so a
+        // suspended SMSC is not a candidate at all: it must not be picked, and
+        // it must not silently satisfy an explicitly pinned smscId either.
         `SELECT d.id::text AS id, d.engine_id, s.state AS bind_state
            FROM smsc_definitions d
            LEFT JOIN smsc_bind_state s ON s.smsc_id = d.id
-          WHERE d.enabled = true`,
+          WHERE d.enabled = true AND d.traffic_suspended_at IS NULL`,
       )
     ).rows;
     const byId = new Map(rows.map((row) => [row.id, row.engine_id]));
