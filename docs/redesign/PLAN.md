@@ -123,7 +123,7 @@ Foundational: every later screen depends on these.
 
 ### Phase 3 — Traffic, queues, DLR quality (§6, §7, §8)
 
-- [ ] **3.1 Queue metrics** — ingress/egress rate, growth rate, drain estimate
+- [x] **3.1 Queue metrics** — ingress/egress rate, growth rate, drain estimate
       (explicitly `unavailable` when egress is zero, per §7), expiry. Derivable
       from snapshots we already store.
 - [ ] **3.2 Live Traffic** screen — MT/MO/DLR split (currently one aggregate
