@@ -145,9 +145,9 @@ Foundational: every later screen depends on these.
 - [x] **4.3 SMPP error intelligence.** Promote the 13-entry private
       `COMMAND_STATUS` map in `smpp-bind-prober.ts` to a full decoder with human
       explanations; aggregate by SMSC/time with first seen, last seen, trend.
-- [ ] **4.4 Operational events.** Greenfield `operational_events` table +
+- [x] **4.4 Operational events.** Greenfield `operational_events` table +
       emitters for the §12.1 list, with severity and correlation id.
-- [ ] **4.5 Correlation threading.** `correlation_id` exists on `audit_log`,
+- [x] **4.5 Correlation threading.** `correlation_id` exists on `audit_log`,
       logs and gateway requests but not on `alert_instances`, events or traces.
       Thread it so alert → event → log → audit → message is one click.
 

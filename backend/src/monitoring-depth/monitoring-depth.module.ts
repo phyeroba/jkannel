@@ -16,6 +16,7 @@ import { GlobalSearchService } from '../platform/global-search.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
 import { SystemInfoService } from '../platform/system-info.service';
 import { TelemetryFreshnessService } from '../platform/telemetry-freshness.service';
+import { OperationalEventsService } from '../diagnostics/operational-events.service';
 import { EngineMetricsService } from './engine-metrics.service';
 import { SmscStatusPoller } from './smsc-status.poller';
 import { AlertRuleEvaluatorScheduler } from './alert-rule-evaluator.scheduler';
@@ -77,6 +78,7 @@ import { NotificationReadinessService } from './notification-readiness.service';
     AlertRuleEvaluatorScheduler,
     SystemInfoService,
     TelemetryFreshnessService,
+    OperationalEventsService,
     GlobalSearchService,
     KamexSqlboxRepository,
   ],

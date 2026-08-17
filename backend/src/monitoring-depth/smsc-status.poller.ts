@@ -1,6 +1,7 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Optional, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
+import { EVENT_KINDS, OperationalEventsService } from '../diagnostics/operational-events.service';
 import { EngineBindSnapshot, EngineQueueSnapshot, KamexAdapter } from '../engine/kamex.adapter';
 import { EngineSnapshotCache } from './engine-snapshot.cache';
 import {
@@ -165,6 +166,10 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
     private readonly database: DatabaseService,
     private readonly adapter: KamexAdapter,
     private readonly cache: EngineSnapshotCache,
+    // Optional so the poller can still be constructed in the many existing
+    // tests that predate the event stream; a missing emitter costs an event,
+    // never a poll.
+    @Optional() private readonly events?: OperationalEventsService,
   ) {}
 
   onModuleInit(): void {
@@ -490,6 +495,27 @@ export class SmscStatusPoller implements OnModuleInit, OnModuleDestroy {
           ? `Bind ${label} moved ${previous.state} -> ${state}`
           : `Bind ${label} first observed as ${state}`,
       });
+      // The operator-facing event (spec §12.1). `smsc_bind_transitions` above
+      // stays the raw observation record in the engine's own vocabulary; this
+      // is the same fact phrased for a person, with a severity, on the stream
+      // that also carries route failovers and queue thresholds.
+      //
+      // Written on the SAME transaction as the transition it describes: an
+      // event recorded separately could survive a rollback and report a state
+      // change that did not happen.
+      if (this.events && previous)
+        await this.events.recordOn(
+          client,
+          { tenantId, userId: 'system' },
+          {
+            kind: isHealthy(toBindState(state)) ? EVENT_KINDS.bindRestored : EVENT_KINDS.bindLost,
+            severity: isHealthy(toBindState(state)) ? 'info' : 'warning',
+            summary: `Bind ${label} moved from ${previous.state} to ${state}.`,
+            detail: { engineId: bind.engineId, engineStatus: bind.status, queued: bind.queued },
+            subjectType: 'smsc',
+            subjectId: bind.engineId,
+          },
+        );
       // Keep the console's existing health surface current; migration 006's
       // vocabulary is narrower than Ch.22's, so project onto it.
       await client.query(

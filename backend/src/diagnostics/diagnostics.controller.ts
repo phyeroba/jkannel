@@ -1,7 +1,8 @@
-import { BadRequestException, Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { MessageTraceService } from './message-trace.service';
+import { OperationalEventsService } from './operational-events.service';
 import { decodeSmppStatus, knownSmppStatuses } from './smpp-status';
 
 type Request = AuthenticatedRequest;
@@ -16,7 +17,41 @@ const actor = (request: Request) => ({
 @Controller('diagnostics')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class DiagnosticsController {
-  constructor(private readonly traces: MessageTraceService) {}
+  constructor(
+    private readonly traces: MessageTraceService,
+    private readonly events: OperationalEventsService,
+  ) {}
+
+  /**
+   * The operational event stream (§12.1) — what the SYSTEM observed, as opposed
+   * to `audit-events`, which records what a person did.
+   */
+  @Get('events')
+  @RequirePermissions('monitoring.view')
+  listEvents(@Req() r: Request, @Query() query: Record<string, string> = {}) {
+    return this.events.list(actor(r), {
+      limit: query.limit ? Number(query.limit) : undefined,
+      kindPrefix: query.kind,
+      severity: query.severity,
+      subjectType: query.subjectType,
+      subjectId: query.subjectId,
+      correlationId: query.correlationId,
+      since: query.since,
+    });
+  }
+
+  /**
+   * Everything recorded for one incident — events, alerts and audit entries in
+   * one response. Previously an operator could go audit to logs and had no path
+   * from an alert to anything at all.
+   */
+  @Get('correlations/:correlationId')
+  @RequirePermissions('monitoring.view')
+  correlated(@Req() r: Request, @Param('correlationId') correlationId: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(correlationId))
+      throw new BadRequestException('correlationId must be a UUID');
+    return this.events.correlated(actor(r), correlationId);
+  }
 
   /**
    * The full lifecycle for one message, joining the engine's rows to the

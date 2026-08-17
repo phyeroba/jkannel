@@ -4,6 +4,7 @@ import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
 import { DiagnosticsController } from './diagnostics.controller';
 import { MessageTraceService } from './message-trace.service';
+import { OperationalEventsService } from './operational-events.service';
 
 /**
  * Diagnostics (spec §10, §11): message lifecycle assembly and SMPP status
@@ -17,7 +18,12 @@ import { MessageTraceService } from './message-trace.service';
 @Module({
   imports: [AuthModule],
   controllers: [DiagnosticsController],
-  providers: [DatabaseService, KamexSqlboxRepository, MessageTraceService],
-  exports: [MessageTraceService],
+  providers: [
+    DatabaseService,
+    KamexSqlboxRepository,
+    MessageTraceService,
+    OperationalEventsService,
+  ],
+  exports: [MessageTraceService, OperationalEventsService],
 })
 export class DiagnosticsModule {}
