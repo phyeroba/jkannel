@@ -89,7 +89,7 @@ Foundational: every later screen depends on these.
       (`source.status`, `observedAt`, `jkannel_engine_snapshot_age_seconds`,
       `KamexRequestGate`) but nothing rolls them up. Add a single freshness
       endpoint + a shell indicator: live / delayed / disconnected, with age.
-- [ ] **1.3 UX state model.** A shared set of components for the eight states in
+- [x] **1.3 UX state model.** A shared set of components for the eight states in
       §17 — loading (skeletons, never zero-that-looks-real), live, stale, empty,
       partial, error, in-progress, permission-denied. We already do this ad hoc
       and well; make it a primitive so new screens inherit it.
@@ -205,4 +205,5 @@ Foundational: every later screen depends on these.
 |---|---|---|
 | 2026-08-06 | Plan committed | b844ab5 |
 | 2026-08-06 | 0.1–0.4 brand alignment: DocFlow Blue accent, favicon, token sweep | ada2c86 |
-| 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | — |
+| 2026-08-06 | 1.1 environment indicator + 1.2 telemetry freshness | 7febcff |
+| 2026-08-06 | 1.3 UX state model (DataState + displayValue) | — |
