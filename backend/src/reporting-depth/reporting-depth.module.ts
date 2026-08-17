@@ -8,6 +8,8 @@ import { ReportingAnalyticsService } from '../reporting/reporting-analytics.serv
 import { ReportDefinitionsController } from './report-definitions.controller';
 import { ReportDefinitionsRepository } from './report-definitions.repository';
 import { ReportScheduleService } from './report-schedule.service';
+import { DlrPerformanceController } from './dlr-performance.controller';
+import { DlrPerformanceService } from './dlr-performance.service';
 
 /**
  * Reporting-depth feature module: saved/named report definitions and scheduled
@@ -20,9 +22,10 @@ import { ReportScheduleService } from './report-schedule.service';
  */
 @Module({
   imports: [AuthModule, EngineModule],
-  controllers: [ReportDefinitionsController],
+  controllers: [ReportDefinitionsController, DlrPerformanceController],
   providers: [
     DatabaseService,
+    DlrPerformanceService,
     ReportDefinitionsRepository,
     ReportingAnalyticsService,
     ExportService,

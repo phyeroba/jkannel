@@ -129,7 +129,7 @@ Foundational: every later screen depends on these.
 - [ ] **3.2 Live Traffic** screen — MT/MO/DLR split (currently one aggregate
       outbound rate), current/average/peak, stable in-place table updates that do
       not reorder rows unless ranking is enabled.
-- [ ] **3.3 DLR Performance** — delivery funnel, status breakdown, P50/P95/P99
+- [x] **3.3 DLR Performance** — delivery funnel, status breakdown, P50/P95/P99
       (already exist), per-carrier comparison over *identical* windows (today's
       endpoints have no window parameter), and the **DLR maturity warning** for
       windows too recent for final receipts.
