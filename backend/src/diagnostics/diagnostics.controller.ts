@@ -29,8 +29,16 @@ export class DiagnosticsController {
   @Get('events')
   @RequirePermissions('monitoring.view')
   listEvents(@Req() r: Request, @Query() query: Record<string, string> = {}) {
+    // `Number('abc')` is NaN, and Math.min/max propagate it, so a junk value
+    // reached PostgreSQL as `LIMIT NaN` — a 500 where a 400 belongs.
+    let limit: number | undefined;
+    if (query.limit !== undefined && query.limit !== '') {
+      limit = Number(query.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500)
+        throw new BadRequestException('limit must be an integer between 1 and 500');
+    }
     return this.events.list(actor(r), {
-      limit: query.limit ? Number(query.limit) : undefined,
+      limit,
       kindPrefix: query.kind,
       severity: query.severity,
       subjectType: query.subjectType,

@@ -281,11 +281,32 @@ export const navigation: NavigationItem[] = [
     permission: 'routes.view',
     group: 'Routing',
   },
+  // Diagnostics, in the specification's own order (§2, §10–§12): one message,
+  // then the protocol vocabulary, then the system-wide event stream, then the
+  // raw log buffer, and finally the configuration those answers are read
+  // against. Configuration sits last for that reason and not by accident.
   {
-    label: 'Configuration',
-    to: '/configuration',
-    icon: 'cog',
-    permission: 'configuration.view',
+    label: 'Message Trace',
+    to: '/message-trace',
+    icon: 'search',
+    permission: 'messages.view',
+    group: 'Diagnostics',
+  },
+  {
+    // smsc.view, matching the decoder endpoints: they are served by the
+    // diagnostics controller under the SMSC read permission, and listing this
+    // under monitoring.view would put a link in the sidebar that 403s.
+    label: 'SMPP Errors',
+    to: '/smpp-errors',
+    icon: 'alert',
+    permission: 'smsc.view',
+    group: 'Diagnostics',
+  },
+  {
+    label: 'Events',
+    to: '/events',
+    icon: 'bell',
+    permission: 'monitoring.view',
     group: 'Diagnostics',
   },
   {
@@ -343,6 +364,13 @@ export const navigation: NavigationItem[] = [
     to: '/log-explorer',
     icon: 'terminal',
     permission: 'system.view',
+    group: 'Diagnostics',
+  },
+  {
+    label: 'Configuration',
+    to: '/configuration',
+    icon: 'cog',
+    permission: 'configuration.view',
     group: 'Diagnostics',
   },
   {

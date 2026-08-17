@@ -20,6 +20,9 @@ describe('primary navigation contract', () => {
         '/sessions-smpp',
         '/routing',
         '/configuration',
+        '/message-trace',
+        '/smpp-errors',
+        '/events',
         '/monitoring',
         '/alerts',
         '/notifications',
@@ -45,7 +48,7 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(36);
+    expect(navigation).toHaveLength(39);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -83,6 +86,27 @@ describe('primary navigation contract', () => {
     expect(navigation.find((item) => item.to === '/dlr-performance')?.permission).toBe(
       'reports.view',
     );
+  });
+
+  it('orders Diagnostics as the specification does, and gates each screen on the permission its API checks', () => {
+    const diagnostics = navigation
+      .filter((item) => item.group === 'Diagnostics')
+      .map((item) => item.to);
+    // §2: one message, the protocol vocabulary, the system-wide stream, the raw
+    // log buffer, then the configuration those answers are read against.
+    expect(diagnostics).toEqual([
+      '/message-trace',
+      '/smpp-errors',
+      '/events',
+      '/log-explorer',
+      '/configuration',
+    ]);
+    const permission = (to: string) => navigation.find((item) => item.to === to)?.permission;
+    // Each one names the permission its own controller enforces; a mismatch
+    // here is a link in the sidebar that 403s the moment it is clicked.
+    expect(permission('/message-trace')).toBe('messages.view');
+    expect(permission('/smpp-errors')).toBe('smsc.view');
+    expect(permission('/events')).toBe('monitoring.view');
   });
 
   it('keeps the API reference reachable for every authenticated user', () => {

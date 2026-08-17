@@ -140,7 +140,7 @@ Foundational: every later screen depends on these.
       `message_route_decisions` into the existing trace on `foreign_id` — the
       data is already captured and simply never queried — and compute per-stage
       latency. Also join the delivery-retry chain.
-- [ ] **4.2 Message Trace screen** — chronological lifecycle, first abnormal
+- [x] **4.2 Message Trace screen** — chronological lifecycle, first abnormal
       stage highlighted, copyable IDs, links to related evidence.
 - [x] **4.3 SMPP error intelligence.** Promote the 13-entry private
       `COMMAND_STATUS` map in `smpp-bind-prober.ts` to a full decoder with human

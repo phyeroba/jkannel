@@ -344,6 +344,46 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Diagnostics, in the specification's own order (§10, §11, §12): one
+    // message, then the protocol vocabulary, then everything the system saw.
+    path: '/message-trace',
+    name: 'message-trace',
+    component: () => import('../views/MessageTraceView.vue'),
+    meta: {
+      title: 'Message Trace',
+      description:
+        'One message end to end — routing decision, spool, submission, retries and receipt — with the time each stage took and the first abnormal stage called out above the timeline.',
+      // A placeholder trail: the view publishes Message Trace / <id> once an id
+      // has actually been traced.
+      breadcrumb: ['Diagnostics', 'Message Trace'],
+      permission: 'messages.view',
+    },
+  },
+  {
+    path: '/smpp-errors',
+    name: 'smpp-errors',
+    component: () => import('../views/SmppErrorsView.vue'),
+    meta: {
+      title: 'SMPP Errors',
+      description:
+        'Every SMPP command status this build can decode, with a plain explanation and a suggested check labelled as guidance rather than a diagnosis, plus a lookup that takes decimal or hex.',
+      breadcrumb: ['Diagnostics', 'SMPP Errors'],
+      permission: 'smsc.view',
+    },
+  },
+  {
+    path: '/events',
+    name: 'events',
+    component: () => import('../views/EventsView.vue'),
+    meta: {
+      title: 'Events',
+      description:
+        'What the system observed, over the shared time range, with a correlation drill-down that puts events, alerts, audit entries and logs on one screen — and states why the logs may be missing.',
+      breadcrumb: ['Diagnostics', 'Events'],
+      permission: 'monitoring.view',
+    },
+  },
+  {
     path: '/roles',
     name: 'roles',
     component: RolesView,

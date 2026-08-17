@@ -38,7 +38,17 @@ export class MessageTraceService {
     private readonly sqlbox: KamexSqlboxRepository,
   ) {}
 
-  async trace(actor: Actor, id: string, allowedSmscIds?: string[]): Promise<MessageTraceResult> {
+  /**
+   * `allowedSmscIds` is resolved HERE rather than taken from the caller.
+   *
+   * The first cut left it as an optional parameter and the controller simply
+   * did not pass one, so a tenant restricted to a subset of SMSCs could read
+   * the engine trace of a message on any SMSC. An optional security parameter
+   * is a security parameter that will eventually be omitted; making the service
+   * fetch its own scope removes the opportunity.
+   */
+  async trace(actor: Actor, id: string): Promise<MessageTraceResult> {
+    const allowedSmscIds = await this.tenantSmscScope(actor);
     const probe = await this.sqlbox.probe();
     let events: unknown[] = [];
     let engineEvents: EngineEventInput[] = [];
@@ -98,6 +108,16 @@ export class MessageTraceService {
       available: probe.available,
       detail,
     };
+  }
+
+  /** Engine ids this tenant owns. The trace is filtered to them. */
+  private async tenantSmscScope(actor: Actor): Promise<string[]> {
+    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+      const { rows } = await client.query<{ engine_id: string }>(
+        'SELECT engine_id FROM smsc_definitions WHERE deleted_at IS NULL',
+      );
+      return rows.map((row) => row.engine_id);
+    });
   }
 }
 
