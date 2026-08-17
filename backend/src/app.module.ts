@@ -24,6 +24,7 @@ import { MetricsInterceptor } from './monitoring/metrics.interceptor';
 import { BackupDrModule } from './backup-dr/backup-dr.module';
 import { MonitoringDepthModule } from './monitoring-depth/monitoring-depth.module';
 import { ConnectivityModule } from './connectivity/connectivity.module';
+import { DiagnosticsModule } from './diagnostics/diagnostics.module';
 import { CustomersModule } from './customers/customers.module';
 import { CustomersDepthModule } from './customers-depth/customers-depth.module';
 import { MessagingDepthModule } from './messaging-depth/messaging-depth.module';
@@ -57,6 +58,7 @@ import { LoggingModule } from './platform/logging.module';
     BackupDrModule,
     MonitoringDepthModule,
     ConnectivityModule,
+    DiagnosticsModule,
     CustomersModule,
     CustomersDepthModule,
     MessagingDepthModule,

@@ -136,13 +136,13 @@ Foundational: every later screen depends on these.
 
 ### Phase 4 — Diagnostics (§10, §11, §12)
 
-- [ ] **4.1 Message Trace enrichment.** Highest value for lowest cost: join
+- [x] **4.1 Message Trace enrichment.** Highest value for lowest cost: join
       `message_route_decisions` into the existing trace on `foreign_id` — the
       data is already captured and simply never queried — and compute per-stage
       latency. Also join the delivery-retry chain.
 - [ ] **4.2 Message Trace screen** — chronological lifecycle, first abnormal
       stage highlighted, copyable IDs, links to related evidence.
-- [ ] **4.3 SMPP error intelligence.** Promote the 13-entry private
+- [x] **4.3 SMPP error intelligence.** Promote the 13-entry private
       `COMMAND_STATUS` map in `smpp-bind-prober.ts` to a full decoder with human
       explanations; aggregate by SMSC/time with first seen, last seen, trend.
 - [ ] **4.4 Operational events.** Greenfield `operational_events` table +
