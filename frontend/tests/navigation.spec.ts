@@ -14,6 +14,8 @@ describe('primary navigation contract', () => {
         '/delivery-reports',
         '/bulk-send',
         '/smsc',
+        '/carriers',
+        '/sessions-smpp',
         '/routing',
         '/configuration',
         '/monitoring',
@@ -41,13 +43,32 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(32);
+    expect(navigation).toHaveLength(34);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
         (item) => item.permission === undefined || /\.(view|sessions)$/.test(item.permission),
       ),
     ).toBe(true);
+  });
+
+  it('keeps SMPP Sessions distinct from operator login sessions', () => {
+    // Two different things called "Sessions" in one sidebar is a trap: one is
+    // SMPP binds, the other is who is signed in.
+    const smpp = navigation.find((item) => item.to === '/sessions-smpp');
+    const logins = navigation.find((item) => item.to === '/sessions');
+    expect(smpp?.label).toBe('SMPP Sessions');
+    expect(smpp?.group).toBe('Connectivity');
+    expect(smpp?.permission).toBe('smsc.view');
+    expect(logins?.label).toBe('Sessions');
+    expect(logins?.group).toBe('Platform');
+  });
+
+  it('orders Connectivity as Carrier -> SMSC -> Session', () => {
+    const connectivity = navigation
+      .filter((item) => item.group === 'Connectivity')
+      .map((item) => item.to);
+    expect(connectivity).toEqual(['/carriers', '/smsc', '/sessions-smpp']);
   });
 
   it('keeps the API reference reachable for every authenticated user', () => {

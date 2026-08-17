@@ -69,8 +69,9 @@ describe('application shell', () => {
   it('exposes navigation and skip-link landmarks with accessible labels', async () => {
     const wrapper = await mountShell();
     expect(wrapper.get('a.skip-link').attributes('href')).toBe('#workspace');
-    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(32);
-    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(32);
+    // 32 before Phase 2.3–2.5 added Carriers and SMPP Sessions to Connectivity.
+    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(34);
+    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(34);
     // Six specification sections plus the three JKANNEL adds (PLAN.md §1).
     expect(wrapper.findAll('.nav-group')).toHaveLength(9);
     // Help is reachable from the top bar as well as the Platform group.

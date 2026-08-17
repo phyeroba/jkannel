@@ -99,10 +99,16 @@ export class CarrierController {
     return this.carriers.assignSmsc(actor(r), uuid(body.smscId, 'smscId'), uuid(id, 'id'));
   }
 
+  /**
+   * `:id` is enforced, not decorative: the detach only applies if the SMSC is
+   * actually on that carrier. Otherwise a stale tab detaches a connection from
+   * whichever carrier happens to hold it now.
+   */
   @Delete(':id/smscs/:smscId') @RequirePermissions('smsc.manage') detach(
     @Req() r: Request,
+    @Param('id') id: string,
     @Param('smscId') smscId: string,
   ) {
-    return this.carriers.assignSmsc(actor(r), uuid(smscId, 'smscId'), null);
+    return this.carriers.assignSmsc(actor(r), uuid(smscId, 'smscId'), null, uuid(id, 'id'));
   }
 }

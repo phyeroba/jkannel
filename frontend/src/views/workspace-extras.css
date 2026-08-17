@@ -1,6 +1,16 @@
 /* Per-module workspace enhancements. Complements design-authority.css / style.css;
    reuses existing tokens (--good/--warn/--bad/--brand/--surface/--border). */
 
+/* A link that looks like a button. The Carrier -> SMSC drill-down needs real
+   anchors (middle-click, copy link address), and an anchor is inline by
+   default, so the button padding would not box correctly without this. */
+a.primary-button,
+a.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 /* Clickable detail rows. */
 tr.clickable-row {
   cursor: pointer;

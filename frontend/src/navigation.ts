@@ -222,10 +222,28 @@ export const navigation: NavigationItem[] = [
     permission: 'messages.view',
     group: 'Messaging',
   },
+  // Connectivity, in the specification's own drill-down order: Carrier -> SMSC
+  // -> Session (§2, §4, §5).
+  {
+    label: 'Carriers',
+    to: '/carriers',
+    icon: 'db',
+    permission: 'smsc.view',
+    group: 'Connectivity',
+  },
   {
     label: 'SMSC Connections',
     to: '/smsc',
     icon: 'server',
+    permission: 'smsc.view',
+    group: 'Connectivity',
+  },
+  {
+    // "SMPP Sessions", not "Sessions": /sessions is operator login sessions and
+    // an operator must never have to guess which of the two a link means.
+    label: 'SMPP Sessions',
+    to: '/sessions-smpp',
+    icon: 'api',
     permission: 'smsc.view',
     group: 'Connectivity',
   },

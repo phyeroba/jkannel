@@ -6,6 +6,10 @@
  *
  * The three ModuleWorkspace "custom render" routes (Sessions has its own view)
  * still render the `module-workspace` wrapper, so the generic marker holds.
+ *
+ * The parameterised detail routes (`/carriers/:id`, `/smsc/:engineId`) are not
+ * listed: they are not navigable workspaces and cannot be opened without an
+ * entity that exists in the deployment under test.
  */
 export interface WorkspaceRoute {
   label: string;
@@ -28,7 +32,9 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { label: 'Bulk Send', path: '/bulk-send', root: 'bulk-send-view' },
   { label: 'Content Filtering', path: '/content-rules', root: 'content-rules-view' },
   { label: 'Inbound Routing', path: '/mo-routing', root: 'mo-routing-view' },
+  { label: 'Carriers', path: '/carriers', root: 'carriers-view' },
   { label: 'SMSC Connections', path: '/smsc', root: 'module-workspace' },
+  { label: 'SMPP Sessions', path: '/sessions-smpp', root: 'smpp-sessions-view' },
   { label: 'Routing', path: '/routing', root: 'module-workspace' },
   { label: 'Advanced Routing', path: '/routing-advanced', root: 'routing-depth-view' },
   { label: 'Configuration', path: '/configuration', root: 'module-workspace' },

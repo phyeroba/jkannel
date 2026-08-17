@@ -202,3 +202,77 @@ describe('CarrierService.create', () => {
     expect(client.query).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Two defects found in review of the first cut, fixed and pinned here. Both
+ * failed in the "looks like it worked" direction, which is the dangerous one.
+ */
+describe('CarrierService — regressions', () => {
+  it('detaches only when the SMSC is actually on the carrier named in the request', async () => {
+    // DELETE /carriers/A/smscs/X previously ignored A entirely and detached X
+    // from whatever carrier held it. A stale tab showing carrier A, opened
+    // before X moved to carrier B, would silently unfile it from B — and the
+    // audit row would look perfectly correct.
+    const { service, client } = makeService([]);
+    const seen: Array<{ sql: string; params: unknown[] }> = [];
+    (client.query as jest.Mock).mockImplementation(async (sql: string, params: unknown[]) => {
+      seen.push({ sql, params });
+      if (sql.startsWith('UPDATE smsc_definitions')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(
+      service.assignSmsc(actor, carrierRow.id, null, '22222222-2222-4222-8222-222222222222'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const update = seen.find((entry) => entry.sql.startsWith('UPDATE smsc_definitions'))!;
+    // The ownership check and the write are one statement, so the row cannot be
+    // reassigned between reading it and updating it.
+    expect(update.sql).toContain('carrier_id = $3::uuid');
+    expect(update.params).toHaveLength(3);
+  });
+
+  it('names the likely cause when a detach misses', async () => {
+    const { service, client } = makeService([]);
+    (client.query as jest.Mock).mockResolvedValue({ rows: [], rowCount: 0 });
+    await expect(service.assignSmsc(actor, carrierRow.id, null, carrierRow.id)).rejects.toThrow(
+      /may have been moved/,
+    );
+  });
+
+  it('can CLEAR an optional field, which COALESCE could not express', async () => {
+    // Passing null to mean "leave alone" and null to mean "erase" are the same
+    // value under COALESCE, so the erase silently became a no-op and the
+    // endpoint returned 200 with the old value still stored.
+    const { service, client } = makeService([carrierRow]);
+    const seen: string[] = [];
+    (client.query as jest.Mock).mockImplementation(async (sql: string) => {
+      seen.push(sql);
+      return { rows: [carrierRow], rowCount: 1 };
+    });
+    await service.update(actor, carrierRow.id, { networkCode: null });
+    const update = seen.find((sql) => sql.startsWith('UPDATE carriers'))!;
+    expect(update).toContain('network_code = $3');
+    expect(update).not.toContain('COALESCE');
+  });
+
+  it('only writes the fields actually supplied', async () => {
+    const { service, client } = makeService([carrierRow]);
+    const seen: string[] = [];
+    (client.query as jest.Mock).mockImplementation(async (sql: string) => {
+      seen.push(sql);
+      return { rows: [carrierRow], rowCount: 1 };
+    });
+    await service.update(actor, carrierRow.id, { status: 'suspended' });
+    const update = seen.find((sql) => sql.startsWith('UPDATE carriers'))!;
+    expect(update).toContain('status =');
+    expect(update).not.toContain('notes =');
+    expect(update).not.toContain('name =');
+  });
+
+  it('rejects an update that names no fields rather than issuing an empty write', async () => {
+    const { service } = makeService([carrierRow]);
+    await expect(service.update(actor, carrierRow.id, {})).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+});

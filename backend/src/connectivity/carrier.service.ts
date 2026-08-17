@@ -223,26 +223,33 @@ export class CarrierService {
       (error) => input.name !== undefined || !error.startsWith('name'),
     );
     if (errors.length) throw new BadRequestException(errors.join('; '));
+    // The SET clause is built from the keys actually PRESENT on the request,
+    // not with COALESCE($n, column).
+    //
+    // COALESCE cannot express "clear this field": passing null to mean "leave
+    // it alone" and passing null to mean "erase it" are the same value, so the
+    // erase silently becomes a no-op and the endpoint returns 200 with the old
+    // value still in place. An operator correcting a wrong network code would
+    // be told it worked.
+    const assignments: string[] = [];
+    const params: unknown[] = [actor.tenantId, id];
+    const set = (column: string, value: unknown) => {
+      params.push(value);
+      assignments.push(`${column} = $${params.length}`);
+    };
+    if (input.name !== undefined) set('name', input.name.trim());
+    if (input.countryCode !== undefined) set('country_code', input.countryCode);
+    if (input.networkCode !== undefined) set('network_code', input.networkCode);
+    if (input.status !== undefined) set('status', input.status);
+    if (input.notes !== undefined) set('notes', input.notes);
+    if (!assignments.length) throw new BadRequestException('No fields to update');
+
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const { rows } = await client.query<CarrierRow>(
-        `UPDATE carriers SET
-           name = COALESCE($3, name),
-           country_code = COALESCE($4, country_code),
-           network_code = COALESCE($5, network_code),
-           status = COALESCE($6, status),
-           notes = COALESCE($7, notes),
-           updated_at = now()
+        `UPDATE carriers SET ${assignments.join(', ')}, updated_at = now()
          WHERE id = $2::uuid AND tenant_id = $1 AND deleted_at IS NULL
          RETURNING id::text,name,country_code,network_code,status,notes,created_at,updated_at`,
-        [
-          actor.tenantId,
-          id,
-          input.name?.trim() ?? null,
-          input.countryCode ?? null,
-          input.networkCode ?? null,
-          input.status ?? null,
-          input.notes ?? null,
-        ],
+        params,
       );
       if (!rows[0]) throw new NotFoundException('Carrier not found');
       await this.audit(client, actor, 'carrier.updated', id, input);
@@ -277,11 +284,20 @@ export class CarrierService {
     });
   }
 
-  /** Attach or detach one SMSC. Returns the SMSC's new owner, or null. */
+  /**
+   * Attach or detach one SMSC. Returns the SMSC's new owner, or null.
+   *
+   * `expectedCarrierId` guards a detach against the carrier it was issued from.
+   * Without it, `DELETE /carriers/A/smscs/X` detaches X from whatever carrier
+   * currently holds it — so a stale browser tab showing carrier A, opened
+   * before X was moved to carrier B, silently unfiles it from B instead. The
+   * audit row would record a detach that looked entirely correct.
+   */
   async assignSmsc(
     actor: Actor,
     smscId: string,
     carrierId: string | null,
+    expectedCarrierId?: string,
   ): Promise<{ smscId: string; carrierId: string | null }> {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       if (carrierId) {
@@ -291,11 +307,22 @@ export class CarrierService {
         );
         if (!rowCount) throw new NotFoundException('Carrier not found');
       }
+      // Both the ownership check and the write are one statement, so the row
+      // cannot be reassigned between reading it and updating it.
+      const predicate = expectedCarrierId ? ' AND carrier_id = $3::uuid' : '';
+      const params: unknown[] = [smscId, carrierId];
+      if (expectedCarrierId) params.push(expectedCarrierId);
       const { rowCount } = await client.query(
-        'UPDATE smsc_definitions SET carrier_id = $2, updated_at = now() WHERE id = $1::uuid AND deleted_at IS NULL',
-        [smscId, carrierId],
+        `UPDATE smsc_definitions SET carrier_id = $2, updated_at = now()
+          WHERE id = $1::uuid AND deleted_at IS NULL${predicate}`,
+        params,
       );
-      if (!rowCount) throw new NotFoundException('SMSC not found');
+      if (!rowCount)
+        throw new NotFoundException(
+          expectedCarrierId
+            ? 'SMSC not found on this carrier — it may have been moved since this page was loaded'
+            : 'SMSC not found',
+        );
       await this.audit(client, actor, 'carrier.smsc_assigned', smscId, { carrierId });
       return { smscId, carrierId };
     });

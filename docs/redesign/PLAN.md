@@ -109,14 +109,14 @@ Foundational: every later screen depends on these.
       rather than guessing.
 - [x] **2.2 Carrier aggregation read model** — SMSC count, healthy/failed binds,
       current TPS, queue, delivery %, open alerts, rolled up per carrier.
-- [ ] **2.3 Carriers register + Carrier detail** screens.
-- [ ] **2.4 SMSC detail** screen to spec §4.2 — state, sessions, TPS, capacity
+- [x] **2.3 Carriers register + Carrier detail** screens.
+- [x] **2.4 SMSC detail** screen to spec §4.2 — state, sessions, TPS, capacity
       and utilisation, queue depth + oldest age, DLR rate, last event, actions.
-- [ ] **2.5 SMPP Sessions** screen — built strictly on what bearerbox reports,
+- [x] **2.5 SMPP Sessions** screen — built strictly on what bearerbox reports,
       with an explicit, prominent statement of what it cannot (per-session
       identity under `instances > 1`, enquire-link RTT, PDU counters). Bind
       timeline from `smsc_bind_transitions`, which we already keep forever.
-- [ ] **2.6 Capacity utilisation.** `smsc_definitions.tps` is currently consumed
+- [x] **2.6 Capacity utilisation.** `smsc_definitions.tps` is currently consumed
       only by the config generator; compare observed rate against it and surface
       utilisation. Note the earlier finding: `throughput` is per connection, so
       with `instances = N` the effective ceiling is `N × tps`.
@@ -210,4 +210,4 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | 1.5 hierarchical breadcrumbs + 1.6 shared time range | acfcc4e |
 | 2026-08-06 | 1.4 global estate search | f91f93d |
 | 2026-08-06 | 1.7 nav restructured to the specification IA — **Phase 1 complete** | 2faf9f7 |
-| 2026-08-06 | 2.1 carrier object (migration 048) + 2.2 aggregation read model | — |
+| 2026-08-06 | 2.1 carrier object (migration 048) + 2.2 aggregation read model | a22f7ed |

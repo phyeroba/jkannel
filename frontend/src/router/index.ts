@@ -262,6 +262,61 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Carrier → SMSC → bind is the operational hierarchy the specification is
+    // built around (§4). All four routes read `smsc.view`; the carrier object
+    // is an organisational label over SMSCs and carries nothing an operator
+    // could not already reach through them, so it does not introduce a
+    // permission an existing SMSC administrator would not already hold.
+    path: '/carriers',
+    name: 'carriers',
+    component: () => import('../views/CarriersView.vue'),
+    meta: {
+      title: 'Carriers',
+      description:
+        'Every network the gateway connects to, its rolled-up bind health, and the SMSC connections not yet filed under one.',
+      breadcrumb: ['Carriers'],
+      permission: 'smsc.view',
+    },
+  },
+  {
+    path: '/carriers/:id',
+    name: 'carrier-detail',
+    component: () => import('../views/CarrierDetailView.vue'),
+    meta: {
+      // The static crumb is a placeholder: the view publishes the real trail
+      // (Carriers / MTN Uganda) once the carrier's name is known.
+      title: 'Carrier',
+      description: 'One carrier, its health roll-up, and the SMSC connections filed under it.',
+      breadcrumb: ['Carriers', 'Carrier'],
+      permission: 'smsc.view',
+    },
+  },
+  {
+    path: '/smsc/:engineId',
+    name: 'smsc-detail',
+    component: () => import('../views/SmscDetailView.vue'),
+    meta: {
+      title: 'SMSC Connection',
+      description:
+        'Bind state, capacity against observed throughput, queue and counters, and the bind transition history for one connection.',
+      breadcrumb: ['SMSC Connections', 'Connection'],
+      permission: 'smsc.view',
+    },
+  },
+  {
+    // NOT /sessions — that is operator login sessions and stays that way.
+    path: '/sessions-smpp',
+    name: 'sessions-smpp',
+    component: () => import('../views/SmppSessionsView.vue'),
+    meta: {
+      title: 'SMPP Sessions',
+      description:
+        'Every configured bind across the estate, with an explicit statement of the per-session detail this engine cannot report.',
+      breadcrumb: ['SMPP Sessions'],
+      permission: 'smsc.view',
+    },
+  },
+  {
     path: '/roles',
     name: 'roles',
     component: RolesView,

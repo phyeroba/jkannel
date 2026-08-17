@@ -43,6 +43,11 @@ export const CONSOLE_GRIDS = {
       enabled: 's.enabled',
       lifecycleState: 's.lifecycle_state',
       engineId: 's.engine_id',
+      // Lets the Connectivity screens ask for one carrier's connections in one
+      // request. Without it they had to fetch every SMSC and then call the
+      // detail endpoint per row to discover its carrier and bind state.
+      carrierId: 's.carrier_id',
+      bindState: 'b.state',
     },
     defaultOrderBy: 's.priority, s.name',
   },
@@ -228,8 +233,11 @@ export class ConsoleRepository {
       actor,
       {
         select:
-          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
-        from: 'FROM smsc_definitions s',
+          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,s.carrier_id::text AS carrier_id,s.connection_count,b.state AS bind_state,b.observed_at AS bind_observed_at,b.queued_count,b.failed_count,(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
+        // LEFT JOIN, so an SMSC that has never been observed still appears —
+        // with a null bind state, which the console renders as 'never
+        // observed' rather than as a down bind.
+        from: 'FROM smsc_definitions s LEFT JOIN smsc_bind_state b ON b.smsc_id = s.id',
       },
       CONSOLE_GRIDS.smscs,
       query,

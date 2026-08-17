@@ -3,6 +3,8 @@ import { AuthModule } from '../security/auth.module';
 import { DatabaseService } from '../database/database.service';
 import { CarrierController } from './carrier.controller';
 import { CarrierService } from './carrier.service';
+import { SmscDetailController } from './smsc-detail.controller';
+import { SmscDetailService } from './smsc-detail.service';
 
 /**
  * Connectivity: the operational hierarchy above the engine's flat SMSC list
@@ -13,8 +15,8 @@ import { CarrierService } from './carrier.service';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [CarrierController],
-  providers: [DatabaseService, CarrierService],
-  exports: [CarrierService],
+  controllers: [CarrierController, SmscDetailController],
+  providers: [DatabaseService, CarrierService, SmscDetailService],
+  exports: [CarrierService, SmscDetailService],
 })
 export class ConnectivityModule {}
