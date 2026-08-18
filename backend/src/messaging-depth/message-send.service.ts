@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
@@ -7,6 +7,11 @@ import {
   RouteResolutionService,
   SendRouteDecision,
 } from '../routing-depth/route-resolution.service';
+import {
+  applyRouteRule,
+  type OverrideSet,
+  type RouteRuleEffect,
+} from '../routing-depth/route-overrides';
 import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { ContentFilterService } from './content-filter.service';
@@ -125,7 +130,7 @@ export interface SendResult {
   validityMinutes: number | null;
 }
 
-type DecisionOutcome = 'routed' | 'explicit' | 'rerouted' | 'rejected';
+type DecisionOutcome = 'routed' | 'explicit' | 'rerouted' | 'rejected' | 'dropped';
 
 /**
  * Folds a content-filter verdict into the decision record: the deciding rule's
@@ -165,6 +170,17 @@ interface DecisionRecord {
    */
   contentRuleId: string | null;
   contentRuleName: string | null;
+  /**
+   * What the routing rule rewrote, as `{field: {from, to}}` (migration 052).
+   *
+   * Structural, not prose, because the question after the fact is "the customer
+   * says they sent from URASMS and the subscriber saw 7077" and that has to be
+   * answerable by query. Only the LENGTH of a replaced body is stored — see
+   * route-overrides.ts.
+   */
+  appliedOverrides?: OverrideSet | null;
+  /** The rule that dropped this message, when one did. */
+  droppedByRule?: string | null;
 }
 
 /**
@@ -247,8 +263,8 @@ export class MessageSendService {
            (tenant_id, customer_id, message_ref, foreign_id, channel, sender, destination,
             destination_raw, route_id, route_name, strategy, smsc_id, requested_smsc_id,
             fallback_used, outcome, reason, available_smsc_ids, candidates_considered, trace, created_by,
-            content_rule_id, content_rule_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+            content_rule_id, content_rule_name, applied_overrides, dropped_by_rule)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
          RETURNING id::text`,
         [
           actor.tenantId,
@@ -273,6 +289,12 @@ export class MessageSendService {
           actor.userId,
           record.contentRuleId,
           record.contentRuleName,
+          // Null rather than `{}` when nothing was rewritten, so "no override"
+          // and "an override we failed to capture" stay distinguishable.
+          record.appliedOverrides && Object.keys(record.appliedOverrides).length
+            ? JSON.stringify(record.appliedOverrides)
+            : null,
+          record.droppedByRule ?? null,
         ],
       )
     ).rows[0];
@@ -309,9 +331,13 @@ export class MessageSendService {
   async send(actor: Actor, request: SendRequest): Promise<SendResult> {
     const normalized = normalizeMsisdn(request.receiver);
     if (!normalized.digits) throw new BadRequestException(describeMsisdnProblem(normalized));
-    const destination = normalized.digits;
+    // Reassignable, because a matched routing rule may rewrite any of the three
+    // before the message is spooled (migration 052). The ORIGINAL values stay
+    // available on `request` and `normalized`, which is what the audit needs.
+    let destination = normalized.digits;
     const requestedSmscId = request.smscId?.trim() || null;
-    const sender = request.sender ?? '';
+    let sender = request.sender ?? '';
+    let body = request.text ?? '';
 
     const base: DecisionRecord = {
       customerId: request.customerId ?? null,
@@ -382,6 +408,59 @@ export class MessageSendService {
         let record: DecisionRecord = { ...forensic, ...chosen.record };
         forensic = record;
 
+        // 4b. WHAT THE RULE DOES (migration 052). A matched rule may drop the
+        // message, or rewrite its sender, recipient or body.
+        //
+        // Evaluated HERE — after the route is known, before entitlements are
+        // consumed and before anything is spooled. A drop must not debit a
+        // customer for a message that is never sent, and an overridden sender
+        // must be the one the sender-ID entitlement check actually approves;
+        // approving URASMS and then transmitting 7077 would make that check
+        // decorative.
+        const effect = chosen.effect ?? null;
+        if (effect?.action === 'drop') {
+          const dropped = applyRouteRule(
+            { sender, recipient: destination, text: request.text ?? '' },
+            effect,
+            record.routeName ?? 'a routing rule',
+          );
+          if (dropped.decision !== 'drop') throw new Error('unreachable');
+          // Recorded on `forensic`, NOT inserted here.
+          //
+          // This transaction is about to roll back, and a decision written
+          // inside it would roll back with it — leaving exactly the silence the
+          // drop was supposed to be explainable by. The catch block's
+          // `recordRejection` writes it in a fresh transaction instead, which is
+          // the same mechanism every other refusal on this path already uses.
+          record = {
+            ...record,
+            outcome: 'dropped',
+            reason: dropped.summary,
+            droppedByRule: record.routeName ?? null,
+          };
+          forensic = record;
+          throw new ForbiddenException(dropped.summary);
+        }
+
+        const rewritten = applyRouteRule(
+          { sender, recipient: destination, text: request.text ?? '' },
+          effect ?? { action: 'route' },
+          record.routeName ?? 'a routing rule',
+        );
+        if (rewritten.decision !== 'send') throw new Error('unreachable');
+        sender = rewritten.message.sender ?? '';
+        destination = rewritten.message.recipient;
+        body = rewritten.message.text;
+        if (rewritten.summary) {
+          record = {
+            ...record,
+            appliedOverrides: rewritten.overrides,
+            reason: [record.reason, rewritten.summary].filter(Boolean).join('; '),
+            trace: [...(record.trace ?? []), rewritten.summary],
+          };
+          forensic = record;
+        }
+
         // 3c. The deferred half of content filtering: the carrier is now known,
         // and NOTHING has been consumed or spooled yet — route selection is a
         // pure read. A refusal here is as clean as one before routing.
@@ -422,9 +501,15 @@ export class MessageSendService {
         // For a bulk campaign that gap is minutes, not milliseconds.
         const columns = engineScheduleColumns(request.schedule);
         const queued = await this.sqlbox.submit({
+          // `sender`, `destination` and `body` are the POST-override values.
+          // `normalized.e164` is only used when the recipient was NOT rewritten;
+          // an overridden recipient has not been through the normaliser, so
+          // preferring the cached E.164 there would silently send to the
+          // original number the rule was rewriting away from.
           sender,
-          receiver: normalized.e164 ?? destination,
-          text: request.text,
+          receiver:
+            destination === normalized.digits ? (normalized.e164 ?? destination) : destination,
+          text: body,
           smscId: chosen.smscId,
           dlrMask: request.dlrMask,
           dlrUrl: request.dlrUrl,
@@ -495,7 +580,11 @@ export class MessageSendService {
     } catch (error) {
       await this.recordRejection(actor, {
         ...forensic,
-        outcome: 'rejected',
+        // A rule that DROPPED the message keeps that outcome. Overwriting it
+        // with the generic `rejected` would lose the distinction between "a
+        // routing rule refused this deliberately" and "something went wrong",
+        // which is precisely the question a customer asks.
+        outcome: forensic.outcome === 'dropped' ? 'dropped' : 'rejected',
         messageRef: null,
         reason: forensic.reason
           ? `${forensic.reason}; refused: ${String((error as Error).message ?? error)}`
@@ -523,7 +612,14 @@ export class MessageSendService {
     request: SendRequest,
     destination: string,
     requestedSmscId: string | null,
-  ): Promise<{ smscId: string; cost: number | null; record: Partial<DecisionRecord> }> {
+  ): Promise<{
+    smscId: string;
+    cost: number | null;
+    record: Partial<DecisionRecord>;
+    // What the winning rule DOES. Null for a caller-pinned bind: the caller
+    // named the SMSC directly, so no rule was consulted and none may rewrite.
+    effect: RouteRuleEffect | null;
+  }> {
     if (requestedSmscId) {
       const allowed = await this.tenantSmscScope(client);
       if (!allowed.includes(requestedSmscId))
@@ -540,6 +636,7 @@ export class MessageSendService {
               record: this.fromDecision(decision, 'rerouted', requestedSmscId, {
                 prefix: `pinned bind ${requestedSmscId} is not bound`,
               }),
+              effect: decision.effect ?? null,
             };
         }
       }
@@ -554,6 +651,9 @@ export class MessageSendService {
           reason: `explicit smscId supplied by the caller (${request.channel})`,
           trace: [`caller pinned bind ${requestedSmscId}`],
         },
+        // The caller named the bind, so no rule was consulted — and a rule
+        // that was never selected must not rewrite the message.
+        effect: null,
       };
     }
 
@@ -569,6 +669,7 @@ export class MessageSendService {
       smscId: decision.smscId,
       cost: decision.cost,
       record: this.fromDecision(decision, 'routed', null),
+      effect: decision.effect ?? null,
     };
   }
 

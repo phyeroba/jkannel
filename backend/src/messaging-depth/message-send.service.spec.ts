@@ -23,6 +23,14 @@ interface RouteFixture {
   cost?: string | null;
   target_smsc_id: string;
   fallback_smsc_id?: string | null;
+  // Migration 052.
+  route_type?: string;
+  sender?: string | null;
+  action?: string;
+  override_sender?: string | null;
+  override_recipient?: string | null;
+  override_text?: string | null;
+  drop_reason?: string | null;
 }
 
 function routeRow(fixture: RouteFixture) {
@@ -33,19 +41,24 @@ function routeRow(fixture: RouteFixture) {
     priority: fixture.priority ?? 10,
     enabled: fixture.enabled ?? true,
     deployment_state: fixture.deployment_state ?? 'deployed',
-    route_type: 'prefix',
+    route_type: fixture.route_type ?? 'prefix',
     strategy: 'priority',
     match_prefix: fixture.match_prefix ?? '256',
     country_code: null,
     operator: null,
     destination_prefix: null,
-    sender: null,
+    sender: fixture.sender ?? null,
     cost: fixture.cost ?? null,
     target_smsc_id: fixture.target_smsc_id,
     fallback_smsc_id: fixture.fallback_smsc_id ?? null,
     window_start: null,
     window_end: null,
     active_days: null,
+    action: fixture.action ?? 'route',
+    override_sender: fixture.override_sender ?? null,
+    override_recipient: fixture.override_recipient ?? null,
+    override_text: fixture.override_text ?? null,
+    drop_reason: fixture.drop_reason ?? null,
     created_at: 'now',
     updated_at: 'now',
   };
@@ -259,6 +272,8 @@ function makeStack(fixture: StackFixture) {
           trace: params[18],
           contentRuleId: params[20],
           contentRuleName: params[21],
+          appliedOverrides: params[22],
+          droppedByRule: params[23],
         });
         return { rows: [{ id }] };
       }
@@ -882,5 +897,168 @@ describe('MessageSendService — content filtering on the send path', () => {
     await service.send(actor, { ...message, text: 'a'.repeat(60) + '!', channel: 'console' });
     expect(Date.now() - started).toBeLessThan(2000);
     expect(sqlbox.submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MessageSendService — route rule actions and overrides (SMS Studio parity, migration 052)', () => {
+  it('rewrites the sender id, and submits the NEW one to the engine', async () => {
+    // "Ordinal 2 Rule is set and ENABLED to act as a failover for MTN traffic
+    // ... SenderID overwrites to 7077 for all MTN traffic."
+    const { service, sqlbox, state } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-mtn',
+          name: 'UraMtn-failover',
+          target_smsc_id: 'smsc-a',
+          override_sender: '7077',
+        }),
+      ],
+    });
+
+    await service.send(actor, { ...message, sender: 'URASMS', channel: 'console' });
+
+    // The override is worthless if the engine still gets the original.
+    expect(sqlbox.submit.mock.calls[0][0].sender).toBe('7077');
+    expect(state.decisions[0].appliedOverrides).toBeTruthy();
+    expect(JSON.parse(String(state.decisions[0].appliedOverrides))).toEqual({
+      sender: { from: 'URASMS', to: '7077' },
+    });
+    expect(String(state.decisions[0].reason)).toContain('sender URASMS → 7077');
+  });
+
+  it('records no override when the rule rewrites nothing', async () => {
+    const { service, state } = makeStack({
+      routes: [routeRow({ id: 'r-ug', name: 'Uganda', target_smsc_id: 'smsc-a' })],
+    });
+    await service.send(actor, { ...message, channel: 'console' });
+    // Null, not {} — "no override" and "an override we failed to capture" must
+    // stay distinguishable in the column.
+    expect(state.decisions[0].appliedOverrides).toBeNull();
+  });
+
+  it('rewrites the recipient and sends to the NEW number, not the normalised original', async () => {
+    const { service, sqlbox } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-div',
+          name: 'Diversion',
+          target_smsc_id: 'smsc-a',
+          override_recipient: '256788999888',
+        }),
+      ],
+    });
+    await service.send(actor, { ...message, channel: 'console' });
+    // The bug this guards: preferring the cached E.164 of the ORIGINAL
+    // recipient would send to the very number the rule was diverting away from.
+    expect(sqlbox.submit.mock.calls[0][0].receiver).toBe('256788999888');
+  });
+
+  it('rewrites the body and submits the replacement', async () => {
+    const { service, sqlbox, state } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-txt',
+          name: 'Notice',
+          target_smsc_id: 'smsc-a',
+          override_text: 'Service notice',
+        }),
+      ],
+    });
+    await service.send(actor, { ...message, text: 'Your OTP is 448120', channel: 'console' });
+
+    expect(sqlbox.submit.mock.calls[0][0].text).toBe('Service notice');
+    // Only the LENGTH of the original is recorded. The decision row is not a
+    // masked read path and lands in exports.
+    const overrides = JSON.parse(String(state.decisions[0].appliedOverrides));
+    expect(overrides.text).toEqual({ from: '18 characters', to: 'Service notice' });
+    expect(String(state.decisions[0].appliedOverrides)).not.toContain('448120');
+  });
+
+  it('drops matching traffic, submits nothing, and records why', async () => {
+    // "Ordinal 1 : Unknown is dropping all traffic of unknown networks."
+    const { service, sqlbox, state } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-drop',
+          name: 'Unknown',
+          target_smsc_id: 'smsc-a',
+          action: 'drop',
+          drop_reason: 'Unknown network prefix',
+        }),
+      ],
+    });
+
+    await expect(service.send(actor, { ...message, channel: 'console' })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+
+    expect(sqlbox.submit).not.toHaveBeenCalled();
+    // A drop is a DECISION, not a silence. "Traffic vanished" with no row to
+    // point at is the worst failure this feature can produce.
+    const dropped = state.decisions.find((d) => d.outcome === 'dropped');
+    expect(dropped).toBeTruthy();
+    expect(dropped?.droppedByRule).toBe('Unknown');
+    expect(String(dropped?.reason)).toContain('Unknown network prefix');
+  });
+
+  it('does not let a caller-pinned bind be rewritten by a rule it never selected', async () => {
+    const { service, sqlbox } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-mtn',
+          name: 'MTN',
+          target_smsc_id: 'smsc-a',
+          override_sender: '7077',
+        }),
+      ],
+    });
+    await service.send(actor, {
+      ...message,
+      sender: 'URASMS',
+      smscId: 'local-fake-b',
+      channel: 'console',
+    });
+    // The caller named the SMSC, so no rule was consulted — and a rule that was
+    // never selected must not rewrite the message.
+    expect(sqlbox.submit.mock.calls[0][0].sender).toBe('URASMS');
+  });
+
+  it('matches with the wildcard grammar the document uses', async () => {
+    const { service, sqlbox } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-mtn',
+          name: 'MTN Uganda',
+          route_type: 'wildcard',
+          match_prefix: '25677*|25678*|25676*|25679*',
+          target_smsc_id: 'smsc-a',
+          override_sender: '7077',
+        }),
+      ],
+    });
+    await service.send(actor, {
+      ...message,
+      receiver: '+256772000118',
+      sender: 'URASMS',
+      channel: 'console',
+    });
+    expect(sqlbox.submit.mock.calls[0][0].sender).toBe('7077');
+  });
+
+  it('leaves an Airtel number unmatched by an MTN wildcard, rather than over-matching', async () => {
+    const { service } = makeStack({
+      routes: [
+        routeRow({
+          id: 'r-mtn',
+          name: 'MTN Uganda',
+          route_type: 'wildcard',
+          match_prefix: '25677*|25678*',
+          target_smsc_id: 'smsc-a',
+        }),
+      ],
+    });
+    await expect(
+      service.send(actor, { ...message, receiver: '+256700123456', channel: 'console' }),
+    ).rejects.toThrow(/No route is available/);
   });
 });

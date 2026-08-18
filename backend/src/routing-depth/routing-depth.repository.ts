@@ -3,6 +3,7 @@ import { PoolClient, QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { GridDefinition, buildGridSql, parseListQuery } from '../platform/list-query';
 import { CandidateRoute, RouteType, SelectionStrategy, TimeWindow } from './route-selection';
+import type { RouteAction } from './route-overrides';
 
 export interface Actor {
   tenantId: string;
@@ -76,6 +77,12 @@ interface RouteRow extends QueryResultRow {
   window_start: string | null;
   window_end: string | null;
   active_days: string | null;
+  // Migration 052: what the rule DOES beyond choosing an SMSC.
+  action: RouteAction;
+  override_sender: string | null;
+  override_recipient: string | null;
+  override_text: string | null;
+  drop_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -90,7 +97,7 @@ interface TargetRow extends QueryResultRow {
 }
 
 const ROUTE_COLUMNS =
-  'id,tenant_id,name,priority,enabled,route_type,strategy,match_prefix,country_code,operator,destination_prefix,sender,cost,target_smsc_id,fallback_smsc_id,window_start,window_end,active_days,created_at,updated_at';
+  'id,tenant_id,name,priority,enabled,route_type,strategy,match_prefix,country_code,operator,destination_prefix,sender,cost,target_smsc_id,fallback_smsc_id,window_start,window_end,active_days,action,override_sender,override_recipient,override_text,drop_reason,created_at,updated_at';
 
 export const ROUTING_GRIDS = {
   routes: {
@@ -525,6 +532,11 @@ export class RoutingDepthRepository {
             enabled: t.enabled,
           })),
           window,
+          action: route.action ?? 'route',
+          overrideSender: route.override_sender,
+          overrideRecipient: route.override_recipient,
+          overrideText: route.override_text,
+          dropReason: route.drop_reason,
         };
         return candidate;
       }),

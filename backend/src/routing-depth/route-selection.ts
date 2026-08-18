@@ -21,8 +21,17 @@
  */
 
 import { digitsOnly } from './msisdn';
+import { matchesWildcard } from './wildcard';
+import type { RouteAction, RouteRuleEffect } from './route-overrides';
 
-export type RouteType = 'static' | 'prefix' | 'country' | 'operator' | 'weighted';
+export type RouteType =
+  | 'static'
+  | 'prefix'
+  | 'country'
+  | 'operator'
+  | 'weighted'
+  // SMS Studio wildcard grammar against the destination: * # $ |
+  | 'wildcard';
 
 export type SelectionStrategy =
   'priority' | 'least-cost' | 'load-balance' | 'round-robin' | 'time-based';
@@ -64,7 +73,13 @@ export interface CandidateRoute {
   operator?: string | null;
   /** Legacy destination prefix from routing_rules; used by `static` routes. */
   destinationPrefix?: string | null;
-  /** Optional exact sender-id constraint; when set the message sender must equal it. */
+  /**
+   * Optional sender-id constraint, matched as a wildcard pattern.
+   *
+   * A value with no metacharacter is an anchored exact match, which is what
+   * every rule written before the grammar existed already meant — so this is
+   * an addition, not a change. `URA*` and `URASMS|URAOTP` now work too.
+   */
   sender?: string | null;
   /** Per-route cost used by least-cost when the route has no per-target cost. */
   cost?: number | null;
@@ -76,6 +91,17 @@ export interface CandidateRoute {
   targets?: RouteTarget[];
   /** Active window for a `time-based` route. */
   window?: TimeWindow | null;
+
+  // --- migration 052: what the rule DOES once it has matched ----------------
+  // Carried on the candidate rather than fetched separately, so the send path
+  // reads the effect from the same row it read the match from and the two can
+  // never disagree.
+  /** `route` (default) or `drop`. */
+  action?: RouteAction;
+  overrideSender?: string | null;
+  overrideRecipient?: string | null;
+  overrideText?: string | null;
+  dropReason?: string | null;
 }
 
 export interface SelectionContext {
@@ -113,6 +139,18 @@ export interface SelectionResult {
   reason: string;
   /** Ordered trace of the decision steps, for the preview endpoint. */
   trace: string[];
+  /**
+   * What the controlling rule DOES once it has matched (migration 052): drop,
+   * or rewrite the sender / recipient / body.
+   *
+   * Carried on the selection result rather than fetched by the caller, so the
+   * effect always comes from the same route the selector actually chose. A
+   * second lookup could resolve a different rule under concurrent edits and
+   * apply an override that nothing selected.
+   *
+   * Null when no route matched at all.
+   */
+  effect?: RouteRuleEffect | null;
 }
 
 /**
@@ -152,9 +190,23 @@ export function isWithinWindow(window: TimeWindow | null | undefined, now: Date)
 function matchSpecificity(route: CandidateRoute, ctx: SelectionContext): number | null {
   const digits = normalizeMsisdn(ctx.msisdn);
   // A sender constraint, when present, must match regardless of route type.
-  if (route.sender && route.sender !== (ctx.sender ?? '')) return null;
+  //
+  // Matched as a wildcard rather than by string equality. This is deliberately
+  // behaviour-preserving: a pattern with no metacharacter compiles to an
+  // anchored exact match, which is what every existing rule already means. What
+  // it adds is `URA*` and `URASMS|URAOTP`, which previously needed one rule per
+  // sender id.
+  if (route.sender && !matchesWildcard(ctx.sender ?? '', route.sender)) return null;
 
   switch (route.routeType) {
+    // The SMS Studio grammar (`*`, `#`, `$`, `|`) against the destination.
+    // Exists because `25677*|25678*|25676*|25679*` — "all MTN Uganda" — was
+    // four separate prefix rules to create, keep in step and disable together.
+    case 'wildcard': {
+      const pattern = route.matchPrefix ?? route.destinationPrefix ?? '';
+      if (!pattern.trim()) return null;
+      return matchesWildcard(digits, pattern) ? wildcardSpecificity(pattern) : null;
+    }
     case 'prefix': {
       const prefix = normalizeMsisdn(route.matchPrefix ?? '');
       if (!prefix) return 0;
@@ -180,6 +232,35 @@ function matchSpecificity(route: CandidateRoute, ctx: SelectionContext): number 
       return digits.startsWith(prefix) ? prefix.length : null;
     }
   }
+}
+
+/**
+ * How specific a wildcard pattern is, so a narrow one beats a catch-all.
+ *
+ * Counted as the literal characters in the LEAST specific alternative, not the
+ * most. `25677*|*` must not outrank `2567*` on the strength of its first
+ * alternative when its second matches everything — the pattern as a whole is
+ * only as narrow as its widest branch.
+ */
+function wildcardSpecificity(pattern: string): number {
+  const alternatives = pattern.split('|');
+  let weakest = Number.POSITIVE_INFINITY;
+  for (const alternative of alternatives) {
+    const literals = alternative.replace(/[*#$]/g, '').length;
+    if (literals < weakest) weakest = literals;
+  }
+  return Number.isFinite(weakest) ? weakest : 0;
+}
+
+/** The controlling route's effect, defaulted so a pre-052 row still routes. */
+function effectOf(route: CandidateRoute): RouteRuleEffect {
+  return {
+    action: route.action ?? 'route',
+    overrideSender: route.overrideSender ?? null,
+    overrideRecipient: route.overrideRecipient ?? null,
+    overrideText: route.overrideText ?? null,
+    dropReason: route.dropReason ?? null,
+  };
 }
 
 function isAvailable(smscId: string | null | undefined, ctx: SelectionContext): boolean {
@@ -303,6 +384,7 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
         fallbackUsed: false,
         reason: explained,
         trace,
+        effect: effectOf(controllingRoute),
       };
     }
     trace.push(`selected SMSC ${chosen.smscId} (${reason})`);
@@ -314,6 +396,7 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
       fallbackUsed: !chosen.primary,
       reason,
       trace,
+      effect: effectOf(controllingRoute),
     };
   };
 
