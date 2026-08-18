@@ -27,9 +27,42 @@ engine names.
 
 ## Screenshots
 
-| Sign in | Operations dashboard | Analytics & reports |
+All captured from a development stack with fake binds and no real traffic —
+never from production. Subscriber numbers and message bodies are masked by
+default in the product itself, and the SMSC identifiers shown here are
+synthetic.
+
+| Sign in | Operations dashboard | Reports & analytics |
 |---|---|---|
-| ![JKANNEL login](docs/screenshots/login.png) | ![JKANNEL operations dashboard](docs/screenshots/dashboard.png) | ![JKANNEL analytics and reports](docs/screenshots/analytics.png) |
+| ![JKANNEL login](docs/screenshots/login.png) | ![Operations dashboard](docs/screenshots/dashboard.png) | ![Reports and analytics](docs/screenshots/analytics.png) |
+
+**System health** — every component the gateway depends on, which dependency
+explains a failure, and the components nothing watches (counted apart from
+healthy, never folded into it).
+
+| Services board | Nodes | Runtime |
+|---|---|---|
+| ![Services board](docs/screenshots/services.png) | ![Nodes and resource pressure](docs/screenshots/nodes.png) | ![Live traffic](docs/screenshots/live-traffic.png) |
+
+**Connectivity and routing**
+
+| Carriers | SMSC connections | Routing |
+|---|---|---|
+| ![Carriers](docs/screenshots/carriers.png) | ![SMSC connections](docs/screenshots/smsc.png) | ![Routing](docs/screenshots/routing.png) |
+
+**Traffic and diagnostics** — the message grid is masked by default; seeing real
+values needs the `messages.reveal` permission *and* a reasoned, time-limited,
+audited window.
+
+| Messages (masked) | Queues | Message trace |
+|---|---|---|
+| ![Messages, masked by default](docs/screenshots/messages.png) | ![Queues](docs/screenshots/queues.png) | ![Message trace](docs/screenshots/message-trace.png) |
+
+| Test tools | API reference |
+|---|---|
+| ![Test tools](docs/screenshots/test-tools.png) | ![API reference](docs/screenshots/api-reference.png) |
+
+> Regenerate with `node e2e/screenshots.mjs` against a running local stack.
 
 ## What it does
 
