@@ -365,6 +365,24 @@ export const navigation: NavigationItem[] = [
     icon: 'api',
     group: 'Platform',
   },
+  // §14. Services is first in this group and above Runtime Containers on
+  // purpose: it answers "which component is broken and why", which is the
+  // question an operator arrives with. Runtime Containers answers "what is
+  // declared in Compose", which is a deployment question.
+  {
+    label: 'Services',
+    to: '/services',
+    icon: 'server',
+    permission: 'system.view',
+    group: 'System',
+  },
+  {
+    label: 'Nodes',
+    to: '/nodes',
+    icon: 'server',
+    permission: 'system.view',
+    group: 'System',
+  },
   {
     label: 'Runtime Containers',
     to: '/docker',

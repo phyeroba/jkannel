@@ -317,6 +317,33 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // §14. Separate from /docker, which lists declared Compose services; this
+    // is the component register with dependency attribution, and it says which
+    // components nothing is watching.
+    path: '/services',
+    name: 'services',
+    component: () => import('../views/ServicesView.vue'),
+    meta: {
+      title: 'Services',
+      description:
+        'Every component the gateway depends on, its observed state, and which dependency explains a failure — plus the components nothing watches.',
+      breadcrumb: ['Services'],
+      permission: 'system.view',
+    },
+  },
+  {
+    path: '/nodes',
+    name: 'nodes',
+    component: () => import('../views/NodesView.vue'),
+    meta: {
+      title: 'Nodes',
+      description:
+        'Resource pressure on the one node JKANNEL can measure, with an explicit statement of the host figures it cannot.',
+      breadcrumb: ['Nodes'],
+      permission: 'system.view',
+    },
+  },
+  {
     // Traffic, in the specification's own order: what is moving now, what is
     // waiting, and whether it arrived (§6, §7, §8). Queues is not here because
     // it is the existing /queues workspace with the §7 rates panel added to it.

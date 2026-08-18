@@ -33,6 +33,8 @@ describe('primary navigation contract', () => {
         '/customers',
         '/api-gateway',
         '/api-reference',
+        '/services',
+        '/nodes',
         '/docker',
         '/logs-audit',
         '/plugins',
@@ -51,7 +53,7 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(42);
+    expect(navigation).toHaveLength(44);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -128,6 +130,17 @@ describe('primary navigation contract', () => {
     );
     // The number/prefix lookup is the endpoint that decides Test Tools' gate.
     expect(navigation.find((item) => item.to === '/test-tools')?.permission).toBe('routes.view');
+  });
+
+  it('puts Services above Runtime Containers in System', () => {
+    const system = navigation.filter((item) => item.group === 'System').map((item) => item.to);
+    // §14. Services answers "which component is broken and why", which is the
+    // question an operator arrives with; Runtime Containers answers "what is
+    // declared in Compose", which is a deployment question.
+    expect(system.indexOf('/services')).toBeLessThan(system.indexOf('/docker'));
+    expect(system).toContain('/nodes');
+    expect(navigation.find((item) => item.to === '/services')?.permission).toBe('system.view');
+    expect(navigation.find((item) => item.to === '/nodes')?.permission).toBe('system.view');
   });
 
   it('keeps the API reference reachable for every authenticated user', () => {

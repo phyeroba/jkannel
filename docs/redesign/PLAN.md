@@ -169,19 +169,29 @@ Foundational: every later screen depends on these.
 
 ### Phase 6 — Privacy (§17, §18)
 
-- [ ] **6.1 MSISDN and content masking by default** on every operational read
+- [x] **6.1 MSISDN and content masking by default** on every operational read
       path (`/messages`, exports, `/queues`, `/reports/delivery`, `/mo/messages`
-      all currently return sender, receiver and body in the clear).
-- [ ] **6.2 Privileged reveal** — time-limited, permissioned, and audited as its
-      own action type.
+      all currently return sender, receiver and body in the clear). Also closed:
+      `/messages/:id/trace`, the PDF export, and the raw-rows panel of
+      `/diagnostics/messages/:id/lifecycle`, which the original audit missed.
+- [x] **6.2 Privileged reveal** — time-limited, permissioned, and audited as its
+      own action type. Migration 051; `messages.reveal` is separate from
+      `messages.view` so masking protects someone.
 
 ### Phase 7 — System and platform health (§14)
 
-- [ ] **7.1 Services board** — bearerbox, smsbox, DLR store, database, metrics
-      collector. Two of five are covered today.
-- [ ] **7.2 Nodes / Performance.** No node telemetry exists and the backend has
-      no Docker socket. Either add a collector or state the limit honestly rather
-      than shipping an empty screen.
+- [x] **7.1 Services board** — bearerbox, smsbox, DLR store, database, metrics
+      collector. Two of five were covered; smsbox and Prometheus had no probe at
+      all and now do, plus the job worker, which had no health surface despite
+      computing the numbers every cycle. Eight components with a dependency
+      graph and root-cause attribution. Unobserved components are counted and
+      sorted apart from healthy, never folded into the green count.
+- [x] **7.2 Nodes / Performance.** Resolved as *state the limit honestly*. There
+      is no node inventory, no host agent and no Docker socket, so the screen
+      reports the one node it can measure — this container, via cgroup v2 — and
+      renders everything it cannot as content with the reason. `os.cpus()` and
+      friends are deliberately unused: inside a container they report the host's
+      figures, which on the shared VPS is another stack's load.
 
 ---
 
@@ -211,3 +221,15 @@ Foundational: every later screen depends on these.
 | 2026-08-06 | 1.4 global estate search | f91f93d |
 | 2026-08-06 | 1.7 nav restructured to the specification IA — **Phase 1 complete** | 2faf9f7 |
 | 2026-08-06 | 2.1 carrier object (migration 048) + 2.2 aggregation read model | a22f7ed |
+| 2026-08-17 | 2.3–2.5 Carriers, Carrier Detail, SMSC Detail, SMPP Sessions screens — **Phase 2 complete** | 31d6402 |
+| 2026-08-17 | 3.1 queue rates + drain estimate that refuses to extrapolate | b85cb6e |
+| 2026-08-17 | 3.2 DLR performance with the receipt-maturity warning | e21fee9 |
+| 2026-08-17 | 3.3–3.5 Live Traffic, Queues, DLR screens — **Phase 3 complete** | b166d9a |
+| 2026-08-17 | 4.1 route-decision read path (written on every send, never queried) | cdd792d |
+| 2026-08-17 | 4.2 operational events, correlated to alerts and audit | b785512 |
+| 2026-08-17 | 4.3–4.5 Diagnostics screens; closed a tenant-scoping bypass — **Phase 4 complete** | fa46010 |
+| 2026-08-18 | 5.1 impact preview, reason capture, suspend/resume | 1407a44 |
+| 2026-08-18 | 5.2–5.5 safe-control screens, route simulator, test tools — **Phase 5 complete** | 61746a3 |
+| 2026-08-18 | 6.1 masking by default on every operational read path | d54db8f |
+| 2026-08-18 | 6.2 time-limited audited reveal (migration 051) | 5977037 |
+| 2026-08-18 | 6.1/6.2 console: masking notice, reveal control, raw-rows panel closed — **Phase 6 complete** | fd0182a |

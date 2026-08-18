@@ -35,6 +35,7 @@ import { ApiGatewayModule } from './api-gateway/api-gateway.module';
 import { DataModelModule } from './data-model/data-model.module';
 import { QueueConsoleModule } from './queue-console/queue-console.module';
 import { LoggingModule } from './platform/logging.module';
+import { PlatformHealthModule } from './platform-health/platform-health.module';
 
 @Module({
   imports: [
@@ -69,6 +70,9 @@ import { LoggingModule } from './platform/logging.module';
     ApiGatewayModule,
     DataModelModule,
     QueueConsoleModule,
+    // §14: /services and /nodes — the component register and what resource
+    // accounting this deployment can honestly produce.
+    PlatformHealthModule,
     // /observability/logs: searches the ring buffer JsonLogger fills.
     LoggingModule,
   ],
