@@ -35,3 +35,22 @@ runtime/**/backups/
 
 # Playwright MCP scratch output (browser snapshots/screenshots)
 .playwright-mcp/
+
+# ---------------------------------------------------------------------------
+# PER-DEPLOYMENT CONFIGURATION — NEVER COMMITTED
+#
+# Every deployment differs: our test server, each developer's own box, whatever
+# production becomes. Ports, hostnames and bind topology are properties of a
+# HOST, not of the product, so none of them belong in the repository.
+#
+# `docker-compose.override.yml` is the dangerous one, because Compose AUTO-LOADS
+# it. Committing ours would silently impose our server's port map and its
+# fakesmsc test bind on every developer who pulls — they would not even see it
+# happen. It was briefly committed; this is the correction.
+#
+#   deploy/<host>/     the real files for a specific machine (git-ignored)
+#   docker-compose.override.example.yml   the committed, documented template
+#   scripts/deploy-config.ps1             ships deploy/<host>/ to that host
+# ---------------------------------------------------------------------------
+docker-compose.override.yml
+deploy/
