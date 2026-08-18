@@ -9,6 +9,8 @@ import MessagePriority from '../components/MessagePriority.vue';
 import QueueRatesPanel from '../components/QueueRatesPanel.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
+import PrivacyReveal from '../components/PrivacyReveal.vue';
+import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
 import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
 import {
@@ -1162,6 +1164,30 @@ const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
 const canManageSystem = computed(() => canAccess(session.value, 'system.manage'));
 const canManageConfig = computed(() => canAccess(session.value, 'configuration.manage'));
 const canAcknowledgeAlerts = computed(() => canAccess(session.value, 'alerts.acknowledge'));
+const canReveal = computed(() => canAccess(session.value, 'messages.reveal'));
+
+/**
+ * The `privacy` block the API attached to the last payload, or null.
+ *
+ * Null is meaningful: it means this workspace's data carries no subscriber
+ * information, so no masking notice belongs on it. Treating null as "unmasked"
+ * would put the notice on screens that have nothing to mask.
+ */
+const privacy = ref<PrivacyState | null>(null);
+/** Whether a reveal window is currently open, per the reveal control. */
+const revealing = ref(false);
+
+/**
+ * The reveal control changed state, so what is on screen no longer matches what
+ * the operator is authorised to see. Re-fetch rather than transform the rows we
+ * already have: the unmasked values were never sent, and un-masking client-side
+ * is not something a masked payload makes possible.
+ */
+function onRevealChanged(value: boolean) {
+  if (revealing.value === value) return;
+  revealing.value = value;
+  void load(true);
+}
 
 const isQueue = computed(() => key.value === 'queues');
 const isDlr = computed(() => key.value === 'delivery-reports');
@@ -1279,6 +1305,19 @@ function messageParams(limitOverride?: number) {
   if (Number.isFinite(from)) params.set('from', new Date(from).toISOString());
   if (Number.isFinite(to)) params.set('to', new Date(to).toISOString());
   params.set('limit', String(limitOverride ?? msgLimit.value));
+  applyReveal(params);
+  return params;
+}
+
+/**
+ * Adds `reveal=true` only while a window is actually open.
+ *
+ * Sent on the export too, deliberately: an export raised from a revealed screen
+ * that came back masked — or the reverse — would mean the file did not contain
+ * what the operator was looking at when they clicked.
+ */
+function applyReveal(params: URLSearchParams) {
+  if (revealing.value) params.set('reveal', 'true');
   return params;
 }
 const messageDateFiltered = computed(() => Boolean(msgFrom.value || msgTo.value));
@@ -1366,6 +1405,10 @@ async function load(preserveNotice = false) {
       rows.value = page.items;
       total.value = page.total;
       detectUnavailableSource(payload);
+      // Read from the payload rather than inferred: the API is the only thing
+      // that knows whether what it sent was masked, and a screen that guessed
+      // could tell the operator something false about a privacy control.
+      privacy.value = privacyOf(payload);
       if (key.value === 'messages') captureMessageFilterEcho(payload);
     }
   } catch (reason) {
@@ -1447,6 +1490,7 @@ function dlrParams(options: { limit?: number; withPaging?: boolean } = {}) {
     else if (cursorCurrent.value) params.set('cursor', cursorCurrent.value);
   }
   params.set('limit', String(options.limit ?? dlrLimit.value));
+  applyReveal(params);
   return params;
 }
 
@@ -1469,18 +1513,21 @@ async function loadCursorPage() {
     // `total` is only paid for in offset mode; a keyset page deliberately has none.
     dlrTotal.value = num(payload.total ?? (payload.summary as RecordValue | null)?.total);
     detectUnavailableSource(payload);
+    privacy.value = privacyOf(payload);
     return;
   }
   const params = new URLSearchParams();
   if (query.value.trim()) params.set('query', query.value.trim());
   if (cursorCurrent.value) params.set('cursor', cursorCurrent.value);
   params.set('limit', '50');
+  applyReveal(params);
   const payload = await apiRequest<RecordValue>(`/queues?${params.toString()}`);
   cursorItems.value = Array.isArray(payload.items) ? (payload.items as RecordValue[]) : [];
   cursorNext.value = (payload.nextCursor as string | null) ?? null;
   cursorSummary.value = (payload.summary as RecordValue) ?? null;
   cursorSource.value = (payload.source as RecordValue | string) ?? null;
   detectUnavailableSource(payload);
+  privacy.value = privacyOf(payload);
 }
 
 async function loadContainers() {
@@ -3761,6 +3808,17 @@ onUnmounted(() => {
         <p>{{ sourceMessage }}</p>
       </template>
     </section>
+
+    <!--
+      Rendered above the grid, not below it: an operator has to know the values
+      are masked BEFORE reading them, not after they have copied one out.
+    -->
+    <PrivacyReveal
+      :privacy="privacy"
+      :can-reveal="canReveal"
+      testid="workspace-privacy"
+      @changed="onRevealChanged"
+    />
 
     <section v-if="revealedSecret" class="panel secret-box" role="alert" data-testid="secret-box">
       <h2>Save this secret now</h2>

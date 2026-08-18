@@ -6,6 +6,7 @@ import { DiagnosticsController } from './diagnostics.controller';
 import { MessageTraceService } from './message-trace.service';
 import { OperationalEventsService } from './operational-events.service';
 import { TestToolsService } from './test-tools.service';
+import { PrivacyModule } from '../privacy/privacy.module';
 
 /**
  * Diagnostics (spec §10, §11): message lifecycle assembly and SMPP status
@@ -17,7 +18,7 @@ import { TestToolsService } from './test-tools.service';
  * routing decision went unread.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, PrivacyModule],
   controllers: [DiagnosticsController],
   providers: [
     DatabaseService,

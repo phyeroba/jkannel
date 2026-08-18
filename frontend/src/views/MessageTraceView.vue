@@ -33,6 +33,9 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import PrivacyReveal from '../components/PrivacyReveal.vue';
+import { canAccess, session } from '../stores/session';
+import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
@@ -48,6 +51,21 @@ import {
 
 const route = useRoute();
 const router = useRouter();
+
+const canReveal = computed(() => canAccess(session.value, 'messages.reveal'));
+const privacy = ref<PrivacyState | null>(null);
+const revealing = ref(false);
+
+/**
+ * A trace is one message, so the reveal window is asked for against that
+ * message id. The grant then unmasks this message and nothing else — the
+ * narrowest authority that answers the question the operator is asking.
+ */
+function onRevealChanged(value: boolean) {
+  if (revealing.value === value) return;
+  revealing.value = value;
+  if (searched.value) void load(searched.value);
+}
 
 const query = ref(String(route.query.id ?? ''));
 const searched = ref('');
@@ -87,9 +105,10 @@ async function load(id: string) {
   copied.value = false;
   try {
     const result = await apiRequest<MessageTrace>(
-      `/diagnostics/messages/${encodeURIComponent(clean)}/lifecycle`,
+      `/diagnostics/messages/${encodeURIComponent(clean)}/lifecycle${revealing.value ? '?reveal=true' : ''}`,
     );
     trace.value = result;
+    privacy.value = privacyOf(result);
     error.value = '';
     const hasEvidence = Boolean(result?.lifecycle?.stages?.length || result?.events?.length);
     // `partial` rather than `live` when the engine store is down: the routing
@@ -356,6 +375,17 @@ onMounted(() => {
           The rows the timeline above was assembled from, exactly as the engine store returned them.
           An interpretation you cannot check is worth less than the evidence behind it.
         </p>
+        <!--
+          Sits above the raw rows, because that dump is where the subscriber's
+          number and the message body actually appear.
+        -->
+        <PrivacyReveal
+          :privacy="privacy"
+          :can-reveal="canReveal"
+          :message-ref="searched || null"
+          testid="trace-privacy"
+          @changed="onRevealChanged"
+        />
         <details data-testid="trace-raw-details">
           <summary>Show {{ trace?.events?.length ?? 0 }} raw row(s) — {{ trace?.detail }}</summary>
           <pre v-if="trace?.events?.length" class="json-block" data-testid="trace-raw-json">{{

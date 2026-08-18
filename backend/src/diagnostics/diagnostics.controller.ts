@@ -5,6 +5,8 @@ import { MessageTraceService } from './message-trace.service';
 import { OperationalEventsService } from './operational-events.service';
 import { TestToolsService } from './test-tools.service';
 import { decodeSmppStatus, knownSmppStatuses } from './smpp-status';
+import { MASKING_NOTICE, maskRows } from '../privacy/masking';
+import { PiiRevealService } from '../privacy/pii-reveal.service';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request) => ({
@@ -22,6 +24,9 @@ export class DiagnosticsController {
     private readonly traces: MessageTraceService,
     private readonly events: OperationalEventsService,
     private readonly tools: TestToolsService,
+    // Optional so the existing controller tests can construct it with three
+    // collaborators. Absent means masked — see `reveal`.
+    private readonly privacy?: PiiRevealService,
   ) {}
 
   /**
@@ -96,10 +101,36 @@ export class DiagnosticsController {
    */
   @Get('messages/:id/lifecycle')
   @RequirePermissions('messages.view')
-  lifecycle(@Req() r: Request, @Param('id') id: string) {
+  async lifecycle(@Req() r: Request, @Param('id') id: string, @Query() q: any = {}) {
     const clean = String(id ?? '').trim();
     if (!clean || clean.length > 128) throw new BadRequestException('id is required');
-    return this.traces.trace(actor(r), clean);
+    const trace: any = await this.traces.trace(actor(r), clean);
+    // `lifecycle.stages` are derived and carry no subscriber data, but `events`
+    // is the raw engine rows — sender, receiver and body — and the console
+    // renders them verbatim in its evidence panel. They mask like everything
+    // else, scoped to this one message so a grant taken out to investigate one
+    // complaint does not also unmask the grid.
+    const permitted = await this.reveal(r, q, clean);
+    return {
+      ...trace,
+      events: permitted ? trace.events : maskRows(trace.events ?? []),
+      privacy: { masked: !permitted, notice: permitted ? null : MASKING_NOTICE },
+    };
+  }
+
+  private async reveal(r: Request, q: any, messageRef: string): Promise<boolean> {
+    // Absent service means masked. A privacy control must fail closed.
+    if (!this.privacy) return false;
+    const wants = q?.reveal === 'true' || q?.reveal === true;
+    const result = await this.privacy.resolve(
+      actor(r),
+      new Set(r.principal!.permissions ?? []),
+      wants,
+      messageRef,
+    );
+    if (result.permitted && result.grant)
+      await this.privacy.recordUse(actor(r), result.grant.id, 1, 'diagnostics.lifecycle');
+    return result.permitted;
   }
 
   /**
