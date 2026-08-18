@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * NODES AND PERFORMANCE (PLAN.md 7.2, spec Â§14).
+ * NODES AND PERFORMANCE (PLAN.md 7.2, spec §14).
  *
  * THIS SCREEN IS SMALLER THAN THE SPECIFICATION ASKED FOR, ON PURPOSE.
  * ---------------------------------------------------------------------------
- * Â§14 and the design kit draw a Nodes table: several hosts, each with CPU,
+ * §14 and the design kit draw a Nodes table: several hosts, each with CPU,
  * memory, disk, network I/O, load average and a software version, plus a
  * Performance page with submit-latency percentiles and headroom.
  *
  * JKANNEL cannot produce that table. There is no node inventory in the schema,
- * no agent on the hosts, and the backend has no Docker socket â€” its only
+ * no agent on the hosts, and the backend has no Docker socket — its only
  * volumes are the Kamex runtime directory and the migrations directory. Every
  * column of that table would be a number nobody measured.
  *
@@ -17,13 +17,13 @@
  * rather than ship an empty screen. Adding a host agent means putting a process
  * on a VPS that also runs an unrelated production stack, which is not a change
  * to make quietly. So this screen reports the one node it can genuinely
- * measure â€” the container this backend runs in, via cgroup v2 accounting â€” and
+ * measure — the container this backend runs in, via cgroup v2 accounting — and
  * renders everything it cannot measure as first-class content.
  *
  * Notably absent, and deliberately: `os.cpus()`, `os.totalmem()` and
  * `os.loadavg()`. None is namespaced to the container, so inside Docker they
  * report the HOST's figures. On the shared VPS that would mean showing the
- * neighbouring stack's load as JKANNEL's â€” a number wrong in a way the reader
+ * neighbouring stack's load as JKANNEL's — a number wrong in a way the reader
  * cannot detect, which is worse than no number.
  *
  * Backend contract:
@@ -90,16 +90,13 @@ onUnmounted(() => window.clearInterval(timer));
 </script>
 
 <template>
-  <section class="workspace-stack">
-    <header class="workspace-head">
-      <div>
-        <h1>Nodes</h1>
-        <p class="lede">Resource pressure on the parts of this deployment that can be measured.</p>
-      </div>
-      <button class="secondary-button" :disabled="state === 'loading'" @click="load">
-        Refresh
-      </button>
-    </header>
+  <!--
+    No <h1> and no page description: the app shell renders both from the
+    route meta. This view repeated them, so the title appeared twice with two
+    different descriptions under it. Every other view leaves the heading to
+    the shell and opens with its first panel.
+  -->
+  <div data-testid="nodes-view">
 
     <DataState
       :state="state"
@@ -123,7 +120,7 @@ onUnmounted(() => window.clearInterval(timer));
       <section class="panel" aria-labelledby="node-heading">
         <div class="panel-head">
           <h2 id="node-heading">{{ node.name }}</h2>
-          <span class="row-id mono">{{ node.role }} Â· observed {{ formatMoment(node.observedAt) }}</span>
+          <span class="row-id mono">{{ node.role }} · observed {{ formatMoment(node.observedAt) }}</span>
         </div>
 
         <p class="pressure" data-testid="node-pressure">{{ node.pressure }}</p>
@@ -141,7 +138,7 @@ onUnmounted(() => window.clearInterval(timer));
           <div class="gauge" data-testid="node-memory">
             <div class="gauge-head">
               <span>Memory</span>
-              <!-- The word "unknown", never a zero that reads as idle (Â§17). -->
+              <!-- The word "unknown", never a zero that reads as idle (§17). -->
               <strong :class="`tone-${pressureTone(node.memory.percent)}`">{{
                 formatPercent(node.memory.percent)
               }}</strong>
@@ -176,7 +173,7 @@ onUnmounted(() => window.clearInterval(timer));
             <small class="mono">
               {{
                 node.cpu.limitCores === null
-                  ? 'uncapped â€” a percentage has no denominator'
+                  ? 'uncapped — a percentage has no denominator'
                   : `of a ${node.cpu.limitCores}-core quota`
               }}
             </small>
@@ -188,8 +185,8 @@ onUnmounted(() => window.clearInterval(timer));
           <dd class="mono">
             {{
               node.scope === 'container'
-                ? 'this containerâ€™s own cgroup accounting'
-                : 'this process only â€” container accounting unreadable'
+                ? 'this container’s own cgroup accounting'
+                : 'this process only — container accounting unreadable'
             }}
           </dd>
           <dt>Uptime</dt>
@@ -208,7 +205,7 @@ onUnmounted(() => window.clearInterval(timer));
         <h2>What is not measured here</h2>
         <p>
           The specification asks for the figures below. Nothing in this deployment collects them, so
-          this screen has no gauges for them â€” an absent figure means
+          this screen has no gauges for them — an absent figure means
           <strong>not observable</strong>, never zero.
         </p>
         <ul class="limits-list">
@@ -216,11 +213,11 @@ onUnmounted(() => window.clearInterval(timer));
         </ul>
         <p class="source-note">
           Adding them means putting a collector on each host. That is a deployment decision, not a
-          console one â€” and on a shared machine it is not a change to make quietly.
+          console one — and on a shared machine it is not a change to make quietly.
         </p>
       </section>
     </template>
-  </section>
+  </div>
 </template>
 
 <style scoped>

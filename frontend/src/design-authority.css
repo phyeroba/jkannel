@@ -1309,3 +1309,133 @@ th {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ===========================================================================
+   PAGE RHYTHM AND LAYOUT PRIMITIVES
+   ---------------------------------------------------------------------------
+   Added after a measured audit: 19 of 44 console pages had panels sitting flush
+   against each other, with 0px between them. `.panel` carried no vertical
+   spacing rule at all, so every view was expected to invent its own margin, and
+   most did not. The result reads as panes running into one another.
+
+   Spacing is expressed ONCE here rather than per view, so a new page is
+   correctly spaced by default instead of correctly spaced only if its author
+   remembered.
+   =========================================================================== */
+
+/* Consecutive panels always breathe. Applies wherever panels are plain
+   siblings, which is how most views are written. */
+.panel + .panel,
+.panel + .split-grid,
+.split-grid + .panel,
+.panel + .metrics-grid,
+.metrics-grid + .panel {
+  margin-top: 16px;
+}
+
+/* ...except inside a container that already provides the gap, where a margin
+   would double the spacing instead of creating it. */
+.workspace-stack > .panel + .panel,
+.split-grid > .panel + .panel,
+.metrics-grid > .panel + .panel {
+  margin-top: 0;
+}
+
+/* A vertical page: header, then panels, evenly spaced. Used by the §14 screens
+   and available to any new view that wants the default rhythm. */
+.workspace-stack {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+/* Page title on the left, its actions on the right, wrapping on narrow
+   viewports rather than overflowing. */
+.workspace-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.workspace-head h1 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+
+/* Two panels side by side, collapsing to one column when there is not room for
+   two. minmax(0,…) rather than auto so a wide table inside cannot force the
+   column past its share and push the neighbour off-screen. */
+.split-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Standfirst under a page or panel title. */
+.lede {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 78ch;
+}
+
+/* "Nothing here" — used by four views and previously undefined, so it rendered
+   as unstyled body text flush against the panel edge. */
+.empty-state {
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ===========================================================================
+   DATA GRIDS — HOVER AND ROW AFFORDANCE
+   ---------------------------------------------------------------------------
+   No table in the console had a hover state. On a wide grid that makes it
+   genuinely hard to keep your eye on one row while reading across it, which is
+   most of what these screens are for.
+   =========================================================================== */
+
+.table-wrap table tbody tr {
+  transition: background-color 120ms ease;
+}
+.table-wrap table tbody tr:hover {
+  background: var(--surface-hover, rgba(127, 127, 127, 0.08));
+}
+
+/* A row that opens something. The pointer and the deeper hover say so before
+   the click, and :focus-visible keeps it reachable from the keyboard. */
+.table-wrap table tbody tr.selectable,
+tr.selectable {
+  cursor: pointer;
+}
+.table-wrap table tbody tr.selectable:hover,
+tr.selectable:hover {
+  background: var(--surface-hover-strong, rgba(127, 127, 127, 0.14));
+}
+tr.selectable:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+/* The currently-open row, so it stays identifiable once a detail pane is
+   showing beside it. */
+tr.selectable.selected {
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+
+/* Same affordance for the list-style rows used outside tables. */
+li.selectable {
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background-color 120ms ease;
+}
+li.selectable:hover {
+  background: var(--surface-hover, rgba(127, 127, 127, 0.08));
+}

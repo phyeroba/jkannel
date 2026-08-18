@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * SERVICES â€” the component register (PLAN.md 7.1, spec Â§14, UC-SYS-01).
+ * SERVICES — the component register (PLAN.md 7.1, spec §14, UC-SYS-01).
  *
  * WHAT THIS SCREEN IS FOR
  * ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@
  * A component nobody probes renders as **not observed**, visibly distinct from
  * healthy, and is counted in its own column. If "unknown" folded into the green
  * count, then the fewer probes the deployment had the healthier the board would
- * look â€” which is the exact inversion Â§17 exists to prevent.
+ * look — which is the exact inversion §17 exists to prevent.
  *
  * Rows sort worst-first, and **not observed sorts above healthy**. A blind spot
  * is a gap to close; burying it under the green rows is how it stays a blind
@@ -91,20 +91,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="workspace-stack">
-    <header class="workspace-head">
-      <div>
-        <h1>Services</h1>
-        <p class="lede">
-          Every component this gateway depends on, what state it is in, and â€” where a dependency
-          explains it â€” which one to fix first.
-        </p>
-      </div>
-      <button class="secondary-button" :disabled="state === 'loading'" @click="load">
-        Refresh
-      </button>
-    </header>
-
+  <!--
+    No <h1> and no page description here: the app shell already renders both
+    from the route's `title` and `description` meta. This view originally
+    repeated them, so "Services" appeared twice down the page with two different
+    descriptions underneath. Every other view leaves the heading to the shell
+    and starts straight at its first panel; this now matches.
+  -->
+  <div data-testid="services-view">
     <DataState
       :state="state"
       :detail="error || undefined"
@@ -116,7 +110,7 @@ onMounted(() => {
     <template v-if="board && state === 'live'">
       <!--
         The board's verdict, in a sentence. Rendered verbatim from the API,
-        which counted the states and did the root-cause attribution â€” a
+        which counted the states and did the root-cause attribution — a
         client-side recount could disagree with the rows below it.
       -->
       <p
@@ -142,14 +136,14 @@ onMounted(() => {
         </div>
 
         <p class="source-note" data-testid="services-counts">
-          {{ board.summary.healthy }} healthy Â· {{ board.summary.degraded }} degraded Â·
-          {{ board.summary.critical }} failing Â·
+          {{ board.summary.healthy }} healthy · {{ board.summary.degraded }} degraded ·
+          {{ board.summary.critical }} failing ·
           <!--
             Counted apart from healthy, and always shown even at zero, so the
             board's silence about a component is never mistaken for a pass.
           -->
           <strong>{{ board.summary.unknown }} not observed</strong>
-          â€” last probed {{ formatMoment(board.observedAt) }}
+          — last probed {{ formatMoment(board.observedAt) }}
         </p>
 
         <div class="table-wrap">
@@ -181,7 +175,7 @@ onMounted(() => {
                   </span>
                 </td>
                 <td class="muted-cell evidence">{{ row.detail }}</td>
-                <td class="mono">{{ row.rootCause ?? 'â€”' }}</td>
+                <td class="mono">{{ row.rootCause ?? '—' }}</td>
               </tr>
               <tr v-if="!rows.length">
                 <td class="empty-cell" colspan="5">No component matches this filter.</td>
@@ -225,7 +219,7 @@ onMounted(() => {
         <article class="panel" data-testid="service-dependencies">
           <h2>Dependencies</h2>
           <p class="lede">
-            Root failure or downstream symptom â€” the distinction that decides where to start.
+            Root failure or downstream symptom — the distinction that decides where to start.
           </p>
 
           <h3 class="t-caps">Depends on</h3>
@@ -240,7 +234,7 @@ onMounted(() => {
               <span><strong>{{ dep.name }}</strong><small>{{ dep.role }}</small></span>
             </li>
           </ul>
-          <p v-else class="source-note">Nothing â€” this is a root service.</p>
+          <p v-else class="source-note">Nothing — this is a root service.</p>
 
           <h3 class="t-caps">Affected if this fails</h3>
           <ul v-if="dependents.length" class="health-list">
@@ -262,16 +256,16 @@ onMounted(() => {
         There is no restart button here, and that is deliberate rather than
         unfinished. The backend has no Docker socket, so it cannot restart a
         container; a button that opened a dialog and then failed would be worse
-        than its absence. Â§1.1 forbids controls that do not map to something the
+        than its absence. §1.1 forbids controls that do not map to something the
         backend honours.
       -->
       <p class="panel source-note" data-testid="services-no-restart">
         Components are not restarted from this console. The backend has no Docker socket, so it can
-        observe these processes but not act on them â€” restarts stay with whoever operates the host.
+        observe these processes but not act on them — restarts stay with whoever operates the host.
         This screen tells you which one to restart and why; it does not pretend it can do it.
       </p>
     </template>
-  </section>
+  </div>
 </template>
 
 <style scoped>
