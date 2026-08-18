@@ -1,0 +1,65 @@
+# Deployment override for the shared VPS.
+#
+# This host also runs an unrelated production stack, and JKANNEL's only public
+# entry point is the system nginx vhost, so every published port is re-bound to
+# the loopback interface.
+#
+# NOTE the `!override` tags. Compose MERGES sequence fields, so without them the
+# base file's 0.0.0.0 bindings survive alongside these and the services stay
+# publicly reachable (and the duplicate bind fails with "address already in use").
+# `!override` replaces the list outright.
+#
+# Kept in an override rather than the base file so the repo stays deployment-neutral.
+services:
+  backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:-3200}:3000"
+  frontend:
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
+  reverse-proxy:
+    ports: !override
+      - "127.0.0.1:${PROXY_HTTP_PORT:-8081}:8080"
+  kamex-bearerbox:
+    ports: !override
+      - "127.0.0.1:${KAMEX_ADMIN_PORT:-13000}:13000"
+  kamex-smsbox:
+    ports: !override
+      - "127.0.0.1:${KAMEX_SENDSMS_PORT:-13013}:13013"
+
+  # ---------------------------------------------------------------------------
+  # Loopback test bind.
+  #
+  # Kannel's `smsc = fake` bearer LISTENS for a client; with nothing attached,
+  # zero SMSCs are online and the engine correctly reports itself unhealthy.
+  # This attaches Kannel's own fakesmsc client so one bind is genuinely online,
+  # which makes the whole pipeline exercisable before a carrier exists.
+  #
+  # `-m 0` means it sends NOTHING - it only holds the bind open, so it generates
+  # no traffic and writes no rows.
+  #
+  # IT IS NOT A CARRIER. Messages routed to `local-fake` are accepted by the
+  # engine and DISCARDED - they are never delivered to a handset. Remove this
+  # service (and the SMSC) once a real carrier is configured.
+  # ---------------------------------------------------------------------------
+  loopback-bind:
+    # Same profile as the engine it attaches to, otherwise a plain
+    # `docker compose` command sees a dangling depends_on reference.
+    profiles: ["engine-kamex"]
+    image: ghcr.io/vaska94/kamex:1.8.3@sha256:c13f0e390bf0cbadef55440a6dc584670851faf41e42a027644e984502a21d7d
+    entrypoint: ["/usr/bin/fakesmsc"]
+    command: ["-H", "kamex-bearerbox", "-r", "10000", "-m", "0", "0 0 text idle"]
+    depends_on:
+      kamex-bearerbox:
+        condition: service_healthy
+    networks:
+      - appnet
+    # fakesmsc serves no HTTP; the image healthcheck could never pass and
+    # would leave the container permanently "unhealthy".
+    healthcheck:
+      disable: true
+    mem_limit: 64m
+    pids_limit: 32
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

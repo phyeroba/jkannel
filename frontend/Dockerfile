@@ -43,7 +43,7 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 
 # Replace the default site rather than adding alongside it — the stock config
 # listens on 8080 and would otherwise still be served.
-COPY --chown=nginx:nginx nginx.conf /etc/nginx/conf.d/default.conf
+COPY --chown=nginx:nginx nginx-spa.conf /etc/nginx/conf.d/default.conf
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
 EXPOSE 5173
