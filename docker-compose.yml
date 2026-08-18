@@ -181,6 +181,16 @@ services:
       KAMEX_VALIDATOR_URL: http://kamex-validator:8080
       KAMEX_VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
       KAMEX_SQLBOX_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Probe targets for the services board (spec §14). Both default to EMPTY,
+      # and an empty value means the board reports that component as "not
+      # observed" — visibly distinct from healthy, never mistaken for it.
+      #
+      # smsbox is on appnet and reachable, so setting this is pure gain.
+      # Prometheus runs under the optional "monitoring" profile; leave it unset
+      # unless that profile is actually deployed, because pointing the probe at
+      # nothing turns an honest blind spot into a false alarm.
+      KAMEX_SENDSMS_URL: ${KAMEX_SENDSMS_URL:-}
+      PROMETHEUS_BASE_URL: ${PROMETHEUS_BASE_URL:-}
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     volumes:
