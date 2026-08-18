@@ -20,9 +20,19 @@ const okDatabase = {
 };
 
 const okEngines = {
-  forImplementation: () => ({ health: async () => ({ engine: 'healthy', transport: 'ok' }) }),
+  // "reachable", NOT "ok".
+  //
+  // KamexAdapter.health() only ever returns transport 'reachable' or
+  // 'unreachable'. This fixture originally said 'ok' -- a value the adapter
+  // cannot produce -- and the probe was written to match the fixture rather
+  // than the adapter. Result: every healthy engine reported CRITICAL in
+  // production, with the board's own summary saying "Start with bearerbox"
+  // while bearerbox was fine and the poller was reading it every 18 seconds.
+  //
+  // A fixture that invents a value the real collaborator never emits is worse
+  // than no test: it makes a wrong implementation look verified.
+  forImplementation: () => ({ health: async () => ({ engine: 'healthy', transport: 'reachable' }) }),
 };
-
 const okSqlbox = {
   probe: async () => ({ available: true, evidence: 'tables present' }),
   queueSummary: async () => ({ queued: 0, oldestEpoch: null }),
@@ -175,6 +185,54 @@ describe('the job worker probe', () => {
       'job-worker',
     );
     expect(entry.state).toBe('unknown');
+  });
+});
+
+describe('the bearerbox probe speaks the adapter’s actual vocabulary', () => {
+  /** Exactly the shapes KamexAdapter.health() can return. Nothing invented. */
+  const engineReturning = (health: Record<string, string>) => ({
+    forImplementation: () => ({ health: async () => health }),
+  });
+
+  it('is HEALTHY on a reachable engine — the false-critical regression', async () => {
+    // Shipped to production reporting critical on a perfectly healthy engine,
+    // because the probe tested `transport !== 'ok'` and the adapter says
+    // 'reachable'. The board then told operators to start with bearerbox while
+    // the poller was reading it every 18 seconds.
+    const entry = find(
+      await build({ engines: engineReturning({ engine: 'healthy', transport: 'reachable' }) }).board(),
+      'bearerbox',
+    );
+    expect(entry.state).toBe('healthy');
+  });
+
+  it('is critical only when the transport is genuinely unreachable', async () => {
+    const entry = find(
+      await build({ engines: engineReturning({ engine: 'unknown', transport: 'unreachable' }) }).board(),
+      'bearerbox',
+    );
+    expect(entry.state).toBe('critical');
+    expect(entry.detail).toContain('admin port did not answer');
+  });
+
+  it('degrades on a reachable engine that reports itself degraded', async () => {
+    // 503 from the engine: running, but typically with no carrier bind up.
+    const entry = find(
+      await build({ engines: engineReturning({ engine: 'degraded', transport: 'reachable' }) }).board(),
+      'bearerbox',
+    );
+    expect(entry.state).toBe('degraded');
+  });
+
+  it('says unknown, not critical, on a transport word it does not recognise', async () => {
+    // If the adapter's vocabulary ever grows, the board must admit it cannot
+    // judge rather than inventing an outage.
+    const entry = find(
+      await build({ engines: engineReturning({ engine: 'healthy', transport: 'something-new' }) }).board(),
+      'bearerbox',
+    );
+    expect(entry.state).toBe('unknown');
+    expect(entry.detail).toContain('unrecognised transport state');
   });
 });
 

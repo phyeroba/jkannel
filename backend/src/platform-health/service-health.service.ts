@@ -118,10 +118,25 @@ export class ServiceHealthService {
         .health();
       const engine = String((health as any)?.engine ?? 'unknown');
       const transport = String((health as any)?.transport ?? 'unknown');
-      if (transport !== 'ok')
+
+      // The adapter's vocabulary is `reachable` / `unreachable` — never `ok`.
+      // This originally tested `transport !== 'ok'`, which made EVERY healthy
+      // engine report critical: production showed
+      // "The engine admin port did not answer (transport: reachable)", and the
+      // board's own summary then said "Start with bearerbox" while bearerbox
+      // was fine and the poller was reading it every 18 seconds.
+      //
+      // A false critical is not a harmless bug on a board whose entire purpose
+      // is telling an operator where to look first.
+      if (transport === 'unreachable')
         return probed(
           'critical',
-          `The engine admin port did not answer (transport: ${transport}). No message can be submitted while this is true.`,
+          'The engine admin port did not answer. No message can be submitted while this is true.',
+        );
+      if (transport !== 'reachable')
+        return probed(
+          'unknown',
+          `The adapter reported an unrecognised transport state (${transport}), so engine health cannot be judged.`,
         );
       if (engine === 'healthy') return probed('healthy', 'The engine answered its health probe.');
       if (engine === 'degraded')
