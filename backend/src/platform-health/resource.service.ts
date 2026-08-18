@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { readFile } from 'node:fs/promises';
 import {
   NOT_MEASURED,
@@ -12,6 +12,9 @@ import {
 } from './resource-usage';
 
 const CGROUP = '/sys/fs/cgroup';
+
+/** Injection token for the clock. A bare `() => number` is not injectable. */
+export const CLOCK = Symbol('ResourceServiceClock');
 
 /**
  * Reads this container's own resource accounting (spec §14).
@@ -31,7 +34,20 @@ export class ResourceService {
    */
   private lastCpu: { usageMicros: number; atMs: number } | null = null;
 
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  /**
+   * Injectable clock, so a CPU-rate test can advance time without waiting.
+   *
+   * `@Optional() @Inject(CLOCK)` and NOT a bare default parameter. A default
+   * value does not help Nest: it still reads the emitted `design:paramtypes`,
+   * sees `Function`, finds no provider for it and refuses to build the module —
+   * which crash-looped the backend on boot. `@Optional()` makes it resolve to
+   * undefined, and only then does the default apply.
+   */
+  constructor(@Optional() @Inject(CLOCK) now?: () => number) {
+    this.now = now ?? (() => Date.now());
+  }
+
+  private readonly now: () => number;
 
   async snapshot(): Promise<ResourceSnapshot & { pressure: string }> {
     const memory = process.memoryUsage();
