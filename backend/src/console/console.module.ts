@@ -29,11 +29,15 @@ import { ReportJobsService } from '../reporting/report-jobs.service';
 import { ReportingAnalyticsService } from '../reporting/reporting-analytics.service';
 import { ReportingAnalyticsController } from '../reporting/reporting-analytics.controller';
 import { NotificationsController, VolumeReportsController } from './notifications.controllers';
+import { PrivacyModule } from '../privacy/privacy.module';
 @Module({
   // MessagingDepthModule supplies MessageSendService so the console's
   // POST /messages goes through the same routing / entitlement / decision
   // pipeline as every other send path instead of spooling to SQLBox directly.
-  imports: [AuthModule, EngineModule, MessagingDepthModule],
+  // PrivacyModule supplies PiiRevealService, which is what makes the masking on
+  // /messages, the CSV export and /queues something a caller can see through
+  // only with a live, reasoned, audited grant.
+  imports: [AuthModule, EngineModule, MessagingDepthModule, PrivacyModule],
   controllers: [
     SmscController,
     RoutesController,

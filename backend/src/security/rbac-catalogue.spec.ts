@@ -56,13 +56,43 @@ function enforcedPermissionCodes(): string[] {
 
 const migration = readFileSync(MIGRATION, 'utf8');
 
-/** Codes in the `INSERT INTO permissions … VALUES` block of migration 036. */
+/** Codes in an `INSERT INTO permissions … VALUES` block of one migration. */
+function permissionCodesIn(sql: string): string[] {
+  const codes = new Set<string>();
+  let from = sql.indexOf('INSERT INTO permissions');
+  while (from !== -1) {
+    const end = sql.indexOf('ON CONFLICT', from);
+    const block = sql.slice(from, end === -1 ? undefined : end);
+    for (const match of block.matchAll(/\('([a-z][a-z0-9_.]*)',/g)) codes.add(match[1]);
+    from = sql.indexOf('INSERT INTO permissions', from + 1);
+  }
+  return [...codes].sort();
+}
+
+/** Codes seeded by migration 036 specifically. */
 function seededPermissionCodes(): string[] {
-  const block = migration.slice(
-    migration.indexOf('INSERT INTO permissions'),
-    migration.indexOf('ON CONFLICT (code)'),
-  );
-  return [...block.matchAll(/\('([a-z][a-z0-9_.]*)',/g)].map((match) => match[1]).sort();
+  return permissionCodesIn(migration);
+}
+
+/**
+ * Every code seeded by ANY migration.
+ *
+ * 036 established the catalogue but is not the only migration allowed to add to
+ * it — a later feature that introduces a permission seeds it alongside the
+ * table it protects, so that migration is revertible on its own. The
+ * completeness check below therefore has to look at all of them; scoping it to
+ * 036 would either fail on every legitimate addition or force new permissions
+ * to be back-edited into an already-applied migration.
+ */
+function allSeededPermissionCodes(): string[] {
+  const directory = resolve(REPO_ROOT, 'database/migrations');
+  const codes = new Set<string>();
+  for (const entry of readdirSync(directory)) {
+    if (!entry.endsWith('.up.sql')) continue;
+    for (const code of permissionCodesIn(readFileSync(resolve(directory, entry), 'utf8')))
+      codes.add(code);
+  }
+  return [...codes].sort();
 }
 
 /** `(role name, permission code)` pairs in the role_permissions seed. */
@@ -86,8 +116,16 @@ describe('RBAC permission catalogue (migration 036)', () => {
   });
 
   it('seeds a catalogue row for every @RequirePermissions code in the codebase', () => {
-    const missing = enforced.filter((code) => !seeded.includes(code));
+    const everywhere = allSeededPermissionCodes();
+    const missing = enforced.filter((code) => !everywhere.includes(code));
     expect(missing).toEqual([]);
+  });
+
+  it('seeds messages.reveal, which gates unmasking subscriber data', () => {
+    // Enforced by PrivacyController. Without a catalogue row no role could be
+    // granted it, and the reveal path would be unreachable for every account.
+    expect(allSeededPermissionCodes()).toContain('messages.reveal');
+    expect(seeded).not.toContain('messages.reveal');
   });
 
   it('seeds messages.send, the code the audit found enforced but uncatalogued', () => {

@@ -22,6 +22,7 @@ import { MoInboundService } from './mo-inbound.service';
 import { MoDeliveryService } from './mo-delivery.service';
 import { MoJobHandlers } from './mo.handlers';
 import { MoController } from './mo.controller';
+import { PrivacyModule } from '../privacy/privacy.module';
 
 /**
  * Messaging-depth feature module. It owns THE send path
@@ -49,7 +50,7 @@ import { MoController } from './mo.controller';
  * one implementation of "send later".
  */
 @Module({
-  imports: [AuthModule, EngineModule, RoutingDepthModule, CustomersDepthModule],
+  imports: [AuthModule, EngineModule, RoutingDepthModule, CustomersDepthModule, PrivacyModule],
   controllers: [
     MessageOperationsController,
     BulkSendController,
