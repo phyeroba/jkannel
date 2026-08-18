@@ -217,20 +217,24 @@ services:
   frontend:
     build:
       context: ./frontend
-    environment:
-      # Use 127.0.0.1 (IPv4) rather than localhost: on Windows/macOS the browser
-      # resolves localhost to IPv6 ::1 first, but Docker publishes ports on IPv4,
-      # so API calls to http://localhost:3000 fail with "Failed to fetch".
-      #
-      # To route the SPA through the reverse proxy instead of the direct backend
-      # port, set VITE_API_BASE_URL=http://localhost:${PROXY_HTTP_PORT}/api and
-      # add that origin to FRONTEND_ORIGIN (see .env.example).
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:${BACKEND_PORT:-3000}/api}
-      # Hostnames the Vite dev server will serve. Behind a reverse proxy it
-      # receives the PUBLIC hostname and returns 403 unless that name is listed
-      # here (localhost/127.0.0.1 are always allowed). Comma-separated; a leading
-      # dot allows a whole suffix.
-      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
+      args:
+        # A BUILD ARG, NOT A RUNTIME ENVIRONMENT VARIABLE.
+        #
+        # Vite inlines every VITE_* value into the bundle at build time, so a
+        # runtime `environment:` entry never reaches the JavaScript — the bundle
+        # was already written. This was previously declared as `environment:`,
+        # which meant changing it appeared to work and silently did nothing.
+        # Changing it now requires `docker compose build frontend`, not a restart.
+        #
+        # The default is a RELATIVE `/api`, which is what lets one image serve
+        # any hostname: the browser resolves it against whatever origin served
+        # the page, so there is no baked-in host and no CORS. Override it only
+        # when the API is genuinely on a different origin.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    # VITE_ALLOWED_HOSTS is deliberately gone. It existed only to satisfy the
+    # Vite dev server's host check, and there is no dev server here any more —
+    # the runtime stage serves a static bundle through nginx, which does not
+    # care what Host it is given.
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     networks:
@@ -239,7 +243,10 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
+      # /healthz, not /: a cheap 200 from nginx that does not depend on the
+      # bundle being readable, so a broken build fails visibly at the app rather
+      # than masquerading as an unhealthy container.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5173/healthz"]
       interval: 10s
       timeout: 5s
       retries: 10
