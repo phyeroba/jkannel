@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
@@ -318,58 +323,12 @@ export class MoInboundService {
       };
     }
 
-    const compiled = await this.rules.loadInClient(client);
-    const context: MoMessageContext = {
+    const { matched, deliveries, status } = await this.matchAndFanOut(client, actor, inserted.id, {
       smscId: prepared.smscId,
       sender: prepared.sender,
       receiver: prepared.receiver,
       body: prepared.body,
-    };
-    const matched = matchMoRules(compiled, context);
-    const byId = new Map<string, CompiledMoRule>(compiled.map((rule) => [rule.id, rule]));
-
-    const deliveries: Array<{ id: string; kind: MoDeliveryKind; target: string }> = [];
-    for (const match of matched.matches) {
-      const rule = byId.get(match.ruleId);
-      if (!rule) continue;
-      for (const destination of rule.destinations) {
-        const delivery = (
-          await client.query<{ id: string }>(
-            `INSERT INTO mo_deliveries
-               (tenant_id,mo_message_id,rule_id,rule_name,destination_id,kind,target,config,max_attempts)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`,
-            [
-              actor.tenantId,
-              inserted.id,
-              rule.id,
-              rule.name,
-              destination.id,
-              destination.kind,
-              destination.target,
-              JSON.stringify(destination.config ?? {}),
-              destination.maxAttempts,
-            ],
-          )
-        ).rows[0];
-        // One job per destination: independent claim, retry and dead-letter.
-        const job = await this.jobs.createOn(client, actor, {
-          type: MO_DELIVERY_JOB_TYPE,
-          input: { deliveryId: delivery.id },
-        });
-        await client.query('UPDATE mo_deliveries SET job_id=$2 WHERE id=$1', [delivery.id, job.id]);
-        deliveries.push({
-          id: delivery.id,
-          kind: destination.kind,
-          target: destination.target,
-        });
-      }
-    }
-
-    const status: 'matched' | 'no_match' = matched.matches.length ? 'matched' : 'no_match';
-    await client.query(
-      'UPDATE mo_messages SET matched_rule_ids=$2::uuid[], fanout_count=$3, status=$4 WHERE id=$1',
-      [inserted.id, matched.matches.map((m) => m.ruleId), deliveries.length, status],
-    );
+    });
 
     // A message that matched nothing is recorded as `no_match`, NOT discarded.
     // "Why did our short code stop working?" is answerable only if the messages
@@ -404,6 +363,171 @@ export class MoInboundService {
       deliveries,
       status,
     };
+  }
+
+  /**
+   * Match against the rule set and write one delivery + one job per
+   * destination.
+   *
+   * Extracted so {@link redispatch} runs the SAME matching and fan-out as first
+   * ingest rather than a second implementation of it. A re-dispatch that
+   * matched by slightly different rules than the original would be worse than
+   * no re-dispatch at all: the operator would be told the message was
+   * reprocessed, against logic they never see.
+   */
+  private async matchAndFanOut(
+    client: PoolClient,
+    actor: Actor,
+    moMessageId: string,
+    context: MoMessageContext,
+  ) {
+    const compiled = await this.rules.loadInClient(client);
+    const matched = matchMoRules(compiled, context);
+    const byId = new Map<string, CompiledMoRule>(compiled.map((rule) => [rule.id, rule]));
+
+    const deliveries: Array<{ id: string; kind: MoDeliveryKind; target: string }> = [];
+    for (const match of matched.matches) {
+      const rule = byId.get(match.ruleId);
+      if (!rule) continue;
+      for (const destination of rule.destinations) {
+        const delivery = (
+          await client.query<{ id: string }>(
+            `INSERT INTO mo_deliveries
+               (tenant_id,mo_message_id,rule_id,rule_name,destination_id,kind,target,config,max_attempts)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`,
+            [
+              actor.tenantId,
+              moMessageId,
+              rule.id,
+              rule.name,
+              destination.id,
+              destination.kind,
+              destination.target,
+              JSON.stringify(destination.config ?? {}),
+              destination.maxAttempts,
+            ],
+          )
+        ).rows[0];
+        // One job per destination: independent claim, retry and dead-letter.
+        const job = await this.jobs.createOn(client, actor, {
+          type: MO_DELIVERY_JOB_TYPE,
+          input: { deliveryId: delivery.id },
+        });
+        await client.query('UPDATE mo_deliveries SET job_id=$2 WHERE id=$1', [delivery.id, job.id]);
+        deliveries.push({
+          id: delivery.id,
+          kind: destination.kind,
+          target: destination.target,
+        });
+      }
+    }
+
+    const status: 'matched' | 'no_match' = matched.matches.length ? 'matched' : 'no_match';
+    await client.query(
+      'UPDATE mo_messages SET matched_rule_ids=$2::uuid[], fanout_count=$3, status=$4 WHERE id=$1',
+      [moMessageId, matched.matches.map((m) => m.ruleId), deliveries.length, status],
+    );
+
+    return { matched, deliveries, status };
+  }
+
+  /**
+   * Re-runs matching and fan-out for a message that has already been received
+   * (SMS STUDIO Features, page 8: an inbox search can be "re-dispatched to a
+   * particular service accordingly for processing").
+   *
+   * WHY THIS IS NEEDED
+   * -------------------------------------------------------------------------
+   * The commonest MO support case is a message sitting in `no_match` because
+   * the rule that should have caught it did not exist yet, or was disabled, or
+   * had a typo in its keyword. Before this, the only remedy was to ask the
+   * subscriber to text again — the message was in the table, visible, and
+   * unreachable.
+   *
+   * WHY IT DOES NOT DEDUPE
+   * -------------------------------------------------------------------------
+   * `dedupe_key` protects against the same inbound message being INGESTED
+   * twice. This is not an ingest: the operator is deliberately asking for the
+   * existing row to be processed again, having presumably just fixed a rule.
+   * Blocking it on the dedupe key would make the feature impossible.
+   *
+   * What it does instead is refuse to fan out a message that already has live
+   * deliveries. Re-dispatching a message whose webhooks are still pending would
+   * deliver twice, and "the customer got the same MO twice" is a worse outcome
+   * than "you have to wait for the first attempt to finish".
+   */
+  async redispatch(actor: Actor, moMessageId: string) {
+    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+      const message = (
+        await client.query<MoMessageRow>(
+          `SELECT ${MESSAGE_COLUMNS} FROM mo_messages WHERE id=$1`,
+          [moMessageId],
+        )
+      ).rows[0];
+      if (!message) throw new NotFoundException('Inbound message not found');
+
+      const live = Number(
+        (
+          await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM mo_deliveries
+              WHERE mo_message_id=$1 AND status IN ('pending','running')`,
+            [moMessageId],
+          )
+        ).rows[0]?.count ?? '0',
+      );
+      if (live > 0)
+        throw new ConflictException(
+          `${live} delivery attempt(s) for this message are still pending or running. ` +
+            'Re-dispatching now would deliver twice; wait for them to settle, or retry the failed ones individually.',
+        );
+
+      const before = { status: message.status, fanoutCount: message.fanout_count };
+      const { matched, deliveries, status } = await this.matchAndFanOut(
+        client,
+        actor,
+        moMessageId,
+        {
+          smscId: message.smsc_id,
+          sender: message.sender,
+          receiver: message.receiver,
+          body: message.body,
+        },
+      );
+
+      await client.query(
+        'INSERT INTO audit_log(tenant_id,actor_id,action,entity_type,entity_id,old_value,new_value) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [
+          actor.tenantId,
+          actor.userId,
+          'mo_message.redispatched',
+          'mo_message',
+          moMessageId,
+          JSON.stringify(before),
+          JSON.stringify({
+            status,
+            rules: matched.matches.map((m) => m.ruleName),
+            deliveries: deliveries.length,
+          }),
+        ],
+      );
+
+      return {
+        moMessageId,
+        status,
+        previousStatus: before.status,
+        matchedRules: matched.matches.map((m) => ({
+          ruleId: m.ruleId,
+          ruleName: m.ruleName,
+          matchedOn: m.matchedOn,
+        })),
+        deliveries,
+        // Said plainly, because "re-dispatched, 0 deliveries" otherwise reads
+        // as a failure when it is a correct answer about the rule set.
+        detail: deliveries.length
+          ? `Matched ${matched.matches.length} rule(s) and queued ${deliveries.length} delivery attempt(s).`
+          : 'Still matches no rule. Check that the rule you expected is enabled and that its keyword and sender pattern match this message.',
+      };
+    });
   }
 
   // =========================================================================

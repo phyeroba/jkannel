@@ -163,6 +163,22 @@ export class QueueConsoleController {
     });
   }
 
+  /**
+   * Raises or lowers the priority of spooled messages in place — the third
+   * intercept action (SMS Studio, page 9), alongside reroute and cancel.
+   */
+  @Post('spool/reprioritize') @RequirePermissions('messages.send') reprioritize(
+    @Req() r: Request,
+    @Body() b: any = {},
+  ) {
+    const priority = parseMessagePriority(b?.priority);
+    if (priority === null)
+      throw new BadRequestException(
+        'priority is required: 0 (bulk), 1 (normal), 2 (high) or 3 (highest).',
+      );
+    return this.queue.reprioritize(actor(r), parseSqlIds(b?.sqlIds), priority);
+  }
+
   @Post('spool/cancel') @RequirePermissions('messages.send') cancel(
     @Req() r: Request,
     @Body() b: any = {},

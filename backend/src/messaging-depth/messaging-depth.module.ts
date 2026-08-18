@@ -23,6 +23,7 @@ import { MoDeliveryService } from './mo-delivery.service';
 import { MoJobHandlers } from './mo.handlers';
 import { MoController } from './mo.controller';
 import { PrivacyModule } from '../privacy/privacy.module';
+import { MtDedupeService } from './mt-dedupe.service';
 
 /**
  * Messaging-depth feature module. It owns THE send path
@@ -66,6 +67,8 @@ import { PrivacyModule } from '../privacy/privacy.module';
     MessageBlocklistService,
     ContentFilterService,
     SendEntitlementsService,
+    // Outbound duplicate suppression (SMS Studio "duplication control").
+    MtDedupeService,
     MessageSendService,
     ScheduledSendService,
     ScheduledSendJobHandlers,

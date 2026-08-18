@@ -338,6 +338,40 @@ export class QueueConsoleService {
    * to the same sub-second drain race as {@link reroute}, and reported the same
    * way: a per-id result rather than a failure.
    */
+  /**
+   * Raises or lowers the send priority of spooled messages, in place.
+   *
+   * The least destructive of the three intercept actions and the one that was
+   * missing: cancel throws the message away, reroute moves it to another
+   * carrier, and this simply lets it go sooner. During a backlog that is the
+   * action an operator actually wants for OTP traffic stuck behind a campaign.
+   */
+  async reprioritize(actor: Actor, sqlIds: number[], priority: number) {
+    await this.requireSqlbox();
+    const allowed = (await this.tenantBinds(actor.tenantId)).map((bind) => bind.engineId);
+    const changed = await this.sqlbox.reprioritizeSpool(sqlIds, priority, allowed);
+    const affected = new Set(changed.sqlIds);
+    const result = {
+      requested: sqlIds.length,
+      reprioritized: changed.reprioritized,
+      skipped: sqlIds.length - changed.reprioritized,
+      priority,
+      results: sqlIds.map((sqlId) =>
+        affected.has(sqlId)
+          ? { sqlId, reprioritized: true as const }
+          : { sqlId, reprioritized: false as const, code: SKIP_DRAINED, reason: DRAINED_REASON },
+      ),
+    };
+    await this.record(actor, 'queue.reprioritized', String(sqlIds[0] ?? ''), {
+      requested: result.requested,
+      reprioritized: result.reprioritized,
+      skipped: result.skipped,
+      priority,
+      reprioritizedSqlIds: changed.sqlIds,
+    });
+    return result;
+  }
+
   async cancel(actor: Actor, sqlIds: number[]) {
     await this.requireSqlbox();
     const allowed = (await this.tenantBinds(actor.tenantId)).map((bind) => bind.engineId);

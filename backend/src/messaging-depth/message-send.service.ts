@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
@@ -12,6 +17,8 @@ import {
   type OverrideSet,
   type RouteRuleEffect,
 } from '../routing-depth/route-overrides';
+import { MtDedupeService } from './mt-dedupe.service';
+import type { DedupeSubject } from './mt-dedupe';
 import { CustomerRateLimitService } from '../customers-depth/customer-rate-limit.service';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { ContentFilterService } from './content-filter.service';
@@ -237,6 +244,11 @@ export class MessageSendService {
     private readonly blocklist: MessageBlocklistService,
     private readonly rateLimits: CustomerRateLimitService,
     private readonly contentFilter: ContentFilterService,
+    // Optional so the existing tests can construct the service without it, and
+    // so a deployment that has not applied migration 053 keeps working. Absent
+    // means suppression OFF, which is the pre-053 behaviour — the right way to
+    // fail for a control whose failure mode is refusing legitimate traffic.
+    private readonly dedupe?: MtDedupeService,
   ) {}
 
   private nextRotation(tenantId: string): number {
@@ -369,6 +381,10 @@ export class MessageSendService {
     // const container rather than a reassigned `let` so the value survives the
     // rollback path without a cross-await reassignment.
     const filterOutcome: { verdict: ContentFilterVerdict | null } = { verdict: null };
+    // Held outside the transaction so the rollback path can release the key.
+    let dedupeSubject: DedupeSubject | null = null;
+    let dedupeWindow = 0;
+    let dedupeClaimed = false;
 
     try {
       return await this.database.tenantTransaction(actor.tenantId, async (client) => {
@@ -376,6 +392,30 @@ export class MessageSendService {
         // because it is the cheapest refusal and the one whose whole purpose is
         // to shed work before any is done. Fails OPEN when Redis is down.
         await this.rateLimits.consumeInClient(client, actor.tenantId, request.customerId ?? null);
+
+        // 2c. DUPLICATE CONTROL. Before the blocklist and before routing,
+        // because a retry of a message we already accepted should cost nothing
+        // at all — not a route lookup, not a rule evaluation, not a quota read.
+        //
+        // Claimed here and RELEASED on the rollback path below: a submission
+        // that claims its key and is then refused (no route, no credit, blocked
+        // recipient) must not leave the key held, or the operator's corrected
+        // retry seconds later is rejected as a duplicate of a message that
+        // never went.
+        if (this.dedupe) {
+          dedupeWindow = await this.dedupe.windowForInClient(client, actor.tenantId);
+          if (dedupeWindow > 0) {
+            dedupeSubject = {
+              tenantId: actor.tenantId,
+              sender,
+              recipient: destination,
+              text: request.text ?? '',
+              foreignId: request.foreignId ?? null,
+            };
+            await this.dedupe.claimInClient(client, dedupeSubject, dedupeWindow);
+            dedupeClaimed = true;
+          }
+        }
 
         // 3. Blocklist, BEFORE any route is chosen.
         await this.blocklist.assertAllowedInClient(client, destination, request.customerId ?? null);
@@ -551,6 +591,11 @@ export class MessageSendService {
 
         // Last statement before COMMIT, deliberately: whatever the caller
         // records here is committed with the send or lost with it, never half.
+        // Stamped so a later duplicate's refusal can name the message it is a
+        // duplicate OF, rather than only saying that one exists.
+        if (this.dedupe && dedupeSubject && dedupeWindow > 0)
+          await this.dedupe.stampInClient(client, dedupeSubject, dedupeWindow, queued.sqlId);
+
         if (request.onSubmitted)
           await request.onSubmitted(client, { sqlId: queued.sqlId, decisionId });
 
@@ -578,6 +623,23 @@ export class MessageSendService {
         };
       });
     } catch (error) {
+      // Release the key this attempt claimed — but NOT when the error IS the
+      // duplicate refusal, because that key belongs to the earlier submission
+      // and deleting it would let the very next retry through.
+      if (
+        this.dedupe &&
+        dedupeClaimed &&
+        dedupeSubject &&
+        !(error instanceof ConflictException)
+      ) {
+        const subject = dedupeSubject;
+        const window = dedupeWindow;
+        await this.database
+          .tenantTransaction(actor.tenantId, (client) =>
+            this.dedupe!.releaseInClient(client, subject, window),
+          )
+          .catch(() => undefined);
+      }
       await this.recordRejection(actor, {
         ...forensic,
         // A rule that DROPPED the message keeps that outcome. Overwriting it

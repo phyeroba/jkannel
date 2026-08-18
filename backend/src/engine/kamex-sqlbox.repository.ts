@@ -1136,6 +1136,37 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
   }
 
   /**
+   * Changes the send priority of still-spooled messages (SMS STUDIO Features,
+   * page 9: "searched content can be re-dispatched, re-processed, aborted or
+   * re-routed or **reprioritized**").
+   *
+   * The console could already cancel a spooled message and move it to another
+   * bind. It could not do the least destructive of the three — leave it where
+   * it is and let it go sooner. During a backlog that is exactly the action an
+   * operator wants for OTP traffic stuck behind a marketing campaign, and the
+   * absence of it meant cancelling and resubmitting, which loses the original
+   * id and its correlation.
+   *
+   * Only meaningful while a backlog exists: bearerbox's per-SMSC outbound queue
+   * is a max-heap on priority, so with an idle bind and a sub-second drain
+   * nothing is ever queued long enough to reorder. Same drain race as
+   * {@link rerouteSpool} — the ids actually changed are returned, not a count,
+   * because a message the engine picked up mid-statement is simply gone.
+   */
+  async reprioritizeSpool(sqlIds: number[], priority: number, allowedSmscIds: string[]) {
+    if (!sqlIds.length || !allowedSmscIds.length)
+      return { reprioritized: 0, sqlIds: [] as number[] };
+    if (!Number.isInteger(priority) || priority < 0 || priority > 3)
+      throw new BadRequestException('priority must be an integer from 0 (bulk) to 3 (highest)');
+    const result = await this.required().query<{ sql_id: string }>(
+      `UPDATE send_sms SET priority=$1 WHERE sql_id = ANY($2::bigint[]) AND smsc_id = ANY($3) RETURNING sql_id::text`,
+      [priority, sqlIds, allowedSmscIds],
+    );
+    const affected = result.rows.map((row) => Number(row.sql_id));
+    return { reprioritized: affected.length, sqlIds: affected };
+  }
+
+  /**
    * Removes still-spooled messages before SQLBox injects them. Tenant-scoped,
    * and subject to the same sub-second drain race as {@link rerouteSpool}, so
    * the ids actually deleted are returned rather than just a count.

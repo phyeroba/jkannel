@@ -255,6 +255,20 @@ export class MoController {
     };
   }
 
+  /**
+   * Re-runs matching and fan-out for a message already received.
+   *
+   * The commonest MO support case is a message sitting in `no_match` because
+   * the rule that should have caught it did not exist yet. Before this the only
+   * remedy was to ask the subscriber to text again.
+   */
+  @Post('messages/:id/redispatch') @RequirePermissions('messages.send') redispatch(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.inbound.redispatch(actor(r), uuid(id, 'id'));
+  }
+
   /** Grid over individual fan-out delivery attempts and their outcomes. */
   @Get('deliveries') @RequirePermissions('messages.view') listDeliveries(
     @Req() r: Request,
