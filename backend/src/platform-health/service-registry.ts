@@ -189,11 +189,21 @@ export function summarise(readings: ServiceReading[]): {
   if (critical) parts.push(`${critical} failing`);
   if (degraded) parts.push(`${degraded} degraded`);
   if (unknown) parts.push(`${unknown} not observable`);
+  // The trailing advice depends on whether anything is actually WRONG, not on
+  // whether the counts are non-empty. Unobserved components are a gap in what
+  // we watch, not a fault — production briefly read "2 not observable of 8
+  // components. Every problem here is explained by a dependency; fix those
+  // first." with nothing failing at all, which invites a hunt for a problem
+  // that does not exist.
+  const faulty = critical + degraded;
+  const advice = !faulty
+    ? 'Nothing is failing; those components simply are not watched.'
+    : rootFailures.length
+      ? `Start with ${rootFailures.join(', ')} — nothing upstream explains ${rootFailures.length === 1 ? 'it' : 'them'}.`
+      : 'Every failure here is explained by a dependency; fix those first.';
+
   const statement = parts.length
-    ? `${parts.join(', ')} of ${readings.length} components. ` +
-      (rootFailures.length
-        ? `Start with ${rootFailures.join(', ')} — nothing upstream explains ${rootFailures.length === 1 ? 'it' : 'them'}.`
-        : 'Every problem here is explained by a dependency; fix those first.')
+    ? `${parts.join(', ')} of ${readings.length} components. ${advice}`
     : `All ${healthy} components healthy on their last probe.`;
 
   return { total: readings.length, healthy, degraded, critical, unknown, worst, rootFailures, statement };

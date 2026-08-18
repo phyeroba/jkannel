@@ -125,6 +125,22 @@ describe('summarise', () => {
     expect(summary.statement).toContain('explained by a dependency');
   });
 
+  it('does not talk about problems when the only finding is a blind spot', () => {
+    // Production read "2 not observable of 8 components. Every problem here is
+    // explained by a dependency; fix those first." with nothing failing —
+    // sending an operator hunting for a fault that did not exist. An unwatched
+    // component is a gap in coverage, not a failure.
+    const summary = summarise([
+      reading('a', 'healthy'),
+      reading('smsbox', 'unknown', { observation: 'unobserved' }),
+      reading('metrics-collector', 'unknown', { observation: 'unobserved' }),
+    ]);
+    expect(summary.statement).toContain('2 not observable');
+    expect(summary.statement).toContain('Nothing is failing');
+    expect(summary.statement).not.toContain('explained by a dependency');
+    expect(summary.statement).not.toMatch(/Start with/);
+  });
+
   it('states the all-clear as a measurement, not as silence', () => {
     const summary = summarise([reading('a', 'healthy'), reading('b', 'healthy')]);
     expect(summary.worst).toBe('healthy');
