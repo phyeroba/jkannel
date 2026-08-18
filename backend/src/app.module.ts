@@ -12,6 +12,7 @@ import { AiCopilotModule } from './ai-copilot/ai-copilot.module';
 import { PlatformConsoleModule } from './platform-console/platform-console.module';
 import { SecurityHeadersMiddleware } from './platform/security-headers.middleware';
 import { MetricsController } from './monitoring/metrics.controller';
+import { JobMetricsService } from './platform/job-metrics.service';
 import { DatabaseService } from './database/database.service';
 import { IdempotencyService } from './platform/idempotency.service';
 import { IdempotencyInterceptor } from './platform/idempotency.interceptor';
@@ -82,6 +83,10 @@ import { PlatformHealthModule } from './platform-health/platform-health.module';
     DatabaseService,
     IdempotencyService,
     MetricsRegistry,
+    // Job-queue gauges on /metrics. Registered here rather than in JobsModule
+    // because MetricsController lives here and the exporter reads `api_jobs`
+    // directly — it needs no part of the worker.
+    JobMetricsService,
     // Metrics first so it times the full downstream handler chain.
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },

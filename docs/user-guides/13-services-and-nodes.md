@@ -37,7 +37,7 @@ rows is how it stays a blind spot.
 | `database` | Routes, tenants, audit, jobs | `SELECT 1` |
 | `cache` | Sessions and rate-limit counters | Redis `PING` |
 | `engine-poller` | Collects engine telemetry into the console | Snapshot freshness |
-| `job-worker` | Scheduled sends, MO fan-out, retries, reports | Overdue and dead-lettered job counts |
+| `job-worker` | Scheduled sends, MO fan-out, retries, reports | Overdue, stuck and dead-lettered job counts |
 | `metrics-collector` | Scrapes and stores the Prometheus series | Prometheus readiness endpoint |
 
 `smsbox` and `metrics-collector` are only probed when
@@ -65,11 +65,24 @@ Which is the difference between one fix and six pointless restarts.
 
 ### Things the board deliberately does not claim
 
-**`sqlbox` healthy does not mean sqlbox is draining.** The probe reads its
-tables, which is a stronger signal than the container's own healthcheck (that
-one is `kill -0 1` — "does PID 1 exist" — and passes for a completely wedged
-daemon), but it is still not proof that messages are moving. Check the queue age
-on **Queues** for that. The row says so itself.
+**`sqlbox` is judged on whether the spool is DRAINING, not on whether its tables
+read.** This matters because sqlbox's own container healthcheck is `kill -0 1` —
+"does PID 1 exist" — which passes for a completely wedged daemon. That is not
+hypothetical: bearerbox was once recreated, sqlbox never reconnected, sending
+stopped entirely, and every health signal in the system read green.
+
+So the probe reads the oldest un-drained row. A working spool empties in under a
+second:
+
+| Oldest spooled message | State |
+|---|---|
+| Empty, or under 60s | healthy |
+| Over 60s | degraded — check bind health before blaming sqlbox |
+| Over 300s | **critical** — sqlbox is not injecting; restarting it is the usual fix |
+
+If the tables read but the queue cannot be measured, the row degrades rather
+than reporting healthy, and says that a stall would go undetected while that is
+true.
 
 **`smsbox` healthy means the HTTP listener answered.** It does not prove a
 submission would route. Kannel answers a parameterless request with an error
@@ -146,4 +159,7 @@ decision, not a console one.
 
 - [06. Monitoring and alerts](06-monitoring-and-alerts.md) — being *told* rather than looking
 - [11. Troubleshooting and FAQ](11-troubleshooting.md)
-- **System → Runtime Containers** — what Compose *declares*, as opposed to what is observed
+- **System → Runtime Containers** — what Compose *declares*, as opposed to what is observed.
+  Read-only: the backend has no Docker socket, so it cannot start, stop or restart anything.
+  The list is a catalogue written in code, kept in step with `docker-compose.yml` by a test
+  that fails if the two drift apart.

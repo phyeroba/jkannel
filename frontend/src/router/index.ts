@@ -70,7 +70,16 @@ const modules = [
     'Manage API clients, traffic, authentication, and rate limits.',
     'system.view',
   ],
-  ['/docker', 'Docker', 'Inspect and operate JKANNEL runtime containers.', 'system.view'],
+  // "Inspect", not "inspect and operate": there is exactly one route behind
+  // this screen, GET /docker/containers. The backend has no Docker socket and
+  // no start/stop/restart verb, so promising operation was copy describing a
+  // capability that does not exist.
+  [
+    '/docker',
+    'Docker',
+    'Inspect the declared JKANNEL runtime containers. Read-only — the backend cannot start, stop or restart them.',
+    'system.view',
+  ],
   [
     '/logs-audit',
     'Logs & Audit',

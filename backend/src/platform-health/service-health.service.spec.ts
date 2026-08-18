@@ -23,7 +23,19 @@ const okEngines = {
   forImplementation: () => ({ health: async () => ({ engine: 'healthy', transport: 'ok' }) }),
 };
 
-const okSqlbox = { probe: async () => ({ available: true, evidence: 'tables present' }) };
+const okSqlbox = {
+  probe: async () => ({ available: true, evidence: 'tables present' }),
+  queueSummary: async () => ({ queued: 0, oldestEpoch: null }),
+};
+
+/** A spool holding `queued` messages whose oldest has waited `ageSeconds`. */
+const spool = (queued: number, ageSeconds: number) => ({
+  probe: async () => ({ available: true, evidence: 'tables present' }),
+  queueSummary: async () => ({
+    queued,
+    oldestEpoch: queued ? Math.round(Date.now() / 1000) - ageSeconds : null,
+  }),
+});
 const okTelemetry = { current: () => ({ state: 'live', detail: 'Snapshot 4s old.' }) };
 
 const build = (overrides: Record<string, any> = {}) =>
@@ -129,6 +141,28 @@ describe('the job worker probe', () => {
     expect(entry.detail).toContain('will not retry on their own');
   });
 
+  it('reports a stuck job — a worker that died mid-execution', async () => {
+    // Counted inside `running` this looks like healthy work in progress, which
+    // is how a wedged queue stays invisible.
+    const entry = find(
+      await withJobs({ overdue: '0', dead: '0', running: '4', stuck: '2', oldest_overdue_seconds: null }).board(),
+      'job-worker',
+    );
+    expect(entry.state).toBe('degraded');
+    expect(entry.detail).toContain('heartbeat has gone stale');
+    expect(entry.detail).toContain('workers are crashing');
+  });
+
+  it('reports the stuck job ahead of an overdue backlog it probably caused', async () => {
+    const entry = find(
+      await withJobs({ overdue: '9', dead: '0', running: '1', stuck: '1', oldest_overdue_seconds: '3600' }).board(),
+      'job-worker',
+    );
+    // The more specific finding wins: "a worker died" explains the backlog,
+    // and "the worker is behind" does not explain the dead worker.
+    expect(entry.detail).toContain('heartbeat has gone stale');
+  });
+
   it('says unknown — not healthy — when the table cannot be read', async () => {
     const entry = find(
       await build({
@@ -144,24 +178,67 @@ describe('the job worker probe', () => {
   });
 });
 
-describe('the sqlbox probe', () => {
-  it('does not claim the daemon is draining, only that the tables read', async () => {
+describe('the sqlbox probe detects a WEDGED daemon, not just readable tables', () => {
+  it('is healthy when the spool is empty', async () => {
     const entry = find(await build().board(), 'sqlbox');
     expect(entry.state).toBe('healthy');
-    // The container healthcheck is `kill -0 1`, which passes for a wedged
-    // daemon. This probe is stronger but still not proof, and says so.
-    expect(entry.detail).toContain('does not prove the daemon is draining');
+    expect(entry.detail).toContain('nothing is waiting to be drained');
   });
 
-  it('is critical when the message store cannot be read', async () => {
+  it('is healthy when a small backlog is draining normally', async () => {
+    const entry = find(await build({ sqlbox: spool(12, 2) }).board(), 'sqlbox');
+    expect(entry.state).toBe('healthy');
+    expect(entry.detail).toContain('draining normally');
+  });
+
+  it('is CRITICAL when the oldest spooled message has waited minutes', async () => {
+    // THE REAL INCIDENT: bearerbox was recreated, sqlbox never reconnected,
+    // sending stopped — and both the container healthcheck (`kill -0 1`) and
+    // the old table-readability probe reported healthy throughout.
+    const entry = find(await build({ sqlbox: spool(430, 1800) }).board(), 'sqlbox');
+    expect(entry.state).toBe('critical');
+    expect(entry.detail).toContain('430 message(s) are spooled');
+    expect(entry.detail).toContain('not injecting into bearerbox');
+    // And names the fix, because the operator's next question is "so what".
+    expect(entry.detail).toContain('Restarting sqlbox');
+  });
+
+  it('degrades before it fails, so a busy bind is not an outage', async () => {
+    const entry = find(await build({ sqlbox: spool(50, 120) }).board(), 'sqlbox');
+    expect(entry.state).toBe('degraded');
+    expect(entry.detail).toContain('check bind health before assuming sqlbox is at fault');
+  });
+
+  it('is critical when the message store cannot be read at all', async () => {
     const entry = find(
       await build({
-        sqlbox: { probe: async () => ({ available: false, evidence: 'tables not created' }) },
+        sqlbox: {
+          probe: async () => ({ available: false, evidence: 'tables not created' }),
+          queueSummary: async () => ({ queued: 0, oldestEpoch: null }),
+        },
       }).board(),
       'sqlbox',
     );
     expect(entry.state).toBe('critical');
     expect(entry.detail).toContain('tables not created');
+  });
+
+  it('does not upgrade a partial answer to a clean bill of health', async () => {
+    // Tables readable but the queue unmeasurable: a stall would go undetected
+    // while that is true, and the row has to say so rather than report healthy.
+    const entry = find(
+      await build({
+        sqlbox: {
+          probe: async () => ({ available: true, evidence: 'tables present' }),
+          queueSummary: async () => {
+            throw new Error('relation "send_sms" does not exist');
+          },
+        },
+      }).board(),
+      'sqlbox',
+    );
+    expect(entry.state).toBe('degraded');
+    expect(entry.detail).toContain('would not be detected');
   });
 });
 

@@ -21,6 +21,17 @@ import {
  * Both are reachable from this container on the Compose networks — `appnet`
  * and `obsnet` respectively — so the gap was code, not topology.
  */
+/**
+ * Spool ages that mean something.
+ *
+ * A healthy spool drains in well under a second, so these are generous rather
+ * than tight: 60s allows for a genuinely busy bind or a brief carrier stall
+ * without crying wolf, and 300s is far past any explanation other than "nobody
+ * is draining this".
+ */
+const SLOW_SPOOL_SECONDS = 60;
+const STALLED_SPOOL_SECONDS = 300;
+
 @Injectable()
 export class ServiceHealthService {
   constructor(
@@ -181,15 +192,59 @@ export class ServiceHealthService {
   private async probeSpool() {
     if (!this.sqlbox) return unobserved('The SQLBox repository is not wired in this deployment.');
     const probe = await this.sqlbox.probe();
-    return probe.available
-      ? probed(
+    if (!probe.available)
+      return probed(
+        'critical',
+        `The message store is not readable: ${probe.evidence}. Message history and the spool are unavailable.`,
+      );
+
+    // THE WEDGE CHECK.
+    //
+    // Table readability alone is not enough, and the gap was real: sqlbox's own
+    // container healthcheck is `kill -0 1` — does PID 1 exist — so a daemon
+    // that has stopped draining `send_sms` reports healthy to Docker, and the
+    // table probe above would have reported healthy here too. That is exactly
+    // what happened on the VPS when bearerbox was recreated: sqlbox never
+    // reconnected, sending stopped, and every metric in the system read green.
+    //
+    // The oldest un-drained row IS the signal. A working spool empties in under
+    // a second; a row sitting there for minutes means nobody is picking it up.
+    try {
+      const summary = await this.sqlbox.queueSummary();
+      if (!summary.queued)
+        return probed(
           'healthy',
-          'The spool and history tables are readable. This does not prove the daemon is draining them — see the queue age on Queues for that.',
-        )
-      : probed(
-          'critical',
-          `The message store is not readable: ${probe.evidence}. Message history and the spool are unavailable.`,
+          'The spool is empty and the history tables are readable — nothing is waiting to be drained.',
         );
+      const ageSeconds = summary.oldestEpoch
+        ? Math.max(0, Math.round(Date.now() / 1000 - summary.oldestEpoch))
+        : 0;
+      if (ageSeconds > STALLED_SPOOL_SECONDS)
+        return probed(
+          'critical',
+          `${summary.queued} message(s) are spooled and the oldest has waited ${Math.round(ageSeconds / 60)} minutes. ` +
+            'A working spool drains in under a second, so this means sqlbox is not injecting into bearerbox — ' +
+            'typically because it lost its connection and did not reconnect. Restarting sqlbox is the usual fix.',
+        );
+      if (ageSeconds > SLOW_SPOOL_SECONDS)
+        return probed(
+          'degraded',
+          `${summary.queued} message(s) are spooled and the oldest has waited ${ageSeconds}s. ` +
+            'The spool is draining more slowly than usual — check bind health before assuming sqlbox is at fault.',
+        );
+      return probed(
+        'healthy',
+        `${summary.queued} message(s) spooled, oldest ${ageSeconds}s — draining normally.`,
+      );
+    } catch (error) {
+      // The tables read but the summary did not. Report what is actually known
+      // rather than upgrading a partial answer to a clean bill of health.
+      return probed(
+        'degraded',
+        `The spool tables are readable but the queue could not be measured: ${(error as Error).message}. ` +
+          'A stalled spool would not be detected while this is true.',
+      );
+    }
   }
 
   /** JKANNEL's own engine-snapshot poller, from the freshness service. */
@@ -226,24 +281,44 @@ export class ServiceHealthService {
    */
   private async probeJobWorker() {
     try {
+      // Same claim timeout the worker's reaper uses, so "stuck" here means
+      // exactly what it means there rather than a second, drifting definition.
+      const claimTimeout = Math.round(Number(process.env.JOB_CLAIM_TIMEOUT_MS ?? 600_000) / 1000);
       const { rows } = await this.database.query<{
         overdue: string;
         dead: string;
         running: string;
+        stuck: string;
         oldest_overdue_seconds: string | null;
       }>(
         `SELECT
            count(*) FILTER (WHERE status = 'pending' AND next_attempt_at <= now())        AS overdue,
            count(*) FILTER (WHERE status = 'dead_letter')                                  AS dead,
            count(*) FILTER (WHERE status = 'running')                                      AS running,
+           count(*) FILTER (WHERE status = 'running'
+                              AND coalesce(heartbeat_at, claimed_at)
+                                  < now() - ($1 || ' seconds')::interval)                  AS stuck,
            EXTRACT(EPOCH FROM (now() - min(next_attempt_at)
              FILTER (WHERE status = 'pending' AND next_attempt_at <= now())))::text        AS oldest_overdue_seconds
          FROM api_jobs`,
+        [String(Number.isFinite(claimTimeout) && claimTimeout > 0 ? claimTimeout : 600)],
       );
       const overdue = Number(rows[0]?.overdue ?? 0);
       const dead = Number(rows[0]?.dead ?? 0);
       const running = Number(rows[0]?.running ?? 0);
+      const stuck = Number(rows[0]?.stuck ?? 0);
       const age = Math.round(Number(rows[0]?.oldest_overdue_seconds ?? 0));
+
+      // Reported BEFORE the overdue checks, because a stuck job is a worker
+      // that died mid-execution and it is the more specific finding. Counted
+      // inside `running` it looks like healthy work in progress, which is how a
+      // wedged queue stays invisible.
+      if (stuck > 0)
+        return probed(
+          'degraded',
+          `${stuck} job(s) are claimed by a worker whose heartbeat has gone stale — a worker died mid-execution. ` +
+            'They will be reclaimed by the reaper, but repeated occurrences mean workers are crashing.',
+        );
 
       if (overdue > 0 && age > 900)
         return probed(

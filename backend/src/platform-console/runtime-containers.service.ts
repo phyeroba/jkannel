@@ -8,7 +8,9 @@ export interface RuntimeContainer {
   name: string;
   service: string;
   image: string;
-  network: 'database' | 'application' | 'engine' | 'monitoring';
+  // edge added with the reverse proxies, which terminate HTTP in front of
+  // everything else and belong on no other network.
+  network: 'database' | 'application' | 'engine' | 'monitoring' | 'edge';
   status: 'running' | 'degraded' | 'stopped' | 'unknown';
   health: 'healthy' | 'degraded' | 'unknown' | 'unreachable';
   detail: string;
@@ -31,7 +33,13 @@ export class RuntimeContainersService {
     private readonly sqlbox: KamexSqlboxRepository,
   ) {}
 
-  async list(): Promise<{ items: RuntimeContainer[]; total: number; observedAt: string }> {
+  async list(): Promise<{
+    items: RuntimeContainer[];
+    total: number;
+    observedAt: string;
+    source: 'declared-catalogue';
+    limit: string;
+  }> {
     const now = new Date().toISOString();
     const base = (
       overrides: Partial<RuntimeContainer> &
@@ -122,9 +130,79 @@ export class RuntimeContainersService {
         network: 'monitoring',
         detail: 'Declared under the "monitoring" Compose profile.',
       }),
+      // ---------------------------------------------------------------------
+      // The seven services this catalogue used to omit.
+      //
+      // A hardcoded list that is a SUBSET of docker-compose.yml is worse than
+      // no list: an operator reads ten rows, concludes that is the estate, and
+      // never asks why the backup service is not there. If this file drifts
+      // from Compose again, that is the failure to look for.
+      // ---------------------------------------------------------------------
+      base({
+        name: 'jkannel-reverse-proxy',
+        service: 'reverse-proxy',
+        image: 'nginx',
+        network: 'edge',
+        detail: 'Declared Compose service; terminates HTTP for the console and API.',
+      }),
+      base({
+        name: 'jkannel-reverse-proxy-tls',
+        service: 'reverse-proxy-tls',
+        image: 'nginx',
+        network: 'edge',
+        detail: 'Declared under the TLS Compose profile; not running on a plain-HTTP deployment.',
+      }),
+      base({
+        name: 'jkannel-scheduler',
+        service: 'scheduler',
+        image: 'jkannel-backend',
+        network: 'application',
+        detail: 'Declared Compose service; runs the job worker outside the API process.',
+      }),
+      base({
+        name: 'jkannel-backup-service',
+        service: 'backup-service',
+        image: 'jkannel-backend',
+        network: 'database',
+        detail: 'Declared Compose service; performs scheduled backups.',
+      }),
+      base({
+        name: 'jkannel-watchdog',
+        service: 'watchdog',
+        image: 'docker',
+        network: 'application',
+        detail:
+          'Declared Compose service. Holds the Docker socket read-only — this backend does not, which is why nothing here is live-probed.',
+      }),
+      base({
+        name: 'jkannel-loki',
+        service: 'loki',
+        image: 'grafana/loki',
+        network: 'monitoring',
+        detail: 'Declared under the "monitoring" Compose profile.',
+      }),
+      base({
+        name: 'jkannel-promtail',
+        service: 'promtail',
+        image: 'grafana/promtail',
+        network: 'monitoring',
+        detail: 'Declared under the "monitoring" Compose profile; ships container logs to Loki.',
+      }),
     ];
 
-    return { items: containers, total: containers.length, observedAt: now };
+    return {
+      items: containers,
+      total: containers.length,
+      observedAt: now,
+      // Stated in the payload, not just in a comment: this is a catalogue with
+      // three probes bolted on, and a caller must be able to tell that apart
+      // from an enumeration of what is actually running.
+      source: 'declared-catalogue',
+      limit:
+        'This list is the Compose service catalogue as declared in code, not an enumeration of running containers. ' +
+        'The backend has no Docker socket, so only postgres, the engine and sqlbox are live-probed; everything else ' +
+        'is reported as declared. A service missing here means this list is stale, not that the service is absent.',
+    };
   }
 
   private async probePostgres(): Promise<Partial<RuntimeContainer>> {

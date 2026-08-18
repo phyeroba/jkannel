@@ -3,6 +3,7 @@ import { HealthService } from '../health/health.service';
 import { MetricsRegistry } from './metrics.registry';
 import { PlatformMetricsService } from '../monitoring-depth/platform-metrics.service';
 import { EngineMetricsService } from '../monitoring-depth/engine-metrics.service';
+import { JobMetricsService } from '../platform/job-metrics.service';
 
 @Controller('metrics')
 export class MetricsController {
@@ -15,6 +16,11 @@ export class MetricsController {
     // SMS/SMSC telemetry, served from the poller's cached snapshot so the
     // scrape never calls the engine synchronously.
     @Optional() private readonly engine?: EngineMetricsService,
+    // Job-queue depth, overdue work, stuck claims and dead letters. Read from
+    // `api_jobs` rather than from the worker's in-process counters, so a queue
+    // backing up BECAUSE the worker died still reports — which is the one case
+    // an in-process counter goes silent for.
+    @Optional() private readonly jobs?: JobMetricsService,
   ) {}
 
   @Get()
@@ -60,6 +66,13 @@ export class MetricsController {
         lines.push(this.engine.render());
       } catch {
         /* engine metrics are best-effort */
+      }
+    }
+    if (this.jobs) {
+      try {
+        lines.push(await this.jobs.render());
+      } catch {
+        /* job metrics are best-effort */
       }
     }
     response.setHeader('content-type', 'text/plain; version=0.0.4; charset=utf-8');

@@ -210,6 +210,58 @@ before running it — each one states what it turns back on.
 
 ---
 
+## 7a. New Prometheus gauges
+
+`/metrics` said nothing at all about the job queue. It now emits:
+
+| Gauge | Alert on it? |
+|---|---|
+| `jkannel_job_queue_up` | Yes — 0 means the table is unreadable |
+| `jkannel_jobs_overdue` | **Yes — this is the one.** Work that was due and has not run |
+| `jkannel_job_oldest_overdue_seconds` | Yes — one job overdue by two hours beats fifty by ten seconds |
+| `jkannel_jobs_stuck` | Yes — a worker died mid-execution |
+| `jkannel_jobs_dead_lettered` | Yes, at a lower urgency — needs a human decision |
+| `jkannel_jobs_pending` | **No.** Depth is not a fault; a thousand jobs scheduled for tomorrow is healthy |
+| `jkannel_jobs_running` | No — context only |
+
+Read from `api_jobs`, not from the worker's in-process counters, so a queue
+backing up *because the worker died* still reports — which is the one case an
+in-process counter goes silent for.
+
+`stuck` uses the same `JOB_CLAIM_TIMEOUT_MS` the reaper uses (default 600s), so
+the gauge and the reaper cannot disagree about what stuck means.
+
+Suggested starting alerts:
+
+```
+jkannel_jobs_overdue > 0 and jkannel_job_oldest_overdue_seconds > 900
+jkannel_jobs_stuck > 0
+jkannel_job_queue_up == 0
+```
+
+## 7b. The sqlbox wedge is now detected
+
+The known standing fragility — **sqlbox does not reconnect after bearerbox
+restarts, and every metric reads healthy while sending is stopped** — is no
+longer invisible.
+
+The Services board's sqlbox probe now reads the spool's oldest un-drained row.
+A working spool empties in under a second, so:
+
+| Oldest spooled message | State |
+|---|---|
+| Spool empty, or under 60s | healthy |
+| Over 60s | degraded — "check bind health before assuming sqlbox is at fault" |
+| Over 300s | **critical** — "sqlbox is not injecting into bearerbox… Restarting sqlbox is the usual fix" |
+
+Table readability alone is no longer reported as healthy. Neither is a partial
+answer: if the tables read but the queue cannot be measured, the row degrades
+and says a stall would go undetected while that is true.
+
+This is a genuine behaviour change on the board. A deployment with a chronically
+slow bind will now show sqlbox as degraded where it previously showed healthy —
+which is correct, but worth knowing before someone reads it as a regression.
+
 ## 8. Operational notes
 
 **`mt_dedupe_keys` grows and is swept.** Rows expire by timestamp and the sweep
