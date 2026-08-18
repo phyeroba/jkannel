@@ -140,6 +140,30 @@ export const userGuides: UserGuide[] = [
     url: guideUrl('11-troubleshooting.md'),
     route: '/logs-audit',
   },
+  {
+    number: 12,
+    title: 'Subscriber privacy: masking and audited reveal',
+    purpose:
+      'You see a masked number instead of a real one, and need the real value to answer a support ticket.',
+    url: guideUrl('12-privacy-and-reveal.md'),
+    route: '/messages',
+  },
+  {
+    number: 13,
+    title: 'Services and Nodes',
+    purpose:
+      'Sending has stopped and you need to know which component — and whether it is the cause or a symptom.',
+    url: guideUrl('13-services-and-nodes.md'),
+    route: '/services',
+  },
+  {
+    number: 14,
+    title: 'Wildcard patterns, overrides, drops and duplicate control',
+    purpose:
+      'One rule for a whole network, swapping a blocked sender ID, refusing unroutable traffic, or stopping double-billed retries.',
+    url: guideUrl('14-advanced-routing-and-duplicate-control.md'),
+    route: '/routing',
+  },
 ];
 
 export const navigation: NavigationItem[] = [

@@ -21,6 +21,9 @@ Kannel knowledge is assumed, though it helps.
 | 9 | [Backup and restore](09-backup-and-restore.md) | Protect the control plane's data and prove a backup is usable. |
 | 10 | [Users, roles and permissions](10-users-and-roles.md) | Give people access — and understand what is read-only today. |
 | 11 | [Troubleshooting and FAQ](11-troubleshooting.md) | Something is wrong and you want the short answer. |
+| 12 | [Subscriber privacy: masking and audited reveal](12-privacy-and-reveal.md) | You see `+2567••••••18` instead of a number, and need the real one to answer a ticket. |
+| 13 | [Services and Nodes](13-services-and-nodes.md) | Sending has stopped and you need to know which component — and whether it is the cause or a symptom. |
+| 14 | [Wildcard patterns, overrides, drops and duplicate control](14-advanced-routing-and-duplicate-control.md) | One rule for a whole network, swapping a blocked sender ID, refusing unroutable traffic, or stopping double-billed retries. |
 
 ## Before you rely on a capability
 

@@ -164,8 +164,10 @@ describe('primary navigation contract', () => {
     // Help is for whoever is lost, whatever their role.
     expect(help?.permission).toBeUndefined();
 
-    expect(userGuides).toHaveLength(11);
-    expect(userGuides.map((guide) => guide.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(userGuides).toHaveLength(14);
+    expect(userGuides.map((guide) => guide.number)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    ]);
     for (const guide of userGuides) {
       expect(guide.url.startsWith(`${documentationRoot}/blob/main/docs/user-guides/`)).toBe(true);
       expect(guide.url).toMatch(/\/\d{2}-[a-z0-9-]+\.md$/);
