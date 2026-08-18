@@ -162,6 +162,18 @@ describe('module workspace per-module enhancements', () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (/\/smscs\/s2\/actions\/enable$/.test(url) && init?.method === 'POST')
         return apiResponse({});
+      // Phase 5.1: the verb is now offered only after the control API has said
+      // what it would do, so the grid asks for an impact before it acts.
+      if (/\/control\/smscs\/s2\/impact\/enable$/.test(url))
+        return apiResponse({
+          operation: 'enable',
+          subject: 'Paused',
+          summary: 'Enable Paused.',
+          consequences: ['It is added back to the generated engine configuration.'],
+          queuedMessages: null,
+          reasonRequired: false,
+          blockedReason: null,
+        });
       return apiResponse(
         gridPage([
           { id: 's1', name: 'Live', enabled: true, lifecycle_state: 'active' },
@@ -178,6 +190,13 @@ describe('module workspace per-module enhancements', () => {
     expect(wrapper.get('[data-testid="smsc-toggle-s2"]').text()).toBe('Enable');
 
     await wrapper.get('[data-testid="smsc-toggle-s2"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="smsc-confirm-summary"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="smsc-confirm-consequences"]').text()).toContain(
+      'added back to the generated engine configuration',
+    );
+    await wrapper.get('[data-testid="smsc-confirm-confirm"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(

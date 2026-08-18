@@ -3,6 +3,7 @@ import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { MessageTraceService } from './message-trace.service';
 import { OperationalEventsService } from './operational-events.service';
+import { TestToolsService } from './test-tools.service';
 import { decodeSmppStatus, knownSmppStatuses } from './smpp-status';
 
 type Request = AuthenticatedRequest;
@@ -20,7 +21,29 @@ export class DiagnosticsController {
   constructor(
     private readonly traces: MessageTraceService,
     private readonly events: OperationalEventsService,
+    private readonly tools: TestToolsService,
   ) {}
+
+  /**
+   * Number and prefix lookup (§15). Non-transmitting, like the route simulator.
+   *
+   * The response carries its own limits: there is no prefix-to-operator
+   * database in this product, so the mobile network behind a number is NOT
+   * identified. Guessing one from a prefix would be a fabricated fact an
+   * operator would act on.
+   */
+  @Get('number-lookup')
+  @RequirePermissions('routes.view')
+  numberLookup(@Req() r: Request, @Query('msisdn') msisdn?: string) {
+    if (!msisdn) throw new BadRequestException('msisdn is required');
+    return this.tools.lookupNumber(actor(r), msisdn);
+  }
+
+  @Get('test-sends')
+  @RequirePermissions('messages.view')
+  testSends(@Req() r: Request, @Query('limit') limit?: string) {
+    return this.tools.listTestSends(actor(r), limit ? Number(limit) : undefined);
+  }
 
   /**
    * The operational event stream (§12.1) — what the SYSTEM observed, as opposed

@@ -13,8 +13,13 @@ const smscId = '11111111-1111-4111-8111-111111111111';
 
 function makeController(smsc: Record<string, unknown>) {
   const completions: any[] = [];
+  /** Arguments the controller passed to beginSmscOperation, for the reason test. */
+  const beginArgs: unknown[][] = [];
   const repository: any = {
-    beginSmscOperation: jest.fn(async () => ({ id: 'dep-1', status: 'pending' })),
+    beginSmscOperation: jest.fn(async (...args: unknown[]) => {
+      beginArgs.push(args);
+      return { id: 'dep-1', status: 'pending' };
+    }),
     getSmsc: jest.fn(async () => ({ id: smscId, engine_id: 'carrier-a', ...smsc })),
     completeSmscOperation: jest.fn(
       async (
@@ -37,7 +42,7 @@ function makeController(smsc: Record<string, unknown>) {
   const controlSmsc = jest.fn();
   const engines: any = { smscControl: () => ({ controlSmsc }) };
   const controller = new SmscController(repository, engines, connectivity);
-  return { controller, repository, connectivity, controlSmsc, completions };
+  return { controller, repository, connectivity, controlSmsc, completions, beginArgs };
 }
 
 describe('test connection records the verification level', () => {
@@ -133,7 +138,9 @@ describe('reconnect records whether the bind cycle was observed', () => {
       states: { before: 'online', afterStop: 'dead', afterStart: 'online', cycleVerified: true },
     });
 
-    const result: any = await controller.operate(request, smscId, 'reconnect', 'key-1');
+    const result: any = await controller.operate(request, smscId, 'reconnect', 'key-1', {
+      reason: 'bind is flapping',
+    });
 
     expect(completions[0].verification).toBe('bind_cycled');
     expect(result.states.cycleVerified).toBe(true);
@@ -150,10 +157,39 @@ describe('reconnect records whether the bind cycle was observed', () => {
       states: { before: null, afterStop: null, afterStart: null, cycleVerified: false },
     });
 
-    await controller.operate(request, smscId, 'reconnect', 'key-1');
+    await controller.operate(request, smscId, 'reconnect', 'key-1', { reason: 'bind is flapping' });
 
     // Distinguishable from a verified cycle — which is the whole point.
     expect(completions[0].verification).toBe('command_accepted');
+  });
+
+  /**
+   * The impact preview declares `reconnect` and `disable` reason-required, and
+   * this endpoint previously accepted no body at all — so it demanded a reason
+   * in the dialog and then discarded it, writing the audit row with reason
+   * NULL. A control that asks for a justification and drops it is worse than
+   * one that never asked: the audit trail looks complete and is not.
+   */
+  it('refuses a reason-required operation with no reason', async () => {
+    const { controller } = makeController({ type: 'smpp' });
+    await expect(controller.operate(request, smscId, 'reconnect', 'key-1', {})).rejects.toThrow(
+      /requires a reason/,
+    );
+  });
+
+  it('carries the reason through to the operation record', async () => {
+    const { controller, controlSmsc, beginArgs } = makeController({ type: 'smpp' });
+    controlSmsc.mockResolvedValue({
+      operation: 'reconnect',
+      engineId: 'carrier-a',
+      accepted: true,
+      detail: 'accepted',
+      observedAt: 'now',
+    });
+    await controller.operate(request, smscId, 'reconnect', 'key-1', {
+      reason: 'carrier reported a stuck session',
+    });
+    expect(beginArgs[0]).toContain('carrier reported a stuck session');
   });
 
   it('makes no verification claim for enable or disable', async () => {
@@ -166,7 +202,11 @@ describe('reconnect records whether the bind cycle was observed', () => {
         detail: 'accepted',
         observedAt: 'now',
       });
-      await controller.operate(request, smscId, operation, 'key-1');
+      // `disable` is reason-required (§16); `enable` is not, because putting an
+      // SMSC back into service is not the disruptive direction.
+      await controller.operate(request, smscId, operation, 'key-1', {
+        reason: 'planned maintenance',
+      });
       expect(completions[0].verification).toBeUndefined();
     }
   });

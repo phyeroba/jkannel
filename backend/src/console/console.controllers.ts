@@ -29,6 +29,7 @@ import {
   describeConfigValueProblem,
   formatConfigValueProblem,
 } from '../configuration/config-value-safety';
+import { SafeControlService } from '../connectivity/safe-control.service';
 import {
   ConfigurationGeneratorService,
   EngineConfiguration,
@@ -295,17 +296,25 @@ export class SmscController {
     @Param('id') id: string,
     @Param('operation') operation: string,
     @Headers('idempotency-key') key: string,
+    @Body() body: any = {},
   ) {
     const smscId = uuid(id, 'id');
     if (!['enable', 'disable', 'reconnect', 'test'].includes(operation))
       throw new BadRequestException('Unsupported SMSC operation');
     const idempotencyKey = text(key, 'Idempotency-Key');
     if (idempotencyKey.length > 128) throw new BadRequestException('Idempotency-Key is too long');
+    // The impact preview declares `reconnect` and `disable` reason-required
+    // (§1.1, §16). Until now this endpoint accepted no body at all, so it
+    // demanded a reason in the dialog and then discarded it — the audit row
+    // was written with reason NULL. Validated with the same rule the preview
+    // advertises, so the two cannot disagree.
+    const reason = SafeControlService.requireReason(operation, body?.reason);
     const record: any = await this.repository.beginSmscOperation(
       actor(r),
       smscId,
       operation,
       idempotencyKey,
+      reason,
     );
     if (record.replayed || record.status !== 'pending') return record;
     const smsc: any = await this.repository.getSmsc(actor(r), smscId);

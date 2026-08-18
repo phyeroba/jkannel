@@ -4,11 +4,13 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import ConfirmAction from '../components/ConfirmAction.vue';
 import MessagePriority from '../components/MessagePriority.vue';
 import QueueRatesPanel from '../components/QueueRatesPanel.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import { describeComposerText } from '../utils/message-segments';
+import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
 import {
   PRIORITY_UNSET,
   priorityCellLabel,
@@ -2979,6 +2981,58 @@ async function createRecord() {
   }
 }
 
+/**
+ * SAFE CONTROL FOR THE SMSC GRID (PLAN.md 5.1–5.3, UC-SMSC-01, UC-SMSC-02).
+ *
+ * Every SMSC verb now goes through the impact dialog rather than firing on
+ * click. `reconnect`, `disable` and `enable` used to be one-click actions on a
+ * row — a reconnect cycles every parallel connection on that SMSC and pauses
+ * every route pointed at it, and nothing on the row said so.
+ *
+ * `suspend` and `resume` are both always offered, and neither is hidden based on
+ * a guess about the current state: no read endpoint in this build exposes
+ * `traffic_suspended_at`, so the console does not know which of the two applies.
+ * The impact preview does, and it answers with a `blockedReason` — "Traffic on
+ * this SMSC is already suspended." — which disables the confirm button. An
+ * operator therefore learns the state from the dialog instead of from a button
+ * that was quietly missing.
+ */
+const pendingSmsc = ref<{ row: Row; operation: ControlOperation } | null>(null);
+const smscActionBusy = ref(false);
+
+function requestSmscAction(row: Row, operation: ControlOperation) {
+  pendingSmsc.value = { row, operation };
+}
+
+async function confirmSmscAction(reason: string) {
+  const pending = pendingSmsc.value;
+  if (!pending) return;
+  const { row, operation } = pending;
+  smscActionBusy.value = true;
+  error.value = '';
+  notice.value = '';
+  try {
+    const suspension = operation === 'suspend' || operation === 'resume';
+    await apiRequest(controlEndpoint(operation, row.id), {
+      method: 'POST',
+      // The suspension endpoints read `{reason}` and record it. The legacy
+      // action endpoint reads only the idempotency key; the reason is sent for
+      // when it grows one, and the dialog already told the operator it is not
+      // stored today.
+      headers: suspension ? undefined : { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ reason }),
+    });
+    notice.value = `${operationVerb(operation)} completed for ${row.name}. Reason: ${reason}`;
+    pendingSmsc.value = null;
+    await load(true);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : 'The operation failed.';
+    pendingSmsc.value = null;
+  } finally {
+    smscActionBusy.value = false;
+  }
+}
+
 async function rowAction(row: Row, operation: string) {
   loading.value = true;
   error.value = '';
@@ -5421,15 +5475,33 @@ onUnmounted(() => {
               </template>
               <td v-if="key === 'smsc'" class="row-actions" @click.stop>
                 <button class="secondary-button" @click="testSmsc(row)">Test</button>
-                <button class="secondary-button" @click="rowAction(row, 'reconnect')">
+                <button
+                  class="secondary-button"
+                  :data-testid="`smsc-reconnect-${row.id}`"
+                  @click="requestSmscAction(row, 'reconnect')"
+                >
                   Reconnect
                 </button>
                 <button
                   class="secondary-button"
                   :data-testid="`smsc-toggle-${row.id}`"
-                  @click="rowAction(row, smscEnabled(row.raw) ? 'disable' : 'enable')"
+                  @click="requestSmscAction(row, smscEnabled(row.raw) ? 'disable' : 'enable')"
                 >
                   {{ smscEnabled(row.raw) ? 'Disable' : 'Enable' }}
+                </button>
+                <button
+                  class="secondary-button"
+                  :data-testid="`smsc-suspend-${row.id}`"
+                  @click="requestSmscAction(row, 'suspend')"
+                >
+                  Suspend
+                </button>
+                <button
+                  class="secondary-button"
+                  :data-testid="`smsc-resume-${row.id}`"
+                  @click="requestSmscAction(row, 'resume')"
+                >
+                  Resume
                 </button>
               </td>
               <td v-else-if="key === 'routing'" class="row-actions">
@@ -6096,6 +6168,23 @@ onUnmounted(() => {
       </div>
       <p v-if="!loading && !settingItems.length" class="empty-cell">No settings available.</p>
     </section>
+
+    <!--
+      IMPACT BEFORE THE VERB. One dialog for all five SMSC operations; the
+      operation it is confirming decides which impact is fetched, what the
+      button says, and whether the reason it captures is actually recorded.
+    -->
+    <ConfirmAction
+      v-if="pendingSmsc"
+      :open="true"
+      :smsc-id="pendingSmsc.row.id"
+      :operation="pendingSmsc.operation"
+      :busy="smscActionBusy"
+      :danger="pendingSmsc.operation === 'disable' || pendingSmsc.operation === 'suspend'"
+      testid="smsc-confirm"
+      @close="pendingSmsc = null"
+      @confirm="confirmSmscAction"
+    />
   </section>
   <section v-else class="panel empty-state" data-testid="restricted-state">
     <h2>Access restricted</h2>

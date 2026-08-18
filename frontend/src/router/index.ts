@@ -344,6 +344,35 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Safe control (§9, §16). Failover is a Routing screen and not an SMSC one:
+    // the thing being moved is a route's traffic, and the override lives on the
+    // route rather than on either connection.
+    path: '/failover',
+    name: 'failover',
+    component: () => import('../views/FailoverView.vue'),
+    meta: {
+      title: 'Failover',
+      description:
+        'Every manual override in effect, the path each route is actually on, and a health and capacity comparison before traffic is moved.',
+      breadcrumb: ['Routing', 'Failover'],
+      permission: 'routes.view',
+    },
+  },
+  {
+    path: '/route-simulator',
+    name: 'route-simulator',
+    component: () => import('../views/RouteSimulatorView.vue'),
+    meta: {
+      title: 'Route Simulator',
+      // The description is the first place the non-transmitting promise is made;
+      // the screen itself repeats it above the form (UC-RTE-01).
+      description:
+        'Resolve a destination against the live routing rules and read the full decision trace. Nothing is transmitted.',
+      breadcrumb: ['Routing', 'Route Simulator'],
+      permission: 'routes.view',
+    },
+  },
+  {
     // Diagnostics, in the specification's own order (§10, §11, §12): one
     // message, then the protocol vocabulary, then everything the system saw.
     path: '/message-trace',
@@ -381,6 +410,23 @@ const routes: RouteRecordRaw[] = [
         'What the system observed, over the shared time range, with a correlation drill-down that puts events, alerts, audit entries and logs on one screen — and states why the logs may be missing.',
       breadcrumb: ['Diagnostics', 'Events'],
       permission: 'monitoring.view',
+    },
+  },
+  {
+    // routes.view, matching the number/prefix lookup — the one tool here whose
+    // endpoint is the reason to open the screen. The connectivity test and the
+    // tagged-send register are additionally gated inside the view, because they
+    // read smsc.manage and messages.view respectively and a panel an operator
+    // cannot use must say so rather than 403 on click.
+    path: '/test-tools',
+    name: 'test-tools',
+    component: () => import('../views/TestToolsView.vue'),
+    meta: {
+      title: 'Test Tools',
+      description:
+        'Number and prefix lookup, encoding and segment analysis, an SMPP connectivity test that reports how far it actually got, and the register of tagged test traffic.',
+      breadcrumb: ['Diagnostics', 'Test Tools'],
+      permission: 'routes.view',
     },
   },
   {

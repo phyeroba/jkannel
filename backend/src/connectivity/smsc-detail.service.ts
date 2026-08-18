@@ -60,6 +60,16 @@ export interface SmscDetail {
   bindState: string | null;
   bindStateSince: string | null;
   bindObservedAt: string | null;
+  /**
+   * Operator hold on new submissions (UC-SMSC-02), distinct from a
+   * carrier-dropped bind. Exposed here because it was previously written by the
+   * control service and read by nothing, which made "visually distinguish
+   * operator-suspended from carrier-disconnected" impossible on every screen —
+   * a suspended SMSC looked identical to a healthy one.
+   */
+  trafficSuspendedAt: string | null;
+  trafficSuspendedBy: string | null;
+  trafficSuspendedReason: string | null;
   queued: number | null;
   failed: number | null;
   sent: number | null;
@@ -134,6 +144,7 @@ export class SmscDetailService {
       const { rows } = await client.query<Record<string, unknown>>(
         `SELECT s.id::text, s.engine_id, s.name, s.type, s.host, s.port, s.enabled,
                 s.lifecycle_state, s.tps, s.connection_count,
+                s.traffic_suspended_at, s.traffic_suspended_by, s.traffic_suspended_reason,
                 s.carrier_id::text, c.name AS carrier_name,
                 b.state, b.entered_at, b.observed_at, b.queued_count, b.failed_count,
                 snap.sent, snap.received, snap.outbound_rate, snap.inbound_rate
@@ -179,6 +190,9 @@ export class SmscDetailService {
         bindState: (row.state as string) ?? null,
         bindStateSince: row.entered_at ? String(row.entered_at) : null,
         bindObservedAt: row.observed_at ? String(row.observed_at) : null,
+        trafficSuspendedAt: row.traffic_suspended_at ? String(row.traffic_suspended_at) : null,
+        trafficSuspendedBy: (row.traffic_suspended_by as string) ?? null,
+        trafficSuspendedReason: (row.traffic_suspended_reason as string) ?? null,
         queued: numberOrNull(row.queued_count),
         failed: numberOrNull(row.failed_count),
         sent: numberOrNull(row.sent),

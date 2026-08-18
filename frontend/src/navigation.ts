@@ -281,6 +281,26 @@ export const navigation: NavigationItem[] = [
     permission: 'routes.view',
     group: 'Routing',
   },
+  // Routing, in the specification's own order (§2, §9, §13): the rules, the
+  // depth behind them, the override that suspends them, and the tool that
+  // answers "where would this go?" without sending anything.
+  {
+    // routes.view, not routes.manage: reading which routes are on a manual
+    // override is exactly what an operator without change rights most needs,
+    // and the mutating controls inside the screen are gated separately.
+    label: 'Failover',
+    to: '/failover',
+    icon: 'route',
+    permission: 'routes.view',
+    group: 'Routing',
+  },
+  {
+    label: 'Route Simulator',
+    to: '/route-simulator',
+    icon: 'search',
+    permission: 'routes.view',
+    group: 'Routing',
+  },
   // Diagnostics, in the specification's own order (§2, §10–§12): one message,
   // then the protocol vocabulary, then the system-wide event stream, then the
   // raw log buffer, and finally the configuration those answers are read
@@ -364,6 +384,16 @@ export const navigation: NavigationItem[] = [
     to: '/log-explorer',
     icon: 'terminal',
     permission: 'system.view',
+    group: 'Diagnostics',
+  },
+  {
+    // routes.view is what the number/prefix lookup requires. The connectivity
+    // test (smsc.manage) and the tagged-send register (messages.view) are gated
+    // inside the screen, so this link never leads to a page that 403s outright.
+    label: 'Test Tools',
+    to: '/test-tools',
+    icon: 'terminal',
+    permission: 'routes.view',
     group: 'Diagnostics',
   },
   {

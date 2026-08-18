@@ -233,7 +233,7 @@ export class ConsoleRepository {
       actor,
       {
         select:
-          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,s.carrier_id::text AS carrier_id,s.connection_count,b.state AS bind_state,b.observed_at AS bind_observed_at,b.queued_count,b.failed_count,(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
+          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,s.carrier_id::text AS carrier_id,s.connection_count,s.traffic_suspended_at,s.traffic_suspended_reason,b.state AS bind_state,b.observed_at AS bind_observed_at,b.queued_count,b.failed_count,(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
         // LEFT JOIN, so an SMSC that has never been observed still appears —
         // with a null bind state, which the console renders as 'never
         // observed' rather than as a down bind.
@@ -462,6 +462,7 @@ export class ConsoleRepository {
     smscId: string,
     operation: string,
     idempotencyKey: string,
+    reason: string | null = null,
   ) {
     return this.inTenant(actor, async (c) => {
       const existing = (
@@ -470,8 +471,8 @@ export class ConsoleRepository {
       if (existing) return { ...existing, replayed: true };
       const row = (
         await c.query(
-          "INSERT INTO smsc_deployments(tenant_id,smsc_id,operation,status,idempotency_key,requested_by) VALUES($1,$2,$3,'pending',$4,$5) RETURNING *",
-          [actor.tenantId, smscId, operation, idempotencyKey, actor.userId],
+          "INSERT INTO smsc_deployments(tenant_id,smsc_id,operation,status,idempotency_key,requested_by,reason) VALUES($1,$2,$3,'pending',$4,$5,$6) RETURNING *",
+          [actor.tenantId, smscId, operation, idempotencyKey, actor.userId, reason],
         )
       ).rows[0];
       await this.audit(c, actor, `smsc.${operation}.requested`, 'smsc', smscId, null, row);

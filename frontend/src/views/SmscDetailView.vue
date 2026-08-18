@@ -17,9 +17,12 @@
  *     not receipts. Labelled as such, because "failed" next to "sent" reads as
  *     a delivery outcome and is not one.
  *
- * CONTROLLED ACTIONS (reconnect / suspend / resume) are PLAN.md 5.1–5.3 and are
- * not built here. No disabled buttons stand in for them: a control that cannot
- * act is worse than an absent one.
+ * CONTROLLED ACTIONS (reconnect / disable / enable / suspend / resume) are
+ * PLAN.md 5.1–5.3. They live on the SMSC register grid, where every connection
+ * is in reach, and each one goes through `components/ConfirmAction.vue` — which
+ * states the backend's computed impact before offering the verb. They are not
+ * duplicated here, because a second set of controls is a second thing to keep in
+ * step with the impact contract.
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';

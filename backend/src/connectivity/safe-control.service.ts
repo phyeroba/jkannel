@@ -130,8 +130,31 @@ export class SafeControlService {
           consequences.push('New submissions start flowing to this SMSC again immediately.');
           if (!suspended) blockedReason = 'Traffic on this SMSC is not suspended.';
           break;
+        case 'enable':
+          // The mirror of `disable`, and it was falling through to `default`
+          // with no consequences at all — which read as "this is harmless".
+          // Enabling redeploys the engine configuration just as disabling does.
+          summary = `Enable ${label}: it is added back to the generated engine configuration.`;
+          consequences.push(
+            'This is a configuration change: the engine is redeployed with this SMSC included, ' +
+              'and the bind is established from scratch.',
+          );
+          if (suspended)
+            consequences.push(
+              'Traffic on this SMSC is separately SUSPENDED, so enabling it will not resume ' +
+                'sending. Resume traffic as well if that is what you intend.',
+            );
+          if (routes > 0)
+            consequences.push(`${routes} route(s) reference it and can begin using it again.`);
+          break;
         default:
           summary = `${operation} on ${label}.`;
+          // Never an empty consequence list: a dialog with no stated impact
+          // reads as "this is safe", which is a claim we have not made.
+          consequences.push(
+            'No specific impact has been computed for this operation. Treat it as potentially ' +
+              'disruptive and check the current state before confirming.',
+          );
       }
 
       return {

@@ -160,9 +160,9 @@ Foundational: every later screen depends on these.
       reason capture, audit and an operational event.
 - [x] **5.3 Suspend / resume traffic** on an SMSC, visually distinct from
       carrier-disconnected.
-- [ ] **5.4 Route Simulator screen.** Backend is done (three endpoints); this is
+- [x] **5.4 Route Simulator screen.** Backend is done (three endpoints); this is
       UI only, and must be labelled explicitly non-transmitting.
-- [ ] **5.5 Test tools** — tagged test SMS (needs an `is_test` concept so test
+- [x] **5.5 Test tools** — tagged test SMS (needs an `is_test` concept so test
       traffic is distinguishable in traces and excluded from reports), DLR
       lookup, number/prefix lookup. Connectivity test and the segment analyzer
       already exist server-side.

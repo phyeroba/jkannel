@@ -19,7 +19,10 @@ describe('primary navigation contract', () => {
         '/carriers',
         '/sessions-smpp',
         '/routing',
+        '/failover',
+        '/route-simulator',
         '/configuration',
+        '/test-tools',
         '/message-trace',
         '/smpp-errors',
         '/events',
@@ -48,7 +51,7 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(39);
+    expect(navigation).toHaveLength(42);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -93,12 +96,14 @@ describe('primary navigation contract', () => {
       .filter((item) => item.group === 'Diagnostics')
       .map((item) => item.to);
     // §2: one message, the protocol vocabulary, the system-wide stream, the raw
-    // log buffer, then the configuration those answers are read against.
+    // log buffer, the tools that answer a question on demand, then the
+    // configuration those answers are read against.
     expect(diagnostics).toEqual([
       '/message-trace',
       '/smpp-errors',
       '/events',
       '/log-explorer',
+      '/test-tools',
       '/configuration',
     ]);
     const permission = (to: string) => navigation.find((item) => item.to === to)?.permission;
@@ -107,6 +112,22 @@ describe('primary navigation contract', () => {
     expect(permission('/message-trace')).toBe('messages.view');
     expect(permission('/smpp-errors')).toBe('smsc.view');
     expect(permission('/events')).toBe('monitoring.view');
+  });
+
+  it('orders Routing as the specification does, and keeps failover readable without change rights', () => {
+    const routing = navigation.filter((item) => item.group === 'Routing').map((item) => item.to);
+    // §2, §9, §13: the rules, the depth behind them, the override that suspends
+    // them, and the non-transmitting tool that explains a decision.
+    expect(routing).toEqual(['/routing', '/routing-advanced', '/failover', '/route-simulator']);
+    // Reading which routes are on a manual override must not require the
+    // permission to change one — that is the operator most likely to be caught
+    // out by an override nobody remembered.
+    expect(navigation.find((item) => item.to === '/failover')?.permission).toBe('routes.view');
+    expect(navigation.find((item) => item.to === '/route-simulator')?.permission).toBe(
+      'routes.view',
+    );
+    // The number/prefix lookup is the endpoint that decides Test Tools' gate.
+    expect(navigation.find((item) => item.to === '/test-tools')?.permission).toBe('routes.view');
   });
 
   it('keeps the API reference reachable for every authenticated user', () => {

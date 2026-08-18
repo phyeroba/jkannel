@@ -72,9 +72,10 @@ describe('application shell', () => {
     // 32 before Phase 2.3–2.5 added Carriers and SMPP Sessions to Connectivity;
     // 34 before Phase 3.2–3.3 added Live Traffic and DLR Performance to Traffic;
     // 36 before Phase 4.2–4.4 added Message Trace, SMPP Errors and Events to
-    // Diagnostics.
-    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(39);
-    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(39);
+    // Diagnostics; 39 before Phase 5.2–5.5 added Failover and Route Simulator to
+    // Routing and Test Tools to Diagnostics.
+    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(42);
+    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(42);
     // Six specification sections plus the three JKANNEL adds (PLAN.md §1).
     expect(wrapper.findAll('.nav-group')).toHaveLength(9);
     // Help is reachable from the top bar as well as the Platform group.
