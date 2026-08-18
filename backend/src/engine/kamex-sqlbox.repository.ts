@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { describeSegments } from './message-segments';
+import { maskRows } from '../privacy/masking';
 
 export interface SqlboxSubmission {
   sender: string;
@@ -850,18 +851,23 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
    * silently honour fewer filters than the grid does — which is exactly the
    * defect this shape prevents.
    */
-  async exportCsv(options: SqlboxListOptions = {}) {
+  async exportCsv(options: SqlboxListOptions & { reveal?: boolean } = {}) {
     const max = Number(process.env.SQLBOX_EXPORT_MAX_ROWS ?? 5000);
     const page = await this.list({ ...options, limit: Math.min(options.limit ?? max, max) });
     const header = KamexSqlboxRepository.EXPORT_COLUMNS;
     const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    // An export leaves the system: it lands in a spreadsheet, an email, a
+    // ticket. So it masks on exactly the same terms as the grid, and `reveal`
+    // must be explicitly passed by a caller that has already checked authority.
+    const items = options.reveal ? page.items : maskRows(page.items as any[]);
     return {
       filename: `jkannel-sqlbox-${new Date().toISOString().slice(0, 10)}.csv`,
-      rowCount: page.items.length,
+      rowCount: items.length,
+      masked: !options.reveal,
       nextCursor: page.nextCursor,
       content: [
         header.join(','),
-        ...page.items.map((item: any) => header.map((key) => escape(item[key])).join(',')),
+        ...items.map((item: any) => header.map((key) => escape(item[key])).join(',')),
       ].join('\r\n'),
     };
   }

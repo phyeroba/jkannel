@@ -241,7 +241,12 @@ describe('delivery report export parity', () => {
 
     expect(sqlbox.list).toHaveBeenCalledTimes(1);
     expect(sqlbox.exportCsv).toHaveBeenCalledTimes(1);
-    expect(sqlbox.exportCsv.mock.calls[0][0]).toEqual(sqlbox.list.mock.calls[0][0]);
+    // `reveal` is the privacy decision, not a filter, so it is compared on its
+    // own terms below rather than folded into the filter-parity contract.
+    const { reveal, ...exportOptions } = sqlbox.exportCsv.mock.calls[0][0];
+    expect(exportOptions).toEqual(sqlbox.list.mock.calls[0][0]);
+    // The export must never be less masked than the screen it came from.
+    expect(reveal).toBe(false);
     // And the pinned values really are pinned, not merely equal-and-wrong.
     expect(sqlbox.exportCsv.mock.calls[0][0]).toMatchObject({
       deliveryReport: true,

@@ -75,12 +75,17 @@ describe('the export honours exactly the filters the grid does', () => {
     await controller.messages(request, { ...fullQuery });
     await controller.exportMessages(request, { ...fullQuery }, makeResponse());
 
-    // Everything except the paging limit must be byte-identical.
+    // Everything except the paging limit must be byte-identical. `reveal` is
+    // not a filter — it is the privacy decision — so it is compared separately
+    // below rather than folded into the filter contract.
     const { limit: gridLimit, ...grid } = listed[0];
-    const { limit: exportLimit, ...csv } = exported[0];
+    const { limit: exportLimit, reveal, ...csv } = exported[0];
     expect(csv).toEqual(grid);
     expect(gridLimit).toBe(25);
     expect(exportLimit).toBe(25);
+    // An export leaves the system, so it must never be LESS masked than the
+    // grid it was raised from.
+    expect(reveal).toBe(false);
   });
 
   it('sends the PDF export the same filter set as the grid', async () => {

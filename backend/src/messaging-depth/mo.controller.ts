@@ -16,6 +16,8 @@ import { PermissionsGuard, RequirePermissions } from '../security/permissions.gu
 import { Actor } from './message-send.service';
 import { MoInboundService } from './mo-inbound.service';
 import { MoRulesService } from './mo-rules.service';
+import { MASKING_NOTICE, maskRow, maskRows } from '../privacy/masking';
+import { PiiRevealService } from '../privacy/pii-reveal.service';
 
 type Request = AuthenticatedRequest;
 const actor = (r: Request): Actor => ({
@@ -64,7 +66,29 @@ export class MoController {
   constructor(
     private readonly rules: MoRulesService,
     private readonly inbound: MoInboundService,
+    // Optional so existing unit tests can construct the controller with the
+    // two collaborators they need. Absent means MASKED — see `reveal`.
+    private readonly privacy?: PiiRevealService,
   ) {}
+
+  /**
+   * Whether this request may see unmasked subscriber data, recording the use
+   * when it may. Inbound messages carry the sender's own number and whatever
+   * the subscriber typed, so they are masked on exactly the same terms as MT.
+   */
+  private async reveal(r: Request, q: any, rowCount: number, messageRef?: string | null) {
+    const wants = q?.reveal === 'true' || q?.reveal === true;
+    if (!this.privacy) return false;
+    const result = await this.privacy.resolve(
+      actor(r),
+      new Set(r.principal!.permissions ?? []),
+      wants,
+      messageRef ?? null,
+    );
+    if (result.permitted && result.grant)
+      await this.privacy.recordUse(actor(r), result.grant.id, rowCount, 'mo');
+    return result.permitted;
+  }
 
   // ---- rules ---------------------------------------------------------------
 
@@ -202,18 +226,33 @@ export class MoController {
   // ---- observation ---------------------------------------------------------
 
   /** Grid over received inbound messages, including the ones that matched NOTHING. */
-  @Get('messages') @RequirePermissions('messages.view') listMessages(
+  @Get('messages') @RequirePermissions('messages.view') async listMessages(
     @Req() r: Request,
     @Query() q: any = {},
   ) {
-    return this.inbound.listMessages(actor(r), q);
+    const page: any = await this.inbound.listMessages(actor(r), q);
+    const permitted = await this.reveal(r, q, page.items?.length ?? 0);
+    return {
+      ...page,
+      items: permitted ? page.items : maskRows(page.items ?? []),
+      privacy: { masked: !permitted, notice: permitted ? null : MASKING_NOTICE },
+    };
   }
 
-  @Get('messages/:id') @RequirePermissions('messages.view') getMessage(
+  @Get('messages/:id') @RequirePermissions('messages.view') async getMessage(
     @Req() r: Request,
     @Param('id') id: string,
+    @Query() q: any = {},
   ) {
-    return this.inbound.getMessage(actor(r), uuid(id, 'id'));
+    const messageId = uuid(id, 'id');
+    const message: any = await this.inbound.getMessage(actor(r), messageId);
+    // Scoped to this message: a grant taken out to investigate one complaint
+    // should not silently also unmask the whole grid.
+    const permitted = await this.reveal(r, q, 1, messageId);
+    return {
+      ...(permitted ? message : maskRow(message)),
+      privacy: { masked: !permitted, notice: permitted ? null : MASKING_NOTICE },
+    };
   }
 
   /** Grid over individual fan-out delivery attempts and their outcomes. */

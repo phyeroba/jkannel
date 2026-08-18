@@ -52,6 +52,8 @@ import {
 } from '../messaging-depth/message-filters';
 import { parseMessageSchedule } from '../messaging-depth/message-scheduling';
 import { SEGMENT_LIMITS, previewSegments } from '../engine/message-segments';
+import { MASKING_NOTICE, maskRows } from '../privacy/masking';
+import { PiiRevealService } from '../privacy/pii-reveal.service';
 
 type Request = AuthenticatedRequest;
 const actor = (request: Request): Actor => ({
@@ -1243,6 +1245,9 @@ export class ReadModelsController {
     // scheduledAt is in the future, releasing it into `send` at that instant.
     // Optional for the same reason as `send`.
     private readonly scheduling?: ScheduledSendService,
+    // Reveal authority for masked subscriber data. Optional like the others,
+    // and its absence fails CLOSED — see resolveReveal.
+    private readonly privacy?: PiiRevealService,
   ) {}
   /**
    * SQLBox tables are engine-owned and have no tenant column; every read is
@@ -1279,13 +1284,61 @@ export class ReadModelsController {
       ...filters,
       allowedSmscIds: await this.tenantSmscScope(r),
     });
+    // Masked by default (§10, §18). Every row carrying a subscriber number or
+    // a message body goes through this; seeing the real values needs both the
+    // messages.reveal permission and a live, reasoned, time-limited grant, and
+    // each use is audited against that grant.
+    const privacy = await this.resolveReveal(r, q, 'messages', page.items?.length ?? 0);
     return {
       ...page,
+      items: privacy.permitted ? page.items : maskRows(page.items ?? []),
+      privacy: {
+        masked: !privacy.permitted,
+        notice: privacy.permitted ? null : MASKING_NOTICE,
+        refusal: privacy.refusal,
+        revealedUnder: privacy.grant?.id ?? null,
+      },
       // Echoed so the console (and an export raised from it) can prove the two
       // were asked the same question.
       filters: { ...filters, description: describeMessageFilters(filters) ?? null },
       source: { status: 'available', type: 'kamex-sqlbox' },
     };
+  }
+
+  /**
+   * Resolves reveal authority for a read, and records the use when granted.
+   *
+   * The audit entry is written HERE rather than by the caller, so a new read
+   * path cannot accidentally reveal without recording it — the recording is
+   * part of obtaining permission, not a step that can be forgotten.
+   */
+  private async resolveReveal(
+    r: Request,
+    q: any,
+    context = 'messages',
+    // `null` defers the audit entry to the caller — used by the export, whose
+    // row count is not known until after the authority check has been made.
+    rowCount: number | null = 1,
+  ): Promise<{ permitted: boolean; grant: { id: string } | null; refusal: string | null }> {
+    const wants = q?.reveal === 'true' || q?.reveal === true;
+    // No reveal service wired (the controller unit tests construct it with a
+    // subset of collaborators): mask. Failing closed is the only safe default
+    // for a privacy control — a missing dependency must not become disclosure.
+    if (!this.privacy)
+      return {
+        permitted: false,
+        grant: null,
+        refusal: wants ? 'Reveal is not available on this deployment.' : null,
+      };
+    const result = await this.privacy.resolve(
+      actor(r),
+      new Set(r.principal!.permissions ?? []),
+      wants,
+      q?.messageRef ?? null,
+    );
+    if (result.permitted && result.grant && rowCount !== null)
+      await this.privacy.recordUse(actor(r), result.grant.id, rowCount, context);
+    return result;
   }
   @Get('messages/export.csv') @RequirePermissions('messages.export') async exportMessages(
     @Req() r: Request,
@@ -1303,14 +1356,28 @@ export class ReadModelsController {
       response.send(KamexSqlboxRepository.exportHeaderRow());
       return;
     }
+    const privacy = await this.resolveReveal(r, q, 'messages.export', null);
     const exported = await this.sqlbox.exportCsv({
       ...filters,
       allowedSmscIds: await this.tenantSmscScope(r),
+      reveal: privacy.permitted,
     });
     response.setHeader('content-type', 'text/csv; charset=utf-8');
     response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
     response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+    // Stated in a header because a CSV has nowhere else to say it, and a file
+    // full of `+2567•••••18` with no explanation is a support ticket.
+    response.setHeader('x-jkannel-masked', exported.masked ? 'true' : 'false');
     response.setHeader('x-jkannel-source-status', 'available');
+    // Recorded now that the size is known: "exported 4,000 subscriber numbers"
+    // and "looked at one" are the two facts an investigation separates.
+    if (privacy.permitted && privacy.grant)
+      await this.privacy!.recordUse(
+        actor(r),
+        privacy.grant.id,
+        exported.rowCount,
+        'messages.export',
+      );
     const description = describeMessageFilters(filters);
     if (description) response.setHeader('x-jkannel-export-filters', description);
     if (exported.nextCursor)
@@ -1320,6 +1387,7 @@ export class ReadModelsController {
   @Get('messages/:id/trace') @RequirePermissions('messages.view') async messageTrace(
     @Req() r: Request,
     @Param('id') id: string,
+    @Query() q: any = {},
   ) {
     const probe = await this.sqlbox.probe();
     if (!probe.available)
@@ -1329,8 +1397,19 @@ export class ReadModelsController {
         summary: { eventCount: 0, finalStatus: 'unavailable' },
         source: { status: 'unavailable', code: 'SQLBOX_NOT_AVAILABLE', message: probe.evidence },
       };
+    const trace: any = await this.sqlbox.trace(id, await this.tenantSmscScope(r));
+    // A trace is by construction a single-message investigation, so the message
+    // id is offered as the reveal scope: a grant taken out for this one message
+    // unmasks this one message and nothing else.
+    const privacy = await this.resolveReveal(r, { ...q, messageRef: id }, 'messages.trace', 1);
     return {
-      ...(await this.sqlbox.trace(id, await this.tenantSmscScope(r))),
+      ...trace,
+      events: privacy.permitted ? trace.events : maskRows(trace.events ?? []),
+      privacy: {
+        masked: !privacy.permitted,
+        notice: privacy.permitted ? null : MASKING_NOTICE,
+        refusal: privacy.refusal,
+      },
       source: { status: 'available', type: 'kamex-sqlbox' },
     };
   }
@@ -1528,7 +1607,14 @@ export class ReadModelsController {
       }),
       this.sqlbox.queueSummary(allowed),
     ]);
-    return { ...page, summary, source: { status: 'available', type: 'kamex-sqlbox' } };
+    const privacy = await this.resolveReveal(r, q, 'queues', page.items?.length ?? 0);
+    return {
+      ...page,
+      items: privacy.permitted ? page.items : maskRows(page.items ?? []),
+      privacy: { masked: !privacy.permitted, notice: privacy.permitted ? null : MASKING_NOTICE },
+      summary,
+      source: { status: 'available', type: 'kamex-sqlbox' },
+    };
   }
   /**
    * THE delivery-report option set, for the grid and for the export.
@@ -1585,8 +1671,18 @@ export class ReadModelsController {
       maxLimit: 500,
     });
     const page: any = await this.sqlbox.list(options);
+    // A delivery report is receipt rows — one per subscriber who was or was not
+    // reached — so it carries exactly the same PII as /messages and masks on
+    // exactly the same terms.
+    const privacy = await this.resolveReveal(r, q, 'reports.delivery', page.items.length);
     return {
       ...page,
+      items: privacy.permitted ? page.items : maskRows(page.items),
+      privacy: {
+        masked: !privacy.permitted,
+        notice: privacy.permitted ? null : MASKING_NOTICE,
+        refusal: privacy.refusal,
+      },
       summary: {
         total: page.total ?? page.items.length,
         returned: page.items.length,
@@ -1611,13 +1707,22 @@ export class ReadModelsController {
       return;
     }
     const { options } = await this.deliveryReportOptions(r, q, this.exportLimits());
-    const exported = await this.sqlbox.exportCsv(options);
+    const privacy = await this.resolveReveal(r, q, 'reports.delivery.export', null);
+    const exported = await this.sqlbox.exportCsv({ ...options, reveal: privacy.permitted });
     response.setHeader('content-type', 'text/csv; charset=utf-8');
     response.setHeader('content-disposition', `attachment; filename="${exported.filename}"`);
     response.setHeader('x-jkannel-export-row-count', String(exported.rowCount));
+    response.setHeader('x-jkannel-masked', exported.masked ? 'true' : 'false');
     response.setHeader('x-jkannel-source-status', 'available');
     const description = describeMessageFilters(filters);
     if (description) response.setHeader('x-jkannel-export-filters', description);
+    if (privacy.permitted && privacy.grant)
+      await this.privacy!.recordUse(
+        actor(r),
+        privacy.grant.id,
+        exported.rowCount,
+        'reports.delivery.export',
+      );
     response.send(exported.content);
   }
   @Get('monitoring') @RequirePermissions('monitoring.view') async monitoring() {
@@ -1709,11 +1814,16 @@ export class ReadModelsController {
     const page = probe.available
       ? await this.sqlbox.list({ ...filters, allowedSmscIds: await this.tenantSmscScope(r) })
       : { items: [] as Array<Record<string, unknown>>, nextCursor: null };
+    // A PDF is the most forwardable artefact this system produces — it gets
+    // attached to tickets and emailed on. It masks on the same terms as the
+    // grid and the CSV.
+    const privacy = await this.resolveReveal(r, q, 'messages.export.pdf', page.items.length);
+    const items = privacy.permitted ? page.items : maskRows(page.items as any[]);
     await sendExport(
       this.exporter!,
       response,
       'pdf',
-      { items: page.items, total: page.items.length, limit: filters.limit ?? 500, offset: 0 },
+      { items, total: items.length, limit: filters.limit ?? 500, offset: 0 },
       [
         { key: 'id', header: 'ID' },
         { key: 'timestamp', header: 'Timestamp', weight: 2 },
@@ -1730,9 +1840,16 @@ export class ReadModelsController {
       'Messages',
       r.principal!.username ?? r.principal!.userId,
       // The applied filter set, not the raw query string: what the reader needs
-      // is which rows this page is a subset of.
-      describeMessageFilters(filters) ??
-        (probe.available ? undefined : 'SQLBox unavailable — no rows could be read'),
+      // is which rows this page is a subset of. The masking state rides along,
+      // because a printed page of `+2567••••••18` with no caption is a support
+      // ticket waiting to happen.
+      [
+        describeMessageFilters(filters) ??
+          (probe.available ? undefined : 'SQLBox unavailable — no rows could be read'),
+        privacy.permitted ? null : 'Subscriber numbers and message text are masked',
+      ]
+        .filter(Boolean)
+        .join(' — ') || undefined,
     );
   }
 }
