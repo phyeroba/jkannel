@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
 import { apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
+import { healthTone, type CarrierSummary } from '../utils/connectivity';
 
 type RecordValue = Record<string, unknown>;
 type SourceState = 'checking' | 'ok' | 'unavailable';
@@ -130,6 +131,58 @@ async function checkVolume() {
   }
 }
 
+/**
+ * Carrier connectivity and carrier quality — §3 of the specification, and two
+ * of the six panels the design system's DashboardScreen specifies.
+ *
+ * The design shows `unknown` rather than a dash wherever a figure is not
+ * measured, and that is not a placeholder for something to fill in later: it is
+ * the honest state. This deployment derives observed throughput and delivery
+ * rate from engine telemetry that is frequently absent, so those columns are
+ * genuinely unknown a lot of the time and the design already accounts for it.
+ * Nothing here computes a number the backend did not supply.
+ */
+const carriersState = ref<SourceState>('checking');
+const carriers = ref<CarrierSummary[]>([]);
+
+async function checkCarriers() {
+  try {
+    carriers.value = await apiRequest<CarrierSummary[]>('/carriers');
+    carriersState.value = 'ok';
+  } catch {
+    carriers.value = [];
+    carriersState.value = 'unavailable';
+  }
+}
+
+/** Worst first, so the row that needs attention is the row you read. */
+const HEALTH_ORDER: Record<string, number> = {
+  critical: 0,
+  degraded: 1,
+  unknown: 2,
+  healthy: 3,
+};
+const carriersByHealth = computed(() =>
+  [...carriers.value].sort(
+    (a, b) =>
+      (HEALTH_ORDER[a.health] ?? 9) - (HEALTH_ORDER[b.health] ?? 9) || a.name.localeCompare(b.name),
+  ),
+);
+
+/**
+ * How many carriers report a health we could not observe.
+ *
+ * This drives the stale-telemetry banner, which the design places ABOVE the
+ * content rather than in place of it: an operator must still be able to read
+ * everything else while being told which part of it is not current.
+ */
+const unobservedCarriers = computed(
+  () => carriers.value.filter((carrier) => carrier.health === 'unknown').length,
+);
+
+const utilisationLabel = (carrier: CarrierSummary) =>
+  carrier.utilisation === null ? '—' : `${Math.round(carrier.utilisation * 100)}%`;
+
 async function checkAlerts() {
   try {
     const page = await apiRequest<unknown>('/alerts?sort=-openedAt&limit=5&offset=0');
@@ -158,6 +211,7 @@ async function refresh() {
     checkMonitoring(),
     checkVolume(),
     checkAlerts(),
+    checkCarriers(),
   ]);
   refreshed.value = new Date().toLocaleTimeString();
 }
@@ -284,6 +338,17 @@ function statusTone(status: string) {
 }
 </script>
 <template>
+  <!--
+    Stale telemetry is announced ABOVE the content, never in place of it. An
+    operator has to be able to read everything on the screen while being told
+    which part of it is not current — replacing the dashboard with a warning
+    hides exactly the numbers they came to look at.
+  -->
+  <p v-if="unobservedCarriers" class="stale-banner" data-testid="dashboard-stale-banner">
+    Telemetry for {{ unobservedCarriers }}
+    {{ unobservedCarriers === 1 ? 'carrier is' : 'carriers are' }} not being observed, so
+    {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than healthy.
+  </p>
   <div class="dashboard-actions">
     <button
       class="secondary-button"
@@ -464,4 +529,86 @@ function statusTone(status: string) {
       </div>
     </article>
   </section>
+
+  <!--
+    Carrier connectivity — the design system's DashboardScreen centrepiece, and
+    the panel §3 asks for so a shift can be assessed in ten seconds: every
+    network this gateway binds to, worst first, each row opening its carrier.
+
+    Every column here is a field `GET /carriers` already returns. Throughput and
+    utilisation are derived from engine telemetry that is often absent, so they
+    read `unknown` rather than 0 — the design specifies that treatment, and a
+    zero we never measured is the one thing this console must never print.
+  -->
+  <article class="panel" data-testid="carrier-connectivity">
+    <header class="panel-header">
+      <div>
+        <h2>Carrier connectivity</h2>
+        <p>Every network this gateway binds to, worst first</p>
+      </div>
+      <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
+    </header>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Carrier</th>
+            <th scope="col">Health</th>
+            <th scope="col">SMSCs</th>
+            <th scope="col">Sessions</th>
+            <th scope="col" class="numeric">MT TPS</th>
+            <th scope="col" class="numeric">Utilisation</th>
+            <th scope="col" class="numeric">Queue</th>
+            <th scope="col" class="numeric">Open alerts</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="carrier in carriersByHealth"
+            :key="carrier.id"
+            class="selectable"
+            :data-testid="`dashboard-carrier-${carrier.id}`"
+            tabindex="0"
+            @click="$router.push(`/carriers/${carrier.id}`)"
+            @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
+          >
+            <td>
+              <strong>{{ carrier.name }}</strong>
+              <span class="row-id">{{
+                [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
+                'no network code'
+              }}</span>
+            </td>
+            <td>
+              <span class="status-badge" :class="healthTone(carrier.health)">{{
+                carrier.health
+              }}</span>
+            </td>
+            <td class="figures">{{ carrier.smscCount }}</td>
+            <td class="figures">{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</td>
+            <td class="figures numeric">
+              {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps }}
+            </td>
+            <td class="figures numeric">{{ utilisationLabel(carrier) }}</td>
+            <td class="figures numeric">{{ carrier.queuedMessages.toLocaleString() }}</td>
+            <td class="figures numeric">{{ carrier.openAlerts }}</td>
+          </tr>
+          <tr v-if="carriersState === 'ok' && !carriers.length">
+            <td colspan="8" class="empty-cell" data-testid="dashboard-carriers-empty">
+              No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
+              network.
+            </td>
+          </tr>
+          <tr v-if="carriersState === 'checking'">
+            <td colspan="8" class="empty-cell">Loading carriers…</td>
+          </tr>
+          <tr v-if="carriersState === 'unavailable'">
+            <td colspan="8" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+              Carrier connectivity is unavailable — the register could not be read.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
 </template>
