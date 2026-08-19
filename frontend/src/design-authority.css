@@ -1439,3 +1439,337 @@ li.selectable {
 li.selectable:hover {
   background: var(--surface-hover, rgba(127, 127, 127, 0.08));
 }
+/* ===========================================================================
+   FORM CONTROL PRIMITIVES
+   ---------------------------------------------------------------------------
+   Added after auditing every rule that styles a control. The console had:
+
+     input     4 different paddings (10px, 11px, 0 13px, 8px 10px)
+     select    4 different paddings, and no consistent height
+     textarea  NO STYLING AT ALL — unpadded, unbordered, browser default
+     tooltip   NO STYLING AT ALL
+
+   So a form could show three differently-sized boxes side by side, and any
+   textarea looked like it belonged to a different application.
+
+   The sizing lives in tokens rather than being repeated, so "make controls
+   slightly taller" is one edit instead of forty.
+
+   SPECIFICITY IS THE WHOLE DESIGN HERE. This layer is a floor, not a mandate:
+   controls nobody styled pick it up, and any rule that deliberately differs —
+   the login card's 42px inputs, the compact range chips — must still win. So
+   the exclusions are wrapped in `:where()`, which contributes zero specificity.
+   Written the obvious way, `input:not([type='checkbox'])…` would score (0,3,1)
+   and silently shrink the login fields; `input:where(:not(…))` scores (0,0,1),
+   exactly a bare element selector.
+
+   For the same reason this sets no blanket `width`. Every control that wants to
+   fill its cell already says so; forcing 100% at element level would stretch the
+   inline selects in toolbars and range pickers. Only `textarea`, which had no
+   rules at all, gets a width.
+   =========================================================================== */
+
+:root {
+  --control-h: 36px;
+  --control-pad-x: 12px;
+  --control-radius: var(--radius-md);
+  --control-font: 13.5px;
+  /* One focus ring for every control, so keyboard position is never ambiguous. */
+  --control-ring: 0 0 0 3px var(--brand-soft);
+}
+
+input:where(:not([type='checkbox'], [type='radio'], [type='hidden'])),
+textarea,
+select {
+  max-width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  /* Slightly off the panel colour, matching what the login card, the settings
+     rows and the command dialog already do — a control should read as an inset,
+     not as a bordered patch of the panel it sits on. */
+  background: var(--surface-2);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--control-font);
+  line-height: 1.4;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+/* A textarea is the one control that must not be vertically centred, and the
+   only one that should grow. `resize: vertical` and not `both`: horizontal
+   resize breaks out of grid columns and overlaps the neighbouring panel. */
+textarea {
+  width: 100%;
+  padding: 10px var(--control-pad-x);
+  min-height: 96px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+/* Native select chevrons differ per OS, so the control never quite matches the
+   inputs beside it. One inline SVG makes it identical everywhere.
+
+   THE SELECTOR IS NOT DECORATION. `appearance: none` removes the native arrow,
+   so if the replacement image fails to apply the control loses its affordance
+   entirely and reads as a text field that cannot be typed in. Three existing
+   rules — `.filter-select select`, `.setting-control select` and
+   `.range-control select` — set `background:` as a SHORTHAND, which resets
+   `background-image` to none. A bare `select` selector (0,0,1) loses to all
+   three, and that is exactly what happened: the send-priority dropdown rendered
+   with no arrow at all.
+
+   `:not([multiple]):not([size])` scores (0,2,1) — each `:not()` contributes its
+   argument's specificity — so it outranks every one of them no matter which
+   stylesheet loads first, which matters because `workspace-extras.css` is
+   injected as a component style rather than from the entry. The two exclusions
+   are the same ones that make a select render as a list box, where a chevron
+   would be wrong anyway.
+
+   The extra right padding is the space that arrow occupies. */
+select:not([multiple]):not([size]) {
+  appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a5a2ad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  cursor: pointer;
+}
+select[multiple],
+select[size] {
+  appearance: auto;
+  background-image: none;
+  padding: 8px var(--control-pad-x);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: var(--control-ring);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1; /* Firefox dims placeholders further; this keeps them readable. */
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  background: var(--bg);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* An invalid control should be obvious without relying on colour alone — the
+   field-level message beside it carries the words. */
+input[aria-invalid='true'],
+textarea[aria-invalid='true'],
+select[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+input[aria-invalid='true']:focus,
+textarea[aria-invalid='true']:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent);
+}
+
+/* Checkboxes and radios keep their native rendering but adopt the brand colour
+   and a matching focus ring, so they read as part of the same family. */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--brand);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Labels that wrap a control: consistent gap, and the whole label clickable. */
+label {
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------------
+   The two generic wrappers that had drifted. Aligned to the tokens rather than
+   left at 10px and 8px 10px, which is what made two filters on one toolbar
+   different heights.
+   --------------------------------------------------------------------------- */
+.filter-search input,
+.filter-select select,
+.setting-control input,
+.setting-control select,
+.setting-control textarea {
+  padding: 0 var(--control-pad-x);
+  min-height: var(--control-h);
+  border-radius: var(--control-radius);
+  font-size: var(--control-font);
+}
+.setting-control textarea {
+  padding: 10px var(--control-pad-x);
+}
+/* Every select that carries its own padding needs room re-made for the chevron,
+   or the longest option label runs underneath the arrow. These also restate the
+   background as a COLOUR rather than a shorthand, because the shorthand in the
+   rules above is what was erasing the arrow in the first place. */
+.filter-select select,
+.setting-control select,
+.range-control select {
+  padding-right: 34px;
+  background-color: var(--surface-2);
+}
+/* The shared time-range picker sat at 5px 8px, which made it visibly shorter
+   than the buttons beside it in the same workspace header. */
+.range-control select {
+  min-height: var(--control-h);
+  padding-left: var(--control-pad-x);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: var(--control-font);
+}
+
+/* ---------------------------------------------------------------------------
+   Action buttons share the control height.
+
+   `.primary-button` / `.secondary-button` declared `10px 15px` and no height,
+   which computes to roughly 39px — so a button standing next to a filter in the
+   same toolbar was a few pixels taller than it, in a way that reads as sloppy
+   without being obviously wrong. Only the height is set here; the padding,
+   colours and weight they already have are untouched.
+   --------------------------------------------------------------------------- */
+.primary-button,
+.secondary-button,
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: var(--control-h);
+  padding-top: 0;
+  padding-bottom: 0;
+  border-radius: var(--control-radius);
+  font-size: var(--control-font);
+  white-space: nowrap;
+}
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.danger-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+/* Every button type disables the same way. Only `.primary-button` had this, so
+   a disabled secondary looked identical to an enabled one. */
+.secondary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* Buttons that live inside a table row are the one deliberate exception: giving
+   them the full control height would grow every row in every grid. They keep
+   their own compact size and only inherit the shape and focus ring. */
+.row-actions .primary-button,
+.row-actions .secondary-button,
+.row-actions .danger-button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* ===========================================================================
+   PAGINATION
+   ---------------------------------------------------------------------------
+   The pager carried a font-size and nothing else, so its controls inherited
+   whatever the surrounding view happened to set.
+   =========================================================================== */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.pager-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pager .secondary-button,
+.pager-buttons .secondary-button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+/* A disabled pager button must look unavailable, not merely be unavailable —
+   otherwise the only feedback for "you are on the last page" is nothing
+   happening. */
+.pager button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* Page counts read as figures, so they should not reflow as the number grows. */
+.pager .figures,
+.pager .mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===========================================================================
+   TOOLTIPS
+   ---------------------------------------------------------------------------
+   There was no tooltip styling anywhere, so `title` attributes fell back to the
+   browser's own — a different shape, delay and colour on every platform, and
+   invisible to touch users.
+
+   Usage:  <span class="tip" data-tip="Explanation here">…</span>
+   =========================================================================== */
+.tip {
+  position: relative;
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+}
+.tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  z-index: 40;
+  min-width: 160px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--text-strong);
+  color: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.tip:hover::after,
+.tip:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

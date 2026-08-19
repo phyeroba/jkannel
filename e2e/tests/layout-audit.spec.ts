@@ -40,6 +40,15 @@ const ROUTES = navigation
   .sort();
 
 test.describe('@layout console layout audit', () => {
+  /**
+   * Each test walks every top-level route and waits 1.2s for the view to settle,
+   * so the floor is already ROUTES.length × 1.2s before a single measurement —
+   * past the 45s project default at the current route count. A sweep is
+   * inherently long; the alternative is dropping routes from the sweep, which
+   * would trade a slow test for a blind one.
+   */
+  test.setTimeout(Math.max(120_000, ROUTES.length * 4_000));
+
   test('no page lays sibling panels on top of each other', async ({ page }) => {
     const problems: string[] = [];
 
@@ -50,12 +59,24 @@ test.describe('@layout console layout audit', () => {
 
       const boxes: Box[] = await page.evaluate(() => {
         const main = document.querySelector('main, #workspace, .workspace') ?? document.body;
-        // Direct panel-ish children only. Nested panels legitimately sit inside
-        // their parent, so comparing every descendant would report noise.
+        // Panel-ish nodes at the top two levels. The selector deliberately reaches
+        // through a wrapper (`:scope > section > .panel`), because several views
+        // group their panels inside an unclassed <section>.
         const nodes = Array.from(
-          main.querySelectorAll<HTMLElement>(':scope > section, :scope > article, :scope > .panel, :scope > div > .panel, :scope > section > .panel'),
+          main.querySelectorAll<HTMLElement>(
+            ':scope > section, :scope > article, :scope > .panel, :scope > div > .panel, :scope > section > .panel',
+          ),
         );
-        return nodes
+        // CONTAINMENT IS NOT OVERLAP. Reaching through wrappers means the wrapper
+        // and its own children both land in this list, and a parent's box always
+        // covers its child's — so every grouped view reported a six-figure
+        // "overlap" that was simply a panel sitting inside the section that holds
+        // it. Dropping any node that contains another collected node leaves the
+        // leaves, which are the boxes that genuinely must not intersect.
+        const leaves = nodes.filter(
+          (node) => !nodes.some((other) => other !== node && node.contains(other)),
+        );
+        return leaves
           .filter((n) => {
             const s = getComputedStyle(n);
             return s.display !== 'none' && s.visibility !== 'hidden' && n.offsetHeight > 4;

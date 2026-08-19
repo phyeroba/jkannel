@@ -54,3 +54,7 @@ runtime/**/backups/
 # ---------------------------------------------------------------------------
 docker-compose.override.yml
 deploy/
+
+# Playwright run artefacts (traces, videos, failure screenshots).
+e2e/test-results/
+test-results/

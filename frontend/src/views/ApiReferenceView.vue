@@ -3,6 +3,13 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiRequest, saveDownloadedFile } from '../api';
 import AppIcon from '../components/AppIcon.vue';
+import CodeConsole from '../components/CodeConsole.vue';
+import {
+  LANGUAGE_LABELS,
+  buildExample,
+  credentialFor,
+  type ExampleLanguage,
+} from '../utils/api-examples';
 
 /**
  * The in-console API reference.
@@ -340,6 +347,89 @@ const selected = computed(
 );
 const selectedCaveats = computed(() => (selected.value ? caveatsFor(selected.value) : []));
 
+// --- Worked example --------------------------------------------------------
+// Built from the selected operation itself rather than stored anywhere, so a
+// route that is renamed or removed in the backend cannot leave a stale snippet
+// behind. See utils/api-examples.ts for what is derived and what is curated.
+const exampleLanguage = ref<ExampleLanguage>('curl');
+const exampleLanguages = Object.keys(LANGUAGE_LABELS) as ExampleLanguage[];
+
+const example = computed(() => {
+  const endpoint = selected.value;
+  if (!endpoint) return null;
+  return buildExample({
+    method: endpoint.method,
+    path: endpoint.path,
+    serverUrl: serverUrl.value,
+    secured: endpoint.secured,
+    permissions: endpoint.permissions,
+    parameters: endpoint.parameters,
+    hasRequestBody: Boolean(endpoint.requestBody),
+    requestBodySchema: endpoint.requestBody?.content?.['application/json']?.schema,
+    responseSchemaNames: endpoint.responses
+      .map((response) => (response.schema?.$ref ? refName(response.schema.$ref) : ''))
+      .filter(Boolean),
+  });
+});
+
+const exampleCredential = computed(() =>
+  selected.value
+    ? credentialFor({
+        method: selected.value.method,
+        path: selected.value.path,
+        serverUrl: serverUrl.value,
+        secured: selected.value.secured,
+        permissions: selected.value.permissions,
+        parameters: selected.value.parameters,
+        hasRequestBody: Boolean(selected.value.requestBody),
+        responseSchemaNames: [],
+      })
+    : 'none',
+);
+
+const CREDENTIAL_NOTE: Record<string, string> = {
+  bearer:
+    'Send the operator access token from POST /auth/login. Export it first: export JKANNEL_ACCESS_TOKEN=…',
+  apikey:
+    'This route is authenticated by a gateway API key, not by a bearer token — a bearer token here is parsed as a JWT and rejected. Export the key first: export JKANNEL_API_KEY=…',
+  none: 'No credential was reflected for this operation. Read that as “auth not reflected”, not “open to anyone”.',
+};
+
+// The two credential walkthroughs on the Authenticating panel. Built here
+// rather than inlined in the template so the server path is substituted once
+// and the shell quoting is not at the mercy of Vue's whitespace handling.
+const bearerSample = computed(() =>
+  [
+    `curl -s -X POST ${serverUrl.value}/auth/login \\`,
+    '  -H "Content-Type: application/json" \\',
+    `  -d '{"tenant":"acme","username":"operator","password":"…"}'`,
+    '',
+    '# The access token is envelope.data.accessToken. Send it on every call:',
+    `curl "${serverUrl.value}/messages?limit=50" \\`,
+    '  -H "Authorization: Bearer $JKANNEL_ACCESS_TOKEN"',
+  ].join('\n'),
+);
+
+const apiKeySample = computed(() =>
+  [
+    `curl -X POST ${serverUrl.value}/gateway/messages \\`,
+    '  -H "X-API-Key: $JKANNEL_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    `  -d '{"sender":"ACME","receiver":"+256700000000","text":"hello"}'`,
+    '',
+    '# Then poll the same key for delivery state:',
+    `curl "${serverUrl.value}/gateway/messages?limit=20" \\`,
+    '  -H "X-API-Key: $JKANNEL_API_KEY"',
+  ].join('\n'),
+);
+
+/** The status pill colour on the response window. */
+function toneForStatus(status: number): 'good' | 'warn' | 'bad' {
+  if (status < 300) return 'good';
+  if (status < 500) return 'warn';
+  return 'bad';
+}
+
 // --- Deep links -------------------------------------------------------------------
 // Every filter and the open operation live in the URL, so a link to
 // "?op=MessagesController_list" or "?q=alerts&method=post" reopens exactly the
@@ -563,9 +653,13 @@ onMounted(() => {
             every request. Refresh at <span class="mono">POST {{ serverUrl }}/auth/refresh</span>
             when it expires.
           </p>
-          <pre class="json-block" data-testid="api-reference-bearer-sample">
-curl -H "Authorization: Bearer $ACCESS_TOKEN" \
-     {{ serverUrl }}/messages</pre>
+          <CodeConsole
+            title="Sign in, then call"
+            badge="cURL"
+            prompt
+            :code="bearerSample"
+            data-testid="api-reference-bearer-sample"
+          />
           <p class="source-note">
             The permission column is enforced on top of the token: a valid token without the listed
             permission is rejected with 403, not 401.
@@ -578,11 +672,13 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
             authenticated by an API key issued on the API Gateway screen, not by a bearer token. The
             key carries its own scopes, per-key rate limit and IP allowlist.
           </p>
-          <pre class="json-block" data-testid="api-reference-apikey-sample">
-curl -H "X-API-Key: $JKANNEL_API_KEY" \
-     -H "content-type: application/json" \
-     -d '{"receiver":"+256700000000","text":"hello"}' \
-     {{ serverUrl }}/gateway/messages</pre>
+          <CodeConsole
+            title="Submit with a key"
+            badge="cURL"
+            prompt
+            :code="apiKeySample"
+            data-testid="api-reference-apikey-sample"
+          />
           <p class="source-note" data-testid="api-reference-apikey-caveat">
             <span class="mono">Authorization: ApiKey &lt;key&gt;</span> is accepted as an
             alternative. Note that the generator detects only the bearer guard by name, so
@@ -802,6 +898,91 @@ curl -H "X-API-Key: $JKANNEL_API_KEY" \
       >
         {{ caveat }}
       </p>
+
+      <!--
+        Worked example.
+
+        Placed above the reference tables on purpose: the tables answer "what
+        are the fields", but the first question a reader actually has is "what
+        does one correct call look like, and what comes back". Everything here
+        is generated from this operation — see utils/api-examples.ts for the
+        line between what is derived and the few bodies that are curated.
+      -->
+      <h3>Example</h3>
+      <p class="source-note" data-testid="api-reference-example-credential">
+        {{ CREDENTIAL_NOTE[exampleCredential] }}
+      </p>
+      <div class="status-chips lang-chips" role="group" aria-label="Example language">
+        <button
+          v-for="language in exampleLanguages"
+          :key="language"
+          type="button"
+          :data-testid="`api-reference-lang-${language}`"
+          :aria-pressed="exampleLanguage === language"
+          @click="exampleLanguage = language"
+        >
+          {{ LANGUAGE_LABELS[language] }}
+        </button>
+      </div>
+
+      <CodeConsole
+        v-if="example"
+        :key="`${selected.id}-${exampleLanguage}`"
+        :title="`${selected.method.toUpperCase()} ${selected.path}`"
+        :badge="LANGUAGE_LABELS[exampleLanguage]"
+        :code="example.snippets[exampleLanguage]"
+        :prompt="exampleLanguage === 'curl'"
+        data-testid="api-reference-example-request"
+      />
+
+      <p
+        v-if="example?.bodyIsPlaceholder"
+        class="warn-notice"
+        data-testid="api-reference-example-placeholder"
+      >
+        The body in this example is a <strong>placeholder</strong>. This endpoint takes a JSON body,
+        but its fields are not reflected in the document, so nothing here invents them — read the
+        controller or the operator guide for the real field list.
+      </p>
+
+      <CodeConsole
+        v-if="example"
+        title="Response"
+        :badge="String(example.successStatus)"
+        :badge-tone="toneForStatus(example.successStatus)"
+        :code="example.successBody"
+        data-testid="api-reference-example-response"
+      />
+      <p class="source-note">
+        Every response is wrapped in this envelope; the endpoint's own payload is the
+        <span class="mono">data</span> field. Sample identifiers and timestamps are illustrative —
+        the envelope shape around them is not.
+      </p>
+
+      <h3>Failure modes</h3>
+      <p class="source-note">
+        Only the failures this operation can actually produce. A 404 is not listed on an endpoint
+        with no identifier in its path, and a 403 is not listed on one that requires no permission.
+      </p>
+      <div
+        v-for="failure in example?.errors ?? []"
+        :key="failure.status"
+        class="failure-case"
+        :data-testid="`api-reference-example-error-${failure.status}`"
+      >
+        <p class="failure-when">
+          <span class="status-badge" :class="failure.status >= 500 ? 'bad' : 'warn'"
+            >{{ failure.status }} {{ failure.title }}</span
+          >
+          {{ failure.when }}
+        </p>
+        <CodeConsole
+          :title="`${failure.status} ${failure.title}`"
+          :badge="String(failure.status)"
+          :badge-tone="toneForStatus(failure.status)"
+          :code="failure.body"
+        />
+      </div>
 
       <h3>Parameters</h3>
       <div v-if="selected.parameters.length" class="table-wrap">
@@ -1032,5 +1213,22 @@ curl -H "X-API-Key: $JKANNEL_API_KEY" \
 }
 .detail-grid dd .chip + .chip {
   margin-left: 6px;
+}
+.lang-chips {
+  margin: 8px 0 0;
+}
+.failure-case {
+  margin-top: 16px;
+}
+/* The condition and its status badge read as one sentence, so the badge sits on
+   the baseline of the text rather than on a line of its own. */
+.failure-when {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.failure-when .status-badge {
+  margin-right: 8px;
 }
 </style>

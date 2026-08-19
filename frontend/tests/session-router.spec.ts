@@ -1,9 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ok = (data: unknown) =>
   Promise.resolve(new Response(JSON.stringify({ success: true, data }), { status: 200 }));
 
 describe('session route guard', () => {
+  /**
+   * Pays the module-graph cost once, outside any timed assertion.
+   *
+   * Importing `../src/router` pulls the whole lazy route table through Vite's
+   * transform pipeline — about nine seconds on the first import in a worker,
+   * and under `fullyParallel` on a loaded machine it had crossed a 30s test
+   * timeout while passing 3/3 in isolation. Raising the number again would have
+   * been chasing the symptom: the transform is not what these tests measure.
+   *
+   * Every later import is cheap (~400ms) because the transform cache survives
+   * `vi.resetModules()`, which resets the module REGISTRY, not the cache. So
+   * each test still gets a genuinely fresh router; it just no longer has the
+   * one-off compile charged against its own budget.
+   */
+  beforeAll(async () => {
+    await import('../src/router');
+  }, 120_000);
+
   beforeEach(() => {
     vi.resetModules();
     // The later tests seed an access token, and resetModules does not touch
@@ -12,10 +30,6 @@ describe('session route guard', () => {
     localStorage.clear();
   });
 
-  // 30s, not 15s. Importing the router pulls in the whole lazy route table, and
-  // under `fullyParallel` on a loaded machine that occasionally crossed 15s and
-  // failed a test that passes 3/3 in isolation. A flaky test costs more than a
-  // slow one: it teaches people to re-run the suite instead of reading it.
   it('redirects an unauthenticated protected route to login', async () => {
     vi.stubGlobal(
       'fetch',
@@ -29,7 +43,7 @@ describe('session route guard', () => {
     await router.push('/messages');
     await router.isReady();
     expect(router.currentRoute.value.name).toBe('login');
-  }, 30_000);
+  });
 
   it('permits an authorized route and rejects a missing permission', async () => {
     localStorage.setItem('jkannel-access-token', 'access');
