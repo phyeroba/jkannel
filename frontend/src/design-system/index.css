@@ -1,0 +1,158 @@
+/* ===========================================================================
+   THE JKANNEL DESIGN SYSTEM, AS HANDED OVER
+   ---------------------------------------------------------------------------
+   `spacing.css`, `typography.css`, `components.css` and `layout.css` in this
+   folder are VENDORED BYTE-FOR-BYTE from `design/JKANNEL design system/tokens/`.
+   Do not hand-edit them. Re-copy them when the design system is updated, and
+   put every JKANNEL-specific adaptation in this file instead, where it is
+   visible as an adaptation rather than as drift.
+
+   WHY VENDORED RATHER THAN TRANSCRIBED
+   ---------------------------------------------------------------------------
+   The first pass at this redesign re-typed the values into
+   `design-authority.css` by hand. Comparing the two afterwards found 67 of the
+   design system's selectors missing outright and 156 declarations carrying
+   different values — a metric card laid out vertically instead of horizontally,
+   a table header band that had been made transparent, sidebar group headers
+   turned into uppercase labels, a floating topbar where the design specifies a
+   full-bleed sticky one, and a type scale a step small almost everywhere.
+
+   None of that was visible from reading either file on its own. Copying the
+   source files removes the whole class of error: the values in the console are
+   now literally the values in the package, and `scripts/design-diff.mjs`
+   re-checks it.
+
+   LOAD ORDER
+   ---------------------------------------------------------------------------
+   `main.ts` imports style.css, then design-authority.css, then this. Loading
+   last is what makes the design system authoritative: where an older rule
+   disagrees at equal specificity, the design system now wins by order rather
+   than by someone remembering to delete the old one.
+   =========================================================================== */
+
+/* Tokens the component and layout files consume, before they consume them. */
+@import './spacing.css';
+@import './typography.css';
+@import './components.css';
+@import './layout.css';
+
+/* ---------------------------------------------------------------------------
+   Custom properties the vendored files reference that the console's own
+   stylesheet never defined. Values are from the design system's `colors.css`,
+   which is NOT vendored here because `style.css` already owns the palette and
+   two competing `:root` colour blocks would be worse than one.
+   --------------------------------------------------------------------------- */
+:root {
+  /* Form controls: a white field on the off-white canvas, with its own slightly
+     darker hairline than a panel edge. */
+  --input: #ffffff;
+  --input-border: #dbdade;
+
+  /* Status tints. The design system fixes these at 14% in light and 20% in
+     dark; the console had been mixing 12% inline at each call site, which is
+     why no two status badges quite matched. */
+  --good-soft: rgba(40, 199, 111, 0.14);
+  --warn-soft: rgba(255, 159, 67, 0.14);
+  --bad-soft: rgba(234, 84, 85, 0.14);
+  --info-soft: rgba(0, 207, 232, 0.14);
+
+  /* The sidebar is navy in BOTH themes — it is the one surface that does not
+     follow the theme, so it is a token of its own rather than a surface. */
+  --sidebar: #2f3349;
+  --sidebar-ink: #cfd3ec;
+  --sidebar-muted: #7d819e;
+  --sidebar-label: #ffffff;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+
+  --scrim: rgba(3, 10, 20, 0.68);
+}
+
+:root[data-theme='dark'],
+[data-theme='dark'] {
+  --input: #2f3349;
+  --input-border: #44496a;
+
+  /* Only the alpha lifts in dark; the hues are identical, so a status colour
+     means the same thing in both themes. */
+  --good-soft: rgba(40, 199, 111, 0.2);
+  --warn-soft: rgba(255, 159, 67, 0.2);
+  --bad-soft: rgba(234, 84, 85, 0.2);
+  --info-soft: rgba(0, 207, 232, 0.2);
+
+  --sidebar: #2b2c40;
+}
+
+/* ===========================================================================
+   JKANNEL ADAPTATIONS
+   ---------------------------------------------------------------------------
+   Everything below exists because the console is a real Vue application and the
+   UI kit is a React click-through. These are bindings, not restyling.
+   =========================================================================== */
+
+/* The kit marks the current nav item `.active`; Vue Router emits
+   `.router-link-active`. Same rule, both class names, so the vendored file
+   stays untouched. */
+.sidebar nav a.router-link-active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: var(--shadow-brand);
+}
+/* An exact-match link inside an open group must not lose to the parent-path
+   link that is also "active" — the console nests routes the kit does not. */
+.sidebar nav a.router-link-active .nav-icon {
+  color: inherit;
+}
+
+/* The kit's icons are bare <svg>; ours are wrapped in a .nav-icon span so the
+   grid column still resolves to the 18px the design specifies. */
+.sidebar nav a > .nav-icon,
+.nav-label > .nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+/* `design-authority.css` gave the shell fixed grid rows, which pins the topbar
+   inside a 76px track and makes `position: sticky` a no-op — the bar scrolls
+   away. The design system's layout.css sets the shell to a column flex for
+   exactly this reason, and this restates the row-track reset so the older rule
+   cannot win by specificity. */
+.shell {
+  display: flex;
+  flex-direction: column;
+  grid-template-rows: none;
+}
+
+/* ---------------------------------------------------------------------------
+   The console's control-primitives layer had settled on a 36px control height,
+   chosen before this package was being followed. The design system sizes both
+   controls and buttons by padding instead — `10px` on a field, `10px 15px` on a
+   button — which lands both at roughly 42px against the 15px body size.
+
+   Rather than override the package to keep 36px, the shared token is retuned to
+   agree with it. That way a bare `<input>` the design system's selector list
+   does not name still matches the fields beside it, and buttons still line up
+   with filters, without a single design-system declaration being contradicted.
+   --------------------------------------------------------------------------- */
+:root {
+  --control-h: 42px;
+  --control-pad-x: 10px;
+}
+
+/* Re-made room for the custom chevron, which the vendored `padding` shorthand
+   resets. Without this the longest option label runs under the arrow. */
+.filter-select select,
+.field select,
+.setting-control select,
+.range-control select {
+  padding-right: 34px;
+}
+
+/* Vue scopes `<style scoped>`, so a component's own rules already outrank these
+   by attribute selector. Views that opt out of the design system's table
+   treatment must do so explicitly, not by accident of load order. */
+.table-wrap table {
+  min-width: 0;
+}

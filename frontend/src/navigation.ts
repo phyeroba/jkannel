@@ -16,6 +16,31 @@ export const NAVIGATION_GROUPS = [
 
 export type NavigationGroup = (typeof NAVIGATION_GROUPS)[number];
 
+/**
+ * The glyph beside each section header in the sidebar.
+ *
+ * The design system's `AppShell` gives every section an icon and lays the
+ * header out on the same `18px | label | chevron` grid as the links beneath it,
+ * so a header reads as a nav row that happens to open a section. Without these
+ * the icon column renders empty and the headers sit visibly out of line with
+ * their own children.
+ *
+ * The first six are the icons named in the design system's own SECTIONS table.
+ * The last three are JKANNEL sections the UI kit has no equivalent of, so their
+ * glyphs are chosen from the same 30-icon set to read consistently.
+ */
+export const NAVIGATION_GROUP_ICONS: Record<NavigationGroup, string> = {
+  Overview: 'home',
+  Connectivity: 'server',
+  Traffic: 'chart',
+  Routing: 'route',
+  Diagnostics: 'terminal',
+  System: 'docker',
+  Messaging: 'sms',
+  Customers: 'users',
+  Platform: 'cog',
+};
+
 export interface NavigationItem {
   label: string;
   to: string;

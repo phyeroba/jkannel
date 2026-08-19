@@ -76,9 +76,14 @@ describe('application shell', () => {
     // Routing and Test Tools to Diagnostics; 42 before Phase 7.1–7.2 added
     // Services and Nodes to System.
     expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(44);
-    expect(wrapper.findAll('.nav-icon svg')).toHaveLength(44);
+    expect(wrapper.findAll('.nav-items .nav-icon svg')).toHaveLength(44);
     // Six specification sections plus the three JKANNEL adds (PLAN.md §1).
     expect(wrapper.findAll('.nav-group')).toHaveLength(9);
+    // Every section header carries its own glyph. The design system lays a
+    // header on the same `18px | label | chevron` grid as the links beneath it,
+    // so a missing icon leaves the first column empty and the header visibly
+    // out of line with its own children.
+    expect(wrapper.findAll('.nav-label .nav-icon svg')).toHaveLength(9);
     // Help is reachable from the top bar as well as the Platform group.
     expect(wrapper.get('[data-testid="topbar-help"]').attributes('href')).toBe('/help');
     expect(wrapper.get('aside[aria-label="Primary navigation"]').text()).toContain('Messaging');
@@ -235,8 +240,11 @@ describe('application shell — deployment and telemetry indicators', () => {
     const wrapper = await shellWith(systemInfo());
     const chip = wrapper.get('[data-testid="environment-chip"]');
     expect(chip.text()).toContain('Production');
-    // Tone is driven by the backend so production cannot look as safe as a laptop.
-    expect(chip.classes()).toContain('tone-critical');
+    // The design system ships three distinct chips rather than one chip that
+    // changes tint — env-production is white on red. Tone is still driven by the
+    // backend, so production cannot look as safe as a laptop.
+    expect(chip.classes()).toContain('env-chip');
+    expect(chip.classes()).toContain('env-production');
   });
 
   it('marks an inferred designation as inferred rather than stating it as fact', async () => {

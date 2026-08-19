@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { navigation, NAVIGATION_GROUPS, type NavigationItem } from '../navigation';
+import {
+  navigation,
+  NAVIGATION_GROUPS,
+  NAVIGATION_GROUP_ICONS,
+  type NavigationItem,
+} from '../navigation';
 import AppIcon from '../components/AppIcon.vue';
 import { canAccess, logout, session } from '../stores/session';
 import { clearBreadcrumbTrail, resolveBreadcrumbs } from '../stores/breadcrumbs';
@@ -269,6 +274,39 @@ const environmentTitle = computed(() => {
       'Set JKANNEL_ENVIRONMENT to declare it.';
   return `${identity} · engine timezone ${info.gatewayTimezone} · ${declared}`;
 });
+/**
+ * The design system ships three environment chips — `env-production` (white on
+ * red), `env-staging` (dark on amber) and `env-dr` (white on navy) — rather than
+ * one chip that changes tint. The backend already classifies the deployment into
+ * a tone, so this maps that classification onto the design system's three.
+ *
+ * `neutral` deliberately falls through to `env-dr`: a development or DR console
+ * still has to be visibly NOT production, and navy is the design system's own
+ * "not the live gateway" treatment.
+ */
+const environmentChipClass = computed(() => {
+  switch (systemInfo.value?.environmentTone) {
+    case 'critical':
+      return 'env-production';
+    case 'warning':
+      return 'env-staging';
+    default:
+      return 'env-dr';
+  }
+});
+
+/** `freshness-warn` / `freshness-bad` recolour the pill; live needs no modifier. */
+const freshnessClass = computed(() => {
+  switch (telemetry.value?.state) {
+    case 'delayed':
+      return 'freshness-warn';
+    case 'disconnected':
+      return 'freshness-bad';
+    default:
+      return '';
+  }
+});
+
 const telemetryDotClass = computed(() => {
   switch (telemetry.value?.state) {
     case 'live':
@@ -410,6 +448,12 @@ onUnmounted(() => {
 <template>
   <a class="skip-link" href="#workspace">Skip to workspace</a>
   <div class="app-frame">
+    <!--
+      Below 900px the sidebar becomes an off-canvas drawer. The scrim is both the
+      dismiss target and the thing that stops the page behind it being operated
+      by accident; without it the drawer opens over a still-clickable workspace.
+    -->
+    <div v-if="navOpen" class="sidebar-scrim" @click="navOpen = false"></div>
     <aside
       id="primary-navigation"
       class="sidebar"
@@ -431,6 +475,13 @@ onUnmounted(() => {
             :data-testid="`nav-group-toggle-${section.group.toLowerCase()}`"
             @click="toggleGroup(section.group)"
           >
+            <!-- The section glyph is what puts the header on the same
+                 `18px | label | chevron` grid as the links beneath it. Without
+                 it the first grid column renders empty and every header sits
+                 out of line with its own children. -->
+            <span class="nav-icon"
+              ><AppIcon :name="NAVIGATION_GROUP_ICONS[section.group]" :size="18"
+            /></span>
             <span>{{ section.group }}</span>
             <AppIcon class="nav-chevron" name="chevron" :size="14" />
           </button>
@@ -460,7 +511,7 @@ onUnmounted(() => {
     <div class="shell">
       <header class="topbar">
         <button
-          class="icon-button menu-button"
+          class="icon-button nav-toggle"
           aria-label="Open navigation"
           aria-controls="primary-navigation"
           :aria-expanded="navOpen"
@@ -470,8 +521,32 @@ onUnmounted(() => {
         ><button class="search-trigger" data-testid="global-search" @click="searchOpen = true">
           <AppIcon name="search" /><span>Search JKANNEL</span><kbd>Ctrl K</kbd>
         </button>
+        <!--
+          Deployment identity, called out strongly and BEFORE the search box.
+          The design system puts it here on purpose (spec §2.1): a control action
+          taken on production must never be mistaken for one taken on staging,
+          and a chip tucked in among the icon buttons on the right is read last
+          or not at all.
+        -->
+        <span
+          v-if="environmentLabel"
+          class="env-chip"
+          :class="environmentChipClass"
+          :title="environmentTitle"
+          data-testid="environment-chip"
+          ><span class="env-dot" aria-hidden="true"></span
+          ><span
+            >{{ environmentLabel
+            }}<span v-if="systemInfo && !systemInfo.environmentDeclared" aria-hidden="true"
+              >?</span
+            ></span
+          >
+          <span v-if="systemInfo && !systemInfo.environmentDeclared" class="sr-only">
+            (inferred, not configured)
+          </span></span
+        >
         <div class="top-actions">
-          <label class="range-control">
+          <label class="filter-select topbar-range">
             <span class="sr-only">Time range for analytical screens</span>
             <select
               :value="selectedRange.id"
@@ -483,26 +558,19 @@ onUnmounted(() => {
               </option>
             </select> </label
           ><span
-            v-if="environmentLabel"
-            class="environment"
-            :class="`tone-${systemInfo?.environmentTone}`"
-            :title="environmentTitle"
-            data-testid="environment-chip"
-            >{{ environmentLabel
-            }}<span v-if="systemInfo && !systemInfo.environmentDeclared" aria-hidden="true">?</span>
-            <span v-if="systemInfo && !systemInfo.environmentDeclared" class="sr-only">
-              (inferred, not configured)
-            </span></span
-          ><span
-            class="engine-state"
+            class="freshness"
+            :class="freshnessClass"
             :title="telemetry?.detail ?? ''"
             data-testid="telemetry-indicator"
-            ><span class="status-dot" :class="telemetryDotClass"></span>{{ telemetryLabel
-            }}<span
-              v-if="telemetry?.ageSeconds !== null && telemetry?.ageSeconds !== undefined"
-              class="telemetry-age"
-            >
-              {{ telemetry.ageSeconds }}s</span
+            ><span class="status-dot" :class="telemetryDotClass"></span
+            ><span
+              >{{ telemetryLabel
+              }}<span
+                v-if="telemetry?.ageSeconds !== null && telemetry?.ageSeconds !== undefined"
+                class="telemetry-age"
+              >
+                {{ telemetry.ageSeconds }}s</span
+              ></span
             ></span
           ><RouterLink
             class="icon-button"
@@ -665,6 +733,13 @@ onUnmounted(() => {
             <h1>{{ route.meta.title }}</h1>
             <p>{{ route.meta.description }}</p>
           </div>
+          <!--
+            The design system's page-action slot. A screen's primary create
+            action belongs beside the page title rather than fused to the
+            register it adds to, so views teleport their button in here instead
+            of putting an "Add …" inside a table panel's header.
+          -->
+          <div id="page-actions" class="page-actions"></div>
         </div>
         <RouterView />
       </main>
