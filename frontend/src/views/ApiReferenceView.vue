@@ -854,6 +854,7 @@ onMounted(() => {
       is looking, and the endpoint list stays in place behind it.
     -->
     <DetailDrawer
+      wide
       :open="Boolean(selected)"
       :title="selected ? `${selected.method.toUpperCase()} ${selected.path}` : ''"
       :subtitle="selected?.summary || undefined"

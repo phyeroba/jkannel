@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
@@ -11,6 +11,7 @@ import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import ScopePicker from '../components/ScopePicker.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
 import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
@@ -1854,6 +1855,54 @@ async function openDetail(row: Row) {
     detailLoading.value = false;
   }
 }
+/**
+ * The sheet's own heading. Previously an inline nested ternary in the template;
+ * pulled out because the drawer needs three separate strings and a reader
+ * should be able to see at a glance which registers open a detail sheet.
+ */
+const DETAIL_HEADINGS: Record<string, { eyebrow: string; title: string; subtitle: string }> = {
+  users: { eyebrow: 'User', title: 'User detail', subtitle: 'Account, roles and session history' },
+  smsc: {
+    eyebrow: 'SMSC',
+    title: 'SMSC detail',
+    subtitle: 'Connection, bind state and recent transitions',
+  },
+  customers: {
+    eyebrow: 'Customer',
+    title: 'Customer detail',
+    subtitle: 'Entitlements, quota and credit',
+  },
+  'logs-audit': {
+    eyebrow: 'Audit',
+    title: 'Audit event',
+    subtitle: 'Who did what, and the value before and after',
+  },
+};
+const detailHeading = computed(
+  () =>
+    DETAIL_HEADINGS[key.value] ?? {
+      eyebrow: 'Record',
+      title: 'Detail',
+      subtitle: '',
+    },
+);
+const detailEyebrow = computed(() => detailHeading.value.eyebrow);
+const detailTitle = computed(() => detailHeading.value.title);
+const detailSubtitle = computed(() => detailHeading.value.subtitle);
+
+/**
+ * Whether the shell's page-action slot exists to teleport into.
+ *
+ * Resolved on mount rather than assumed: `Teleport` throws if its target is
+ * missing, and this workspace is mounted directly (without AppShell) by every
+ * unit test. Checking keeps the action rendering in both cases instead of
+ * making the tests depend on the shell.
+ */
+const pageActionsSlot = ref(false);
+onMounted(() => {
+  pageActionsSlot.value = Boolean(document.getElementById('page-actions'));
+});
+
 function closeDetail() {
   detailOpen.value = false;
   detail.value = null;
@@ -3476,7 +3525,29 @@ onUnmounted(() => {
           <option v-for="option in states" :key="option">{{ option }}</option>
         </select>
       </label>
+      <!--
+        Teleported to the page-actions slot beside the page title, which is
+        where the design system puts a register's primary action (AppShell.jsx
+        `PageAction`). Fusing "Add SMSC" to the toolbar of the table it adds to
+        reads as a filter control; beside the heading it reads as the thing the
+        page is for.
+
+        Rendered in place as a fallback when the slot is absent — a view mounted
+        outside AppShell, which is how the unit tests mount this workspace, must
+        still show its action rather than silently losing it.
+      -->
+      <Teleport v-if="pageActionsSlot" to="#page-actions">
+        <button
+          class="primary-button"
+          data-testid="primary-action"
+          :disabled="loading"
+          @click="primaryAction"
+        >
+          {{ loading ? 'Working…' : workspace.action }}
+        </button>
+      </Teleport>
       <button
+        v-else
         class="primary-button"
         data-testid="primary-action"
         :disabled="loading"
@@ -4152,8 +4223,16 @@ onUnmounted(() => {
           <code>Bearer</code> fails authentication.
         </li>
         <li>
-          <strong>Scopes</strong> (for example <code>messages.send</code>,
-          <code>reports.read</code>) restrict what each client may do.
+          <!--
+            The four real scopes, named. This used to read "for example
+            messages.send, reports.read" — neither of which the gateway
+            enforces, so anyone who copied the example minted a key that
+            authenticated and was then refused on every business route.
+          -->
+          <strong>Scopes</strong> restrict what each client may do. There are exactly four:
+          <code>sms.send</code>, <code>sms.read</code>, <code>routing.read</code> and
+          <code>audit.read</code>. They are deliberately <em>not</em> console permission codes, so a
+          value like <code>messages.view</code> here grants nothing.
         </li>
         <li>
           <strong>Rate limits</strong> are enforced per client per minute; exceeding them returns
@@ -4629,315 +4708,326 @@ onUnmounted(() => {
       </template>
     </section>
 
-    <section v-if="detailOpen" class="panel detail-panel" data-testid="detail-panel">
-      <header>
-        <h2>
-          {{
-            key === 'users'
-              ? 'User detail'
-              : key === 'smsc'
-                ? 'SMSC detail'
-                : key === 'customers'
-                  ? 'Customer detail'
-                  : 'Audit event'
-          }}
-        </h2>
-        <button class="secondary-button" data-testid="detail-close" @click="closeDetail">
-          Close
-        </button>
-      </header>
-      <p v-if="detailLoading" class="form-hint" data-testid="detail-loading">Loading…</p>
-      <p v-else-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
-      <template v-else-if="detail">
-        <template v-if="key === 'users'">
-          <dl class="detail-grid">
-            <dt>Username</dt>
-            <dd>{{ text(detail.username) }}</dd>
-            <dt>Status</dt>
-            <dd data-testid="user-detail-status">{{ text(detail.status) }}</dd>
-            <dt>Roles</dt>
-            <dd>
-              <span class="chip-list">
-                <span v-for="role in detailArray('roles')" :key="String(role.id)" class="chip">{{
-                  text(role.name)
-                }}</span>
-                <span v-if="!detailArray('roles').length">—</span>
-              </span>
-            </dd>
-            <dt>Permissions</dt>
-            <dd>
-              <span class="chip-list">
-                <span
-                  v-for="permission in stringArray('permissions')"
-                  :key="permission"
-                  class="chip muted"
-                  >{{ permission }}</span
-                >
-                <span v-if="!stringArray('permissions').length">—</span>
-              </span>
-            </dd>
-            <dt>Created</dt>
-            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
-          </dl>
-          <div v-if="canManageUsers && !editing" class="detail-actions">
-            <button class="secondary-button" data-testid="detail-edit" @click="editing = true">
-              Edit
-            </button>
-            <button
-              class="secondary-button danger-button"
-              data-testid="user-archive"
-              @click="archiveUser"
-            >
-              Archive
-            </button>
-          </div>
-          <div v-if="canManageUsers && editing" class="composer" data-testid="user-edit-form">
-            <label>
-              Status
-              <select v-model="editUserStatus" data-testid="user-status">
-                <option value="active">active</option>
-                <option value="disabled">disabled</option>
-                <option value="locked">locked</option>
-                <option value="archived">archived</option>
-              </select>
-            </label>
-            <fieldset class="role-checkboxes" data-testid="user-roles">
-              <legend>Roles</legend>
-              <label
-                v-for="role in roleOptions"
-                :key="String(role.id)"
-                class="role-option"
-                :data-testid="`user-role-${role.id}`"
-              >
-                <input v-model="editUserRoleIds" type="checkbox" :value="String(role.id)" />
-                <span class="role-text">
-                  <strong>{{ text(role.name) }}</strong>
-                  <small>{{ text(role.description) }}</small>
+    <!--
+      Record detail as a SHEET, not a panel appended after the register.
+
+      Appending it meant the detail for row 40 of a 50-row grid rendered below
+      row 50 — off-screen, with the row you clicked scrolled away, so clicking
+      appeared to do nothing. The design system's answer is a right-hand sheet:
+      the list stays exactly where it was behind the scrim, so you keep your
+      place in it, and the detail opens where you are looking.
+    -->
+    <DetailDrawer
+      :open="detailOpen"
+      :eyebrow="detailEyebrow"
+      :title="detailTitle"
+      :subtitle="detailSubtitle"
+      @close="closeDetail"
+    >
+      <div class="detail-panel" data-testid="detail-panel">
+        <p v-if="detailLoading" class="form-hint" data-testid="detail-loading">Loading…</p>
+        <p v-else-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
+        <template v-else-if="detail">
+          <template v-if="key === 'users'">
+            <dl class="detail-grid">
+              <dt>Username</dt>
+              <dd>{{ text(detail.username) }}</dd>
+              <dt>Status</dt>
+              <dd data-testid="user-detail-status">{{ text(detail.status) }}</dd>
+              <dt>Roles</dt>
+              <dd>
+                <span class="chip-list">
+                  <span v-for="role in detailArray('roles')" :key="String(role.id)" class="chip">{{
+                    text(role.name)
+                  }}</span>
+                  <span v-if="!detailArray('roles').length">—</span>
                 </span>
+              </dd>
+              <dt>Permissions</dt>
+              <dd>
+                <span class="chip-list">
+                  <span
+                    v-for="permission in stringArray('permissions')"
+                    :key="permission"
+                    class="chip muted"
+                    >{{ permission }}</span
+                  >
+                  <span v-if="!stringArray('permissions').length">—</span>
+                </span>
+              </dd>
+              <dt>Created</dt>
+              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+            </dl>
+            <div v-if="canManageUsers && !editing" class="detail-actions">
+              <button class="secondary-button" data-testid="detail-edit" @click="editing = true">
+                Edit
+              </button>
+              <button
+                class="secondary-button danger-button"
+                data-testid="user-archive"
+                @click="archiveUser"
+              >
+                Archive
+              </button>
+            </div>
+            <div v-if="canManageUsers && editing" class="composer" data-testid="user-edit-form">
+              <label>
+                Status
+                <select v-model="editUserStatus" data-testid="user-status">
+                  <option value="active">active</option>
+                  <option value="disabled">disabled</option>
+                  <option value="locked">locked</option>
+                  <option value="archived">archived</option>
+                </select>
               </label>
-              <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
-            </fieldset>
-            <label>
-              Reset password (optional, min 12)
-              <input v-model="editUserPassword" type="password" data-testid="user-reset-password" />
-            </label>
-            <div>
-              <button
-                class="primary-button"
-                data-testid="user-save"
-                :disabled="loading"
-                @click="saveUser"
-              >
-                Save changes
-              </button>
-              <button class="secondary-button" @click="editing = false">Cancel</button>
+              <fieldset class="role-checkboxes" data-testid="user-roles">
+                <legend>Roles</legend>
+                <label
+                  v-for="role in roleOptions"
+                  :key="String(role.id)"
+                  class="role-option"
+                  :data-testid="`user-role-${role.id}`"
+                >
+                  <input v-model="editUserRoleIds" type="checkbox" :value="String(role.id)" />
+                  <span class="role-text">
+                    <strong>{{ text(role.name) }}</strong>
+                    <small>{{ text(role.description) }}</small>
+                  </span>
+                </label>
+                <p v-if="!roleOptions.length" class="form-hint">
+                  No roles are available to assign.
+                </p>
+              </fieldset>
+              <label>
+                Reset password (optional, min 12)
+                <input
+                  v-model="editUserPassword"
+                  type="password"
+                  data-testid="user-reset-password"
+                />
+              </label>
+              <div>
+                <button
+                  class="primary-button"
+                  data-testid="user-save"
+                  :disabled="loading"
+                  @click="saveUser"
+                >
+                  Save changes
+                </button>
+                <button class="secondary-button" @click="editing = false">Cancel</button>
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template v-else-if="key === 'smsc'">
-          <dl class="detail-grid">
-            <dt>Name</dt>
-            <dd>{{ text(detail.name) }}</dd>
-            <dt>Host</dt>
-            <dd>{{ text(detail.host) }}</dd>
-            <dt>Port</dt>
-            <dd>{{ text(detail.port) }}</dd>
-            <dt>TPS</dt>
-            <dd>{{ text(detail.tps) }}</dd>
-            <dt>Enabled</dt>
-            <dd>{{ text(detail.enabled) }}</dd>
-            <dt>Lifecycle</dt>
-            <dd>{{ text(detail.lifecycle_state ?? detail.lifecycleState) }}</dd>
-          </dl>
-          <h3>Recent health</h3>
-          <ul class="sample-list" data-testid="smsc-health">
-            <li v-for="(sample, index) in detailArray('health')" :key="index">
-              <span class="dot" :class="healthDotClass(sample.state)"></span>
-              {{ text(sample.state) }} — {{ text(sample.detail) }}
-              <small
-                >{{ text(sample.latency_ms ?? sample.latencyMs) }} ms ·
-                {{ text(sample.observed_at ?? sample.observedAt) }}</small
+          <template v-else-if="key === 'smsc'">
+            <dl class="detail-grid">
+              <dt>Name</dt>
+              <dd>{{ text(detail.name) }}</dd>
+              <dt>Host</dt>
+              <dd>{{ text(detail.host) }}</dd>
+              <dt>Port</dt>
+              <dd>{{ text(detail.port) }}</dd>
+              <dt>TPS</dt>
+              <dd>{{ text(detail.tps) }}</dd>
+              <dt>Enabled</dt>
+              <dd>{{ text(detail.enabled) }}</dd>
+              <dt>Lifecycle</dt>
+              <dd>{{ text(detail.lifecycle_state ?? detail.lifecycleState) }}</dd>
+            </dl>
+            <h3>Recent health</h3>
+            <ul class="sample-list" data-testid="smsc-health">
+              <li v-for="(sample, index) in detailArray('health')" :key="index">
+                <span class="dot" :class="healthDotClass(sample.state)"></span>
+                {{ text(sample.state) }} — {{ text(sample.detail) }}
+                <small
+                  >{{ text(sample.latency_ms ?? sample.latencyMs) }} ms ·
+                  {{ text(sample.observed_at ?? sample.observedAt) }}</small
+                >
+              </li>
+              <li v-if="!detailArray('health').length">No health samples recorded.</li>
+            </ul>
+            <h3>Recent operations</h3>
+            <ul class="sample-list" data-testid="smsc-deployments">
+              <li v-for="(op, index) in detailArray('deployments')" :key="index">
+                {{ text(op.operation) }} — {{ text(op.status) }}: {{ text(op.detail) }}
+                <small>{{ text(op.created_at ?? op.createdAt) }}</small>
+              </li>
+              <li v-if="!detailArray('deployments').length">No recent operations.</li>
+            </ul>
+            <div v-if="canManageSystem && !editing" class="detail-actions">
+              <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
+                Edit
+              </button>
+              <button
+                class="secondary-button danger-button"
+                data-testid="smsc-archive"
+                @click="archiveSmsc"
               >
-            </li>
-            <li v-if="!detailArray('health').length">No health samples recorded.</li>
-          </ul>
-          <h3>Recent operations</h3>
-          <ul class="sample-list" data-testid="smsc-deployments">
-            <li v-for="(op, index) in detailArray('deployments')" :key="index">
-              {{ text(op.operation) }} — {{ text(op.status) }}: {{ text(op.detail) }}
-              <small>{{ text(op.created_at ?? op.createdAt) }}</small>
-            </li>
-            <li v-if="!detailArray('deployments').length">No recent operations.</li>
-          </ul>
-          <div v-if="canManageSystem && !editing" class="detail-actions">
-            <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
-              Edit
-            </button>
-            <button
-              class="secondary-button danger-button"
-              data-testid="smsc-archive"
-              @click="archiveSmsc"
+                Delete / Archive
+              </button>
+            </div>
+            <div v-if="canManageSystem && editing" class="composer" data-testid="smsc-edit-form">
+              <label>
+                Name
+                <input v-model="editSmscName" data-testid="smsc-edit-name" />
+              </label>
+              <label>
+                Host
+                <input v-model="editSmscHost" data-testid="smsc-edit-host" />
+              </label>
+              <label>
+                Port
+                <input v-model.number="editSmscPort" type="number" data-testid="smsc-edit-port" />
+              </label>
+              <label>
+                TPS
+                <input v-model.number="editSmscTps" type="number" data-testid="smsc-edit-tps" />
+              </label>
+              <label class="checkbox-row">
+                <input v-model="editSmscEnabled" type="checkbox" data-testid="smsc-edit-enabled" />
+                Enabled
+              </label>
+              <div>
+                <button
+                  class="primary-button"
+                  data-testid="smsc-save"
+                  :disabled="loading"
+                  @click="saveSmsc"
+                >
+                  Save changes
+                </button>
+                <button class="secondary-button" @click="editing = false">Cancel</button>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="key === 'customers'">
+            <dl class="detail-grid">
+              <dt>Name</dt>
+              <dd>{{ text(detail.name) }}</dd>
+              <dt>Code</dt>
+              <dd>{{ text(detail.code) }}</dd>
+              <dt>Status</dt>
+              <dd data-testid="customer-detail-status">{{ text(detail.status) }}</dd>
+              <dt>Contact</dt>
+              <dd>{{ text(detail.contact_email ?? detail.contactEmail) }}</dd>
+              <dt>Daily quota</dt>
+              <dd>{{ text(detail.quota_daily ?? detail.quotaDaily) }}</dd>
+              <dt>Rate limit / min</dt>
+              <dd>{{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin) }}</dd>
+              <dt>Sender IDs</dt>
+              <dd>{{ list(detail.allowed_sender_ids ?? detail.allowedSenderIds) }}</dd>
+              <dt>Notes</dt>
+              <dd>{{ text(detail.notes) }}</dd>
+              <dt>Created</dt>
+              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+            </dl>
+            <div v-if="canManageSystem && !editing" class="detail-actions">
+              <button class="secondary-button" data-testid="customer-edit" @click="editing = true">
+                Edit
+              </button>
+              <button
+                class="secondary-button danger-button"
+                data-testid="customer-archive"
+                @click="archiveCustomer"
+              >
+                Archive
+              </button>
+            </div>
+            <div
+              v-if="canManageSystem && editing"
+              class="composer"
+              data-testid="customer-edit-form"
             >
-              Delete / Archive
-            </button>
-          </div>
-          <div v-if="canManageSystem && editing" class="composer" data-testid="smsc-edit-form">
-            <label>
-              Name
-              <input v-model="editSmscName" data-testid="smsc-edit-name" />
-            </label>
-            <label>
-              Host
-              <input v-model="editSmscHost" data-testid="smsc-edit-host" />
-            </label>
-            <label>
-              Port
-              <input v-model.number="editSmscPort" type="number" data-testid="smsc-edit-port" />
-            </label>
-            <label>
-              TPS
-              <input v-model.number="editSmscTps" type="number" data-testid="smsc-edit-tps" />
-            </label>
-            <label class="checkbox-row">
-              <input v-model="editSmscEnabled" type="checkbox" data-testid="smsc-edit-enabled" />
-              Enabled
-            </label>
-            <div>
-              <button
-                class="primary-button"
-                data-testid="smsc-save"
-                :disabled="loading"
-                @click="saveSmsc"
-              >
-                Save changes
-              </button>
-              <button class="secondary-button" @click="editing = false">Cancel</button>
+              <label>
+                Name
+                <input v-model="editCustName" data-testid="customer-edit-name" />
+              </label>
+              <label>
+                Contact email
+                <input v-model="editCustEmail" type="email" data-testid="customer-edit-email" />
+              </label>
+              <label>
+                Daily quota
+                <input
+                  v-model.number="editCustQuotaDaily"
+                  type="number"
+                  min="0"
+                  data-testid="customer-edit-quota"
+                />
+              </label>
+              <label>
+                Rate limit / min
+                <input
+                  v-model.number="editCustRateLimit"
+                  type="number"
+                  min="0"
+                  data-testid="customer-edit-rate"
+                />
+              </label>
+              <label>
+                Allowed sender IDs (comma-separated)
+                <input v-model="editCustSenderIds" data-testid="customer-edit-senders" />
+              </label>
+              <label>
+                Notes
+                <input v-model="editCustNotes" data-testid="customer-edit-notes" />
+              </label>
+              <label>
+                Status
+                <select v-model="editCustStatus" data-testid="customer-edit-status">
+                  <option value="active">active</option>
+                  <option value="suspended">suspended</option>
+                  <option value="archived">archived</option>
+                </select>
+              </label>
+              <div>
+                <button
+                  class="primary-button"
+                  data-testid="customer-save"
+                  :disabled="loading"
+                  @click="saveCustomer"
+                >
+                  Save changes
+                </button>
+                <button class="secondary-button" @click="editing = false">Cancel</button>
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template v-else-if="key === 'customers'">
-          <dl class="detail-grid">
-            <dt>Name</dt>
-            <dd>{{ text(detail.name) }}</dd>
-            <dt>Code</dt>
-            <dd>{{ text(detail.code) }}</dd>
-            <dt>Status</dt>
-            <dd data-testid="customer-detail-status">{{ text(detail.status) }}</dd>
-            <dt>Contact</dt>
-            <dd>{{ text(detail.contact_email ?? detail.contactEmail) }}</dd>
-            <dt>Daily quota</dt>
-            <dd>{{ text(detail.quota_daily ?? detail.quotaDaily) }}</dd>
-            <dt>Rate limit / min</dt>
-            <dd>{{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin) }}</dd>
-            <dt>Sender IDs</dt>
-            <dd>{{ list(detail.allowed_sender_ids ?? detail.allowedSenderIds) }}</dd>
-            <dt>Notes</dt>
-            <dd>{{ text(detail.notes) }}</dd>
-            <dt>Created</dt>
-            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
-          </dl>
-          <div v-if="canManageSystem && !editing" class="detail-actions">
-            <button class="secondary-button" data-testid="customer-edit" @click="editing = true">
-              Edit
-            </button>
-            <button
-              class="secondary-button danger-button"
-              data-testid="customer-archive"
-              @click="archiveCustomer"
-            >
-              Archive
-            </button>
-          </div>
-          <div v-if="canManageSystem && editing" class="composer" data-testid="customer-edit-form">
-            <label>
-              Name
-              <input v-model="editCustName" data-testid="customer-edit-name" />
-            </label>
-            <label>
-              Contact email
-              <input v-model="editCustEmail" type="email" data-testid="customer-edit-email" />
-            </label>
-            <label>
-              Daily quota
-              <input
-                v-model.number="editCustQuotaDaily"
-                type="number"
-                min="0"
-                data-testid="customer-edit-quota"
-              />
-            </label>
-            <label>
-              Rate limit / min
-              <input
-                v-model.number="editCustRateLimit"
-                type="number"
-                min="0"
-                data-testid="customer-edit-rate"
-              />
-            </label>
-            <label>
-              Allowed sender IDs (comma-separated)
-              <input v-model="editCustSenderIds" data-testid="customer-edit-senders" />
-            </label>
-            <label>
-              Notes
-              <input v-model="editCustNotes" data-testid="customer-edit-notes" />
-            </label>
-            <label>
-              Status
-              <select v-model="editCustStatus" data-testid="customer-edit-status">
-                <option value="active">active</option>
-                <option value="suspended">suspended</option>
-                <option value="archived">archived</option>
-              </select>
-            </label>
-            <div>
-              <button
-                class="primary-button"
-                data-testid="customer-save"
-                :disabled="loading"
-                @click="saveCustomer"
-              >
-                Save changes
-              </button>
-              <button class="secondary-button" @click="editing = false">Cancel</button>
-            </div>
-          </div>
+          <template v-else>
+            <dl class="detail-grid">
+              <dt>When</dt>
+              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+              <dt>Actor</dt>
+              <dd>{{ text(detail.actor_id ?? detail.actorId) }}</dd>
+              <dt>Action</dt>
+              <dd>{{ text(detail.action) }}</dd>
+              <dt>Entity</dt>
+              <dd>
+                {{ text(detail.entity_type ?? detail.entityType) }}
+                {{ text(detail.entity_id ?? detail.entityId, '') }}
+              </dd>
+              <dt>Reason</dt>
+              <dd>{{ text(detail.reason) }}</dd>
+              <dt>Correlation</dt>
+              <dd>{{ text(detail.correlation_id ?? detail.correlationId) }}</dd>
+              <dt>Source IP</dt>
+              <dd>{{ text(detail.source_ip ?? detail.sourceIp) }}</dd>
+            </dl>
+            <h3>Old value</h3>
+            <pre class="json-block" data-testid="audit-old">{{
+              prettyJson(detail.old_value ?? detail.oldValue)
+            }}</pre>
+            <h3>New value</h3>
+            <pre class="json-block" data-testid="audit-new">{{
+              prettyJson(detail.new_value ?? detail.newValue)
+            }}</pre>
+          </template>
         </template>
-
-        <template v-else>
-          <dl class="detail-grid">
-            <dt>When</dt>
-            <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
-            <dt>Actor</dt>
-            <dd>{{ text(detail.actor_id ?? detail.actorId) }}</dd>
-            <dt>Action</dt>
-            <dd>{{ text(detail.action) }}</dd>
-            <dt>Entity</dt>
-            <dd>
-              {{ text(detail.entity_type ?? detail.entityType) }}
-              {{ text(detail.entity_id ?? detail.entityId, '') }}
-            </dd>
-            <dt>Reason</dt>
-            <dd>{{ text(detail.reason) }}</dd>
-            <dt>Correlation</dt>
-            <dd>{{ text(detail.correlation_id ?? detail.correlationId) }}</dd>
-            <dt>Source IP</dt>
-            <dd>{{ text(detail.source_ip ?? detail.sourceIp) }}</dd>
-          </dl>
-          <h3>Old value</h3>
-          <pre class="json-block" data-testid="audit-old">{{
-            prettyJson(detail.old_value ?? detail.oldValue)
-          }}</pre>
-          <h3>New value</h3>
-          <pre class="json-block" data-testid="audit-new">{{
-            prettyJson(detail.new_value ?? detail.newValue)
-          }}</pre>
-        </template>
-      </template>
-    </section>
+      </div>
+    </DetailDrawer>
 
     <section v-if="showSendForm" class="panel composer" aria-label="Send message">
       <h2>Send message</h2>

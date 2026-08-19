@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils';
+import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,9 +35,29 @@ const mountWorkspace = async (path: string, title: string) => {
   });
   await router.push(path);
   await router.isReady();
-  return mount(ModuleWorkspace, { global: { plugins: [router] } });
+  // Teleported sheets outlive their wrapper, so a previous test's open drawer
+  // would otherwise still be in the document and answer this test's queries.
+  document.body.innerHTML = '';
+  mounted = mount(ModuleWorkspace, { global: { plugins: [router] } });
+  return mounted;
 };
 
+let mounted: VueWrapper | null = null;
+
+/**
+ * Finds an element whether it is inside the mounted component or inside the
+ * teleported detail sheet, so a test does not have to know which — and does not
+ * silently pass when a node moves between the two.
+ */
+const inDrawer = (selector: string): DOMWrapper<Element> => {
+  const local = mounted?.find(selector);
+  if (local?.exists()) return local as DOMWrapper<Element>;
+  const teleported = document.body.querySelector(selector);
+  if (!teleported) throw new Error(`Not found in component or drawer: ${selector}`);
+  return new DOMWrapper(teleported);
+};
+const drawerHas = (selector: string) =>
+  Boolean(mounted?.find(selector).exists()) || Boolean(document.body.querySelector(selector));
 const apiResponse = (data: unknown, status = 200) =>
   Promise.resolve(
     new Response(
@@ -65,6 +85,14 @@ const stubDownloads = () => {
 const bodyOf = (call: unknown[] | undefined) =>
   JSON.parse(String((call?.[1] as RequestInit | undefined)?.body));
 
+/**
+ * The record detail is a DetailDrawer, which teleports to <body> — deliberately
+ * outside the mounted wrapper. That is the same reason it now works for an
+ * operator: the sheet is anchored to the viewport instead of being appended
+ * after a fifty-row register, where the detail for row 40 rendered off-screen.
+ *
+ * Wrapped in a DOMWrapper so these assertions keep the ordinary VTU API.
+ */
 describe('module workspace per-module enhancements', () => {
   it('creates a user with roles, opens the detail drawer, edits, and archives', async () => {
     vi.stubGlobal(
@@ -96,13 +124,13 @@ describe('module workspace per-module enhancements', () => {
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Create user with a role (roles render as a labelled checkbox list).
-    await wrapper.get('[data-testid="create-user"]').trigger('click');
+    await inDrawer('[data-testid="create-user"]').trigger('click');
     await vi.waitFor(() => expect(wrapper.findAll('[data-testid^="new-role-"]').length).toBe(2));
-    expect(wrapper.get('[data-testid="new-roles"]').text()).toContain('Ops');
-    await wrapper.get('[data-testid="new-username"]').setValue('joel');
-    await wrapper.get('[data-testid="new-password"]').setValue('longenoughpwd');
-    await wrapper.get('[data-testid="new-role-r1"]').get('input').setValue(true);
-    await wrapper.get('[data-testid="create-user-submit"]').trigger('click');
+    expect(inDrawer('[data-testid="new-roles"]').text()).toContain('Ops');
+    await inDrawer('[data-testid="new-username"]').setValue('joel');
+    await inDrawer('[data-testid="new-password"]').setValue('longenoughpwd');
+    await inDrawer('[data-testid="new-role-r1"]').get('input').setValue(true);
+    await inDrawer('[data-testid="create-user-submit"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) => String(call[0]).endsWith('/users') && call[1]?.method === 'POST',
@@ -116,17 +144,17 @@ describe('module workspace per-module enhancements', () => {
     });
 
     // Open the detail drawer for the row.
-    await wrapper.get('[data-testid="record-u1"]').trigger('click');
+    await inDrawer('[data-testid="record-u1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="user-detail-status"]').text()).toBe('active'),
+      expect(inDrawer('[data-testid="user-detail-status"]').text()).toBe('active'),
     );
-    expect(wrapper.get('[data-testid="detail-panel"]').text()).toContain('smsc.read');
-    expect(wrapper.get('[data-testid="detail-panel"]').text()).toContain('NOC');
+    expect(inDrawer('[data-testid="detail-panel"]').text()).toContain('smsc.read');
+    expect(inDrawer('[data-testid="detail-panel"]').text()).toContain('NOC');
 
     // Edit the status and save.
-    await wrapper.get('[data-testid="detail-edit"]').trigger('click');
-    await wrapper.get('[data-testid="user-status"]').setValue('disabled');
-    await wrapper.get('[data-testid="user-save"]').trigger('click');
+    await inDrawer('[data-testid="detail-edit"]').trigger('click');
+    await inDrawer('[data-testid="user-status"]').setValue('disabled');
+    await inDrawer('[data-testid="user-save"]').trigger('click');
     await vi.waitFor(() => {
       const patch = fetchMock.mock.calls.find(
         (call) => /\/users\/u1$/.test(String(call[0])) && call[1]?.method === 'PATCH',
@@ -136,11 +164,9 @@ describe('module workspace per-module enhancements', () => {
     });
 
     // Archive with confirm.
-    await wrapper.get('[data-testid="record-u1"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="user-archive"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="user-archive"]').trigger('click');
+    await inDrawer('[data-testid="record-u1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="user-archive"]')).toBe(true));
+    await inDrawer('[data-testid="user-archive"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -186,17 +212,15 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.get('[data-testid="smsc-toggle-s1"]').text()).toBe('Disable');
-    expect(wrapper.get('[data-testid="smsc-toggle-s2"]').text()).toBe('Enable');
+    expect(inDrawer('[data-testid="smsc-toggle-s1"]').text()).toBe('Disable');
+    expect(inDrawer('[data-testid="smsc-toggle-s2"]').text()).toBe('Enable');
 
-    await wrapper.get('[data-testid="smsc-toggle-s2"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="smsc-confirm-summary"]').exists()).toBe(true),
-    );
-    expect(wrapper.get('[data-testid="smsc-confirm-consequences"]').text()).toContain(
+    await inDrawer('[data-testid="smsc-toggle-s2"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="smsc-confirm-summary"]')).toBe(true));
+    expect(inDrawer('[data-testid="smsc-confirm-consequences"]').text()).toContain(
       'added back to the generated engine configuration',
     );
-    await wrapper.get('[data-testid="smsc-confirm-confirm"]').trigger('click');
+    await inDrawer('[data-testid="smsc-confirm-confirm"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -225,7 +249,7 @@ describe('module workspace per-module enhancements', () => {
     ]) {
       const wrapper = await mountWorkspace(path, title);
       await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-      expect(wrapper.find('[data-testid="workspace-search"]').exists()).toBe(false);
+      expect(drawerHas('[data-testid="workspace-search"]')).toBe(false);
       wrapper.unmount();
     }
 
@@ -256,7 +280,7 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/routing', 'Routing');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    const filter = wrapper.get('[data-testid="grid-filter-targetSmscId"]');
+    const filter = inDrawer('[data-testid="grid-filter-targetSmscId"]');
     expect(filter.element.tagName).toBe('SELECT');
     await vi.waitFor(() => expect(filter.findAll('option').length).toBe(2));
     expect(filter.text()).toContain('Primary SMPP');
@@ -294,15 +318,15 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.get('[data-testid="smsc-dot-s1"]').classes()).toContain('good');
-    expect(wrapper.get('[data-testid="smsc-dot-s2"]').classes()).toContain('bad');
+    expect(inDrawer('[data-testid="smsc-dot-s1"]').classes()).toContain('good');
+    expect(inDrawer('[data-testid="smsc-dot-s2"]').classes()).toContain('bad');
 
-    await wrapper.get('[data-testid="record-s1"]').trigger('click');
+    await inDrawer('[data-testid="record-s1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="smsc-health"]').text()).toContain('reachable'),
+      expect(inDrawer('[data-testid="smsc-health"]').text()).toContain('reachable'),
     );
-    expect(wrapper.get('[data-testid="smsc-health"]').text()).toContain('42 ms');
-    expect(wrapper.get('[data-testid="smsc-deployments"]').text()).toContain('deploy');
+    expect(inDrawer('[data-testid="smsc-health"]').text()).toContain('42 ms');
+    expect(inDrawer('[data-testid="smsc-deployments"]').text()).toContain('deploy');
   });
 
   it('opens an audit event detail panel with pretty-printed JSON', async () => {
@@ -327,12 +351,12 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/logs-audit', 'Logs & Audit');
     await vi.waitFor(() => expect(wrapper.text()).toContain('smsc.update'));
 
-    await wrapper.get('[data-testid="record-evt-1"]').trigger('click');
+    await inDrawer('[data-testid="record-evt-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="audit-old"]').text()).toContain('"tps": 10'),
+      expect(inDrawer('[data-testid="audit-old"]').text()).toContain('"tps": 10'),
     );
-    expect(wrapper.get('[data-testid="audit-new"]').text()).toContain('"tps": 20');
-    expect(wrapper.get('[data-testid="detail-panel"]').text()).toContain('corr-9');
+    expect(inDrawer('[data-testid="audit-new"]').text()).toContain('"tps": 20');
+    expect(inDrawer('[data-testid="detail-panel"]').text()).toContain('corr-9');
   });
 
   it('paginates and searches the queue with a cursor and depth summary', async () => {
@@ -358,16 +382,14 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/queues', 'Queues');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.get('[data-testid="queue-depth"]').text()).toBe('5');
-    expect(wrapper.get('[data-testid="queue-row-0"]').text()).toContain('m1');
+    expect(inDrawer('[data-testid="queue-depth"]').text()).toBe('5');
+    expect(inDrawer('[data-testid="queue-row-0"]').text()).toContain('m1');
 
-    await wrapper.get('[data-testid="cursor-next"]').trigger('click');
+    await inDrawer('[data-testid="cursor-next"]').trigger('click');
     await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('cursor=c2'));
-    await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="queue-row-0"]').text()).toContain('m2'),
-    );
+    await vi.waitFor(() => expect(inDrawer('[data-testid="queue-row-0"]').text()).toContain('m2'));
 
-    await wrapper.get('[data-testid="workspace-search"]').setValue('primary');
+    await inDrawer('[data-testid="workspace-search"]').setValue('primary');
     await vi.waitFor(
       () => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('query=primary'),
       { timeout: 2000 },
@@ -400,17 +422,17 @@ describe('module workspace per-module enhancements', () => {
 
     // The tile counts what is on the page. In keyset mode the API pays for no
     // row count, so claiming a global total here would be inventing one.
-    expect(wrapper.get('[data-testid="dlr-total"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="dlr-row-0"]').text()).toContain('delivered');
+    expect(inDrawer('[data-testid="dlr-total"]').text()).toBe('1');
+    expect(inDrawer('[data-testid="dlr-row-0"]').text()).toContain('delivered');
 
-    await wrapper.get('[data-testid="dlr-smsc-filter"]').setValue('primary');
-    await wrapper.get('[data-testid="dlr-smsc-filter"]').trigger('change');
+    await inDrawer('[data-testid="dlr-smsc-filter"]').setValue('primary');
+    await inDrawer('[data-testid="dlr-smsc-filter"]').trigger('change');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('smscId=primary'),
     );
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-export"]').trigger('click');
+    await inDrawer('[data-testid="dlr-export"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes('/reports/delivery/export.csv')),
@@ -462,19 +484,17 @@ describe('module workspace per-module enhancements', () => {
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // The rows classify into the vocabulary, so the chips stay usable.
-    expect(wrapper.find('[data-testid="dlr-status-unsupported"]').exists()).toBe(false);
-    expect(
-      wrapper.get('[data-testid="dlr-status-delivered"]').attributes('disabled'),
-    ).toBeUndefined();
+    expect(drawerHas('[data-testid="dlr-status-unsupported"]')).toBe(false);
+    expect(inDrawer('[data-testid="dlr-status-delivered"]').attributes('disabled')).toBeUndefined();
 
-    await wrapper.get('[data-testid="dlr-status-failed"]').trigger('click');
+    await inDrawer('[data-testid="dlr-status-failed"]').trigger('click');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('deliveryStatus=failed'),
     );
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Adding a second status sends both, comma-separated.
-    await wrapper.get('[data-testid="dlr-status-rejected"]').trigger('click');
+    await inDrawer('[data-testid="dlr-status-rejected"]').trigger('click');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
         'deliveryStatus=failed%2Crejected',
@@ -483,7 +503,7 @@ describe('module workspace per-module enhancements', () => {
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // A group replaces the individual selections — it IS a set of them.
-    await wrapper.get('[data-testid="dlr-group-in-flight"]').trigger('click');
+    await inDrawer('[data-testid="dlr-group-in-flight"]').trigger('click');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('deliveryStatus=in-flight'),
     );
@@ -497,13 +517,13 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-group-resendable"]').trigger('click');
+    await inDrawer('[data-testid="dlr-group-resendable"]').trigger('click');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="dlr-smsc-filter"]').setValue('primary');
-    await wrapper.get('[data-testid="dlr-smsc-filter"]').trigger('change');
+    await inDrawer('[data-testid="dlr-smsc-filter"]').setValue('primary');
+    await inDrawer('[data-testid="dlr-smsc-filter"]').trigger('change');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-export"]').trigger('click');
+    await inDrawer('[data-testid="dlr-export"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
     const exportUrl = String(
       fetchMock.mock.calls.find((call) => String(call[0]).includes('export.csv'))?.[0],
@@ -512,9 +532,7 @@ describe('module workspace per-module enhancements', () => {
     expect(exportUrl).toContain('smscId=primary');
     // The export must not inherit the grid's cursor — it is the whole answer.
     expect(exportUrl).not.toContain('cursor=');
-    expect(wrapper.get('[data-testid="dlr-applied-filters"]').text()).toContain(
-      'status resendable',
-    );
+    expect(inDrawer('[data-testid="dlr-applied-filters"]').text()).toContain('status resendable');
     click.mockRestore();
   });
 
@@ -527,8 +545,8 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-from"]').setValue('2026-08-01T00:00');
-    await wrapper.get('[data-testid="dlr-from"]').trigger('change');
+    await inDrawer('[data-testid="dlr-from"]').setValue('2026-08-01T00:00');
+    await inDrawer('[data-testid="dlr-from"]').trigger('change');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
         `from=${encodeURIComponent(new Date('2026-08-01T00:00').toISOString())}`,
@@ -536,7 +554,7 @@ describe('module workspace per-module enhancements', () => {
     );
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-limit"]').setValue('250');
+    await inDrawer('[data-testid="dlr-limit"]').setValue('250');
     await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('limit=250'));
   });
 
@@ -553,18 +571,18 @@ describe('module workspace per-module enhancements', () => {
 
     // Default: no sort parameter at all, which is the keyset path.
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain('sort=');
-    expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset');
+    expect(inDrawer('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset');
 
-    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await inDrawer('[data-testid="dlr-sort-receiver"]').trigger('click');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('sort=receiver'),
     );
     // A sort has no keyset, so the request pages by offset instead of cursor.
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('offset=0');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('pages this by offset');
+    expect(inDrawer('[data-testid="dlr-paging-note"]').text()).toContain('pages this by offset');
 
-    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await inDrawer('[data-testid="dlr-sort-receiver"]').trigger('click');
     await vi.waitFor(() =>
       expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('sort=-receiver'),
     );
@@ -572,10 +590,10 @@ describe('module workspace per-module enhancements', () => {
 
     // A third click returns to the API's own ordering — the only one the
     // `sql_id` cursor can page — so the operator can get the keyset back.
-    await wrapper.get('[data-testid="dlr-sort-receiver"]').trigger('click');
+    await inDrawer('[data-testid="dlr-sort-receiver"]').trigger('click');
     await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain('sort='));
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset'),
+      expect(inDrawer('[data-testid="dlr-paging-note"]').text()).toContain('paged by keyset'),
     );
   });
 
@@ -597,15 +615,15 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-sort-timestamp"]').trigger('click');
+    await inDrawer('[data-testid="dlr-sort-timestamp"]').trigger('click');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    expect(wrapper.get('[data-testid="dlr-matching"]').text()).toBe('120');
-    expect(wrapper.get('[data-testid="dlr-range"]').text()).toContain('Showing 1–3 of 120');
+    expect(inDrawer('[data-testid="dlr-matching"]').text()).toBe('120');
+    expect(inDrawer('[data-testid="dlr-range"]').text()).toContain('Showing 1–3 of 120');
 
-    await wrapper.get('[data-testid="cursor-next"]').trigger('click');
+    await inDrawer('[data-testid="cursor-next"]').trigger('click');
     await vi.waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('offset=50'));
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="dlr-range"]').text()).toContain('Showing 51–53 of 120'),
+      expect(inDrawer('[data-testid="dlr-range"]').text()).toContain('Showing 51–53 of 120'),
     );
   });
 
@@ -619,27 +637,27 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="dlr-from"]').setValue('2026-08-05T10:00');
-    await wrapper.get('[data-testid="dlr-from"]').trigger('change');
+    await inDrawer('[data-testid="dlr-from"]').setValue('2026-08-05T10:00');
+    await inDrawer('[data-testid="dlr-from"]').trigger('change');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="dlr-to"]').setValue('2026-08-01T10:00');
-    await wrapper.get('[data-testid="dlr-to"]').trigger('change');
+    await inDrawer('[data-testid="dlr-to"]').setValue('2026-08-01T10:00');
+    await inDrawer('[data-testid="dlr-to"]').trigger('change');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="dlr-filter-error"]').text()).toContain(
+      expect(inDrawer('[data-testid="dlr-filter-error"]').text()).toContain(
         '“From” must not be after “To”',
       ),
     );
 
-    await wrapper.get('[data-testid="dlr-clear-filters"]').trigger('click');
+    await inDrawer('[data-testid="dlr-clear-filters"]').trigger('click');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="dlr-status-unknown"]').trigger('click');
+    await inDrawer('[data-testid="dlr-status-unknown"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="dlr-filter-error"]').text()).toBe(
+      expect(inDrawer('[data-testid="dlr-filter-error"]').text()).toBe(
         'deliveryStatus contains unsupported value(s): nope.',
       ),
     );
     // A rejected filter is not an outage: the workspace error panel stays shut.
-    expect(wrapper.find('[data-testid="workspace-error"]').exists()).toBe(false);
+    expect(drawerHas('[data-testid="workspace-error"]')).toBe(false);
   });
 
   /**
@@ -686,10 +704,10 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.find('[data-testid="dlr-detail-panel"]').exists()).toBe(false);
-    await wrapper.get('[data-testid="dlr-row-0"]').trigger('click');
+    expect(drawerHas('[data-testid="dlr-detail-panel"]')).toBe(false);
+    await inDrawer('[data-testid="dlr-row-0"]').trigger('click');
 
-    const drawer = wrapper.get('[data-testid="dlr-detail-panel"]');
+    const drawer = inDrawer('[data-testid="dlr-detail-panel"]');
     const shown = drawer.text();
     // Identifiers, parties, SMSC, delivery outcome, DLR event, timestamps, cause.
     expect(shown).toContain('9911');
@@ -711,7 +729,7 @@ describe('module workspace per-module enhancements', () => {
     ).toBe(1);
 
     await drawer.get('[data-testid="dlr-detail-close"]').trigger('click');
-    expect(wrapper.find('[data-testid="dlr-detail-panel"]').exists()).toBe(false);
+    expect(drawerHas('[data-testid="dlr-detail-panel"]')).toBe(false);
   });
 
   it('shows a dash rather than a guess for receipt fields the store did not supply', async () => {
@@ -728,8 +746,8 @@ describe('module workspace per-module enhancements', () => {
     );
     const wrapper = await mountWorkspace('/delivery-reports', 'Delivery Reports');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="dlr-row-0"]').trigger('click');
-    const drawer = wrapper.get('[data-testid="dlr-detail-panel"]');
+    await inDrawer('[data-testid="dlr-row-0"]').trigger('click');
+    const drawer = inDrawer('[data-testid="dlr-detail-panel"]');
     expect(drawer.text()).toContain('—');
     expect(drawer.get('[data-testid="dlr-detail-event"]').text()).toBe('no report yet');
   });
@@ -754,17 +772,17 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/plugins', 'Plugins');
     await vi.waitFor(() => expect(wrapper.text()).toContain('SMS Archiver'));
-    expect(wrapper.find('[data-testid="plugins-help"]').exists()).toBe(true);
+    expect(drawerHas('[data-testid="plugins-help"]')).toBe(true);
     expect(wrapper.text()).toContain('messages.read');
     expect(wrapper.text()).toContain('message.sent');
 
-    await wrapper.get('[data-testid="plugin-enable-p1"]').trigger('click');
+    await inDrawer('[data-testid="plugin-enable-p1"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('/plugins/p1/enable')),
       ).toBe(true),
     );
-    await wrapper.get('[data-testid="plugin-disable-p1"]').trigger('click');
+    await inDrawer('[data-testid="plugin-disable-p1"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('/plugins/p1/disable')),
@@ -798,17 +816,15 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/backup', 'Backup');
     await vi.waitFor(() => expect(wrapper.text()).toContain('nightly'));
-    expect(wrapper.find('[data-testid="backup-help"]').exists()).toBe(true);
+    expect(drawerHas('[data-testid="backup-help"]')).toBe(true);
     expect(fetchMock.mock.calls[0][0]).toContain('/backup-dr');
 
     // The primary action opens a modal to name the backup and choose its scope.
-    await wrapper.get('[data-testid="primary-action"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="backup-modal"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="backup-label"]').setValue('pre-upgrade');
-    await wrapper.get('[data-testid="backup-scope-database"]').setValue();
-    await wrapper.get('[data-testid="backup-submit"]').trigger('click');
+    await inDrawer('[data-testid="primary-action"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="backup-modal"]')).toBe(true));
+    await inDrawer('[data-testid="backup-label"]').setValue('pre-upgrade');
+    await inDrawer('[data-testid="backup-scope-database"]').setValue();
+    await inDrawer('[data-testid="backup-submit"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) => String(call[0]).endsWith('/backup-dr') && call[1]?.method === 'POST',
@@ -826,7 +842,7 @@ describe('module workspace per-module enhancements', () => {
     // Verify is POST /backup-dr/:id/verify. It used to be sent as a bare GET,
     // which 404s on every click because the route is @Post — the button
     // reported a failure and never re-checked a checksum.
-    await wrapper.get('[data-testid="backup-verify-b1"]').trigger('click');
+    await inDrawer('[data-testid="backup-verify-b1"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -837,20 +853,18 @@ describe('module workspace per-module enhancements', () => {
 
     // No PDF button: /backup-dr/export.pdf does not exist. The gap is stated
     // instead of offered, the way the Reports page states its own.
-    expect(wrapper.find('[data-testid="export-backup-pdf"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="export-backup-csv"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="export-backup-csv-only"]').text()).toContain('CSV only');
+    expect(drawerHas('[data-testid="export-backup-pdf"]')).toBe(false);
+    expect(drawerHas('[data-testid="export-backup-csv"]')).toBe(true);
+    expect(inDrawer('[data-testid="export-backup-csv-only"]').text()).toContain('CSV only');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Restore requires a reason and posts confirm:true to /backup-dr/:id/restore.
-    await wrapper.get('[data-testid="backup-restore-b1"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="restore-form"]').exists()).toBe(true),
-    );
-    expect(wrapper.get('[data-testid="restore-submit"]').attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-testid="restore-reason"]').setValue('DR drill');
+    await inDrawer('[data-testid="backup-restore-b1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="restore-form"]')).toBe(true));
+    expect(inDrawer('[data-testid="restore-submit"]').attributes('disabled')).toBeDefined();
+    await inDrawer('[data-testid="restore-reason"]').setValue('DR drill');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="restore-submit"]').trigger('click');
+    await inDrawer('[data-testid="restore-submit"]').trigger('click');
     await vi.waitFor(() => {
       const restore = fetchMock.mock.calls.find((call) =>
         String(call[0]).includes('/backup-dr/b1/restore'),
@@ -879,21 +893,19 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/api-gateway', 'API Gateway');
     await vi.waitFor(() => expect(wrapper.text()).toContain('Existing'));
 
-    await wrapper.get('[data-testid="primary-action"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="api-client-form"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="api-client-name"]').setValue('Billing');
+    await inDrawer('[data-testid="primary-action"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="api-client-form"]')).toBe(true));
+    await inDrawer('[data-testid="api-client-name"]').setValue('Billing');
     // Chosen from the catalogue, not typed. This test previously entered
     // "messages.send, reports.read" — neither of which is a scope the gateway
     // enforces — so it asserted that the console would happily mint a key that
     // authenticates and is then refused on every business route.
-    await wrapper.get('[data-testid="scope-checkbox-sms.send"]').setValue(true);
-    await wrapper.get('[data-testid="scope-checkbox-sms.read"]').setValue(true);
-    await wrapper.get('[data-testid="api-client-submit"]').trigger('click');
+    await inDrawer('[data-testid="scope-checkbox-sms.send"]').setValue(true);
+    await inDrawer('[data-testid="scope-checkbox-sms.read"]').setValue(true);
+    await inDrawer('[data-testid="api-client-submit"]').trigger('click');
 
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="secret-value"]').text()).toBe('sk_live_secret_value'),
+      expect(inDrawer('[data-testid="secret-value"]').text()).toBe('sk_live_secret_value'),
     );
     const post = fetchMock.mock.calls.find(
       (call) => String(call[0]).endsWith('/api-gateway/clients') && call[1]?.method === 'POST',
@@ -902,8 +914,8 @@ describe('module workspace per-module enhancements', () => {
     // the same scopes always serialise identically and are diffable.
     expect(bodyOf(post)).toEqual({ name: 'Billing', scopes: ['sms.send', 'sms.read'] });
 
-    await wrapper.get('[data-testid="secret-dismiss"]').trigger('click');
-    expect(wrapper.find('[data-testid="secret-box"]').exists()).toBe(false);
+    await inDrawer('[data-testid="secret-dismiss"]').trigger('click');
+    expect(drawerHas('[data-testid="secret-box"]')).toBe(false);
   });
 
   it('renders system settings grouped and PUTs an inline edit with type coercion', async () => {
@@ -937,11 +949,11 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/system', 'System Settings');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(wrapper.find('[data-testid="settings-group-throughput"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="setting-readonly-build_sha"]').text()).toBe('Read-only');
+    expect(drawerHas('[data-testid="settings-group-throughput"]')).toBe(true);
+    expect(inDrawer('[data-testid="setting-readonly-build_sha"]').text()).toBe('Read-only');
 
-    await wrapper.get('[data-testid="setting-input-max_tps"]').setValue('250');
-    await wrapper.get('[data-testid="setting-save-max_tps"]').trigger('click');
+    await inDrawer('[data-testid="setting-input-max_tps"]').setValue('250');
+    await inDrawer('[data-testid="setting-save-max_tps"]').trigger('click');
     await vi.waitFor(() => {
       const put = fetchMock.mock.calls.find(
         (call) => String(call[0]).includes('/system/settings/max_tps') && call[1]?.method === 'PUT',
@@ -979,13 +991,13 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/docker', 'Runtime');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="container-0"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(drawerHas('[data-testid="container-0"]')).toBe(true));
 
-    expect(wrapper.get('[data-testid="container-0"]').find('.dot').classes()).toContain('good');
-    expect(wrapper.get('[data-testid="container-observe-0"]').text()).toContain('observed live');
-    expect(wrapper.get('[data-testid="container-1"]').find('.dot').classes()).toContain('unknown');
-    expect(wrapper.get('[data-testid="container-observe-1"]').text()).toContain('declared');
-    expect(wrapper.get('[data-testid="docker-panel"]').text()).toContain('unknown');
+    expect(inDrawer('[data-testid="container-0"]').find('.dot').classes()).toContain('good');
+    expect(inDrawer('[data-testid="container-observe-0"]').text()).toContain('observed live');
+    expect(inDrawer('[data-testid="container-1"]').find('.dot').classes()).toContain('unknown');
+    expect(inDrawer('[data-testid="container-observe-1"]').text()).toContain('declared');
+    expect(inDrawer('[data-testid="docker-panel"]').text()).toContain('unknown');
   });
 
   /**
@@ -1009,13 +1021,13 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/queues', 'Queues');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    const panel = wrapper.get('[data-testid="source-unavailable"]');
+    const panel = inDrawer('[data-testid="source-unavailable"]');
     expect(panel.attributes('role')).toBe('alert');
     expect(panel.text()).toContain('Message store unreachable');
     expect(panel.text()).not.toContain('Planned');
     expect(panel.text()).toContain('outage, not a missing feature');
     // The probe's own evidence, so the operator can act on it.
-    expect(wrapper.get('[data-testid="source-unavailable-evidence"]').text()).toContain(
+    expect(inDrawer('[data-testid="source-unavailable-evidence"]').text()).toContain(
       'ECONNREFUSED',
     );
   });
@@ -1033,10 +1045,10 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/customers', 'Customers');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    expect(wrapper.get('[data-testid="source-unavailable"]').text()).toContain(
+    expect(inDrawer('[data-testid="source-unavailable"]').text()).toContain(
       'Customer management is planned',
     );
-    expect(wrapper.find('[data-testid="api-state"]').exists()).toBe(false);
+    expect(drawerHas('[data-testid="api-state"]')).toBe(false);
   });
 
   it('opens a message trace drawer with events and summary when a row is clicked', async () => {
@@ -1063,17 +1075,15 @@ describe('module workspace per-module enhancements', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-m1"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(drawerHas('[data-testid="record-m1"]')).toBe(true));
 
-    await wrapper.get('[data-testid="record-m1"]').trigger('click');
+    await inDrawer('[data-testid="record-m1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="message-trace-panel"]')).toBe(true));
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="message-trace-panel"]').exists()).toBe(true),
+      expect(inDrawer('[data-testid="message-trace-events"]').text()).toContain('delivered'),
     );
-    await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="message-trace-events"]').text()).toContain('delivered'),
-    );
-    expect(wrapper.get('[data-testid="message-trace-events"]').text()).toContain('DLR received');
-    expect(wrapper.get('[data-testid="message-trace-panel"]').text()).toContain('+256700');
+    expect(inDrawer('[data-testid="message-trace-events"]').text()).toContain('DLR received');
+    expect(inDrawer('[data-testid="message-trace-panel"]').text()).toContain('+256700');
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes('/messages/m1/trace')),
     ).toBe(true);
@@ -1113,14 +1123,14 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="record-s1"]').trigger('click');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="smsc-edit"]').exists()).toBe(true));
+    await inDrawer('[data-testid="record-s1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="smsc-edit"]')).toBe(true));
 
     // Edit the SMSC.
-    await wrapper.get('[data-testid="smsc-edit"]').trigger('click');
-    await wrapper.get('[data-testid="smsc-edit-host"]').setValue('smpp2.example');
-    await wrapper.get('[data-testid="smsc-edit-tps"]').setValue(50);
-    await wrapper.get('[data-testid="smsc-save"]').trigger('click');
+    await inDrawer('[data-testid="smsc-edit"]').trigger('click');
+    await inDrawer('[data-testid="smsc-edit-host"]').setValue('smpp2.example');
+    await inDrawer('[data-testid="smsc-edit-tps"]').setValue(50);
+    await inDrawer('[data-testid="smsc-save"]').trigger('click');
     await vi.waitFor(() => {
       const patch = fetchMock.mock.calls.find(
         (call) => /\/smscs\/s1$/.test(String(call[0])) && call[1]?.method === 'PATCH',
@@ -1130,17 +1140,15 @@ describe('module workspace per-module enhancements', () => {
     });
 
     // First archive returns 409 (referenced by routes) shown honestly.
-    await wrapper.get('[data-testid="record-s1"]').trigger('click');
+    await inDrawer('[data-testid="record-s1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="smsc-archive"]')).toBe(true));
+    await inDrawer('[data-testid="smsc-archive"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="smsc-archive"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="smsc-archive"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="api-state"]').text()).toContain('referenced by 2 routes'),
+      expect(inDrawer('[data-testid="api-state"]').text()).toContain('referenced by 2 routes'),
     );
 
     // Second archive succeeds.
-    await wrapper.get('[data-testid="smsc-archive"]').trigger('click');
+    await inDrawer('[data-testid="smsc-archive"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.filter(
@@ -1172,17 +1180,17 @@ describe('module workspace per-module enhancements', () => {
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Load baseline pre-fills the composer with the starter config + description/notes.
-    await wrapper.get('[data-testid="load-baseline"]').trigger('click');
+    await inDrawer('[data-testid="load-baseline"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="configuration-baseline-info"]').exists()).toBe(true),
+      expect(drawerHas('[data-testid="configuration-baseline-info"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="configuration-baseline-info"]').text()).toContain(
+    expect(inDrawer('[data-testid="configuration-baseline-info"]').text()).toContain(
       'working starter configuration',
     );
-    expect(wrapper.get('[data-testid="configuration-baseline-content"]').text()).toContain(
+    expect(inDrawer('[data-testid="configuration-baseline-content"]').text()).toContain(
       'adminPort',
     );
-    await wrapper.get('[data-testid="save-draft"]').trigger('click');
+    await inDrawer('[data-testid="save-draft"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) => String(call[0]).endsWith('/configurations') && call[1]?.method === 'POST',
@@ -1193,11 +1201,9 @@ describe('module workspace per-module enhancements', () => {
     });
 
     // Edit a row loads that version's content for a new version.
-    await wrapper.get('[data-testid="config-edit-cfg-1"]').trigger('click');
+    await inDrawer('[data-testid="config-edit-cfg-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="configuration-baseline-content"]').text()).toContain(
-        '14000',
-      ),
+      expect(inDrawer('[data-testid="configuration-baseline-content"]').text()).toContain('14000'),
     );
   });
 
@@ -1227,18 +1233,16 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/customers', 'Customers');
     await vi.waitFor(() => expect(wrapper.text()).toContain('Acme'));
-    expect(wrapper.find('[data-testid="customers-help"]').exists()).toBe(true);
+    expect(drawerHas('[data-testid="customers-help"]')).toBe(true);
 
     // Create a customer.
-    await wrapper.get('[data-testid="primary-action"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="create-customer-form"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="customer-name"]').setValue('Globex');
-    await wrapper.get('[data-testid="customer-code"]').setValue('GLBX');
-    await wrapper.get('[data-testid="customer-senders"]').setValue('GLBX, INFO');
-    await wrapper.get('[data-testid="customer-quota"]').setValue(500);
-    await wrapper.get('[data-testid="customer-submit"]').trigger('click');
+    await inDrawer('[data-testid="primary-action"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="create-customer-form"]')).toBe(true));
+    await inDrawer('[data-testid="customer-name"]').setValue('Globex');
+    await inDrawer('[data-testid="customer-code"]').setValue('GLBX');
+    await inDrawer('[data-testid="customer-senders"]').setValue('GLBX, INFO');
+    await inDrawer('[data-testid="customer-quota"]').setValue(500);
+    await inDrawer('[data-testid="customer-submit"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) => String(call[0]).endsWith('/customers') && call[1]?.method === 'POST',
@@ -1254,13 +1258,13 @@ describe('module workspace per-module enhancements', () => {
     });
 
     // Open detail and edit.
-    await wrapper.get('[data-testid="record-cu1"]').trigger('click');
+    await inDrawer('[data-testid="record-cu1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="customer-detail-status"]').text()).toBe('active'),
+      expect(inDrawer('[data-testid="customer-detail-status"]').text()).toBe('active'),
     );
-    await wrapper.get('[data-testid="customer-edit"]').trigger('click');
-    await wrapper.get('[data-testid="customer-edit-status"]').setValue('suspended');
-    await wrapper.get('[data-testid="customer-save"]').trigger('click');
+    await inDrawer('[data-testid="customer-edit"]').trigger('click');
+    await inDrawer('[data-testid="customer-edit-status"]').setValue('suspended');
+    await inDrawer('[data-testid="customer-save"]').trigger('click');
     await vi.waitFor(() => {
       const patch = fetchMock.mock.calls.find(
         (call) => /\/customers\/cu1$/.test(String(call[0])) && call[1]?.method === 'PATCH',
@@ -1280,9 +1284,9 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/plugins', 'Plugins');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    expect(wrapper.find('[data-testid="plugins-developer"]').exists()).toBe(true);
+    expect(drawerHas('[data-testid="plugins-developer"]')).toBe(true);
 
-    await wrapper.get('[data-testid="download-sample-plugin"]').trigger('click');
+    await inDrawer('[data-testid="download-sample-plugin"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes('/plugins/sample-manifest')),
@@ -1294,7 +1298,7 @@ describe('module workspace per-module enhancements', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/api-gateway', 'API Gateway');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    const docs = wrapper.get('[data-testid="api-gateway-docs"]').text();
+    const docs = inDrawer('[data-testid="api-gateway-docs"]').text();
     expect(docs).toContain('shown exactly once');
     expect(docs).toContain('openapi.json');
     // The gateway key is NOT a bearer token: ApiKeyAuthGuard reads X-API-Key or
@@ -1304,7 +1308,7 @@ describe('module workspace per-module enhancements', () => {
     expect(docs).toContain('Authorization: ApiKey');
     expect(docs).toContain('not a bearer token');
     // And it points at the rendered reference rather than only the raw JSON.
-    expect(wrapper.get('[data-testid="api-gateway-docs"]').find('a').attributes('href')).toBe(
+    expect(inDrawer('[data-testid="api-gateway-docs"]').find('a').attributes('href')).toBe(
       '/api-reference',
     );
   });
@@ -1339,14 +1343,12 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/reports', 'Reports');
     await vi.waitFor(() => expect(wrapper.text()).toContain('120'));
 
-    await wrapper.get('[data-testid="record-rep-1"]').trigger('click');
+    await inDrawer('[data-testid="record-rep-1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="snapshot-panel"]')).toBe(true));
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="snapshot-panel"]').exists()).toBe(true),
+      expect(inDrawer('[data-testid="snapshot-related"]').text()).toContain('smsc'),
     );
-    await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('smsc'),
-    );
-    const related = wrapper.get('[data-testid="snapshot-related"]').text();
+    const related = inDrawer('[data-testid="snapshot-related"]').text();
     expect(related).toContain('route');
     expect(related).toContain('80');
     expect(related).toContain('40');

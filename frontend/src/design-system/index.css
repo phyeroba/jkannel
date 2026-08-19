@@ -156,3 +156,51 @@
 .table-wrap table {
   min-width: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   The detail sheet must honour its own width.
+
+   `.drawer-sheet` is a flex item with `width: 50vw`, and a flex item defaults to
+   `min-width: auto` — meaning its content's min-content width can push it wider
+   than the width it was given. A drawer holding a wide table or a code sample
+   therefore grew past 50vw and off the right edge of the viewport, clipping its
+   own text with no way to scroll to it.
+
+   `min-width: 0` at each level of the stack is what makes `overflow: auto` on
+   the body actually engage, so wide content scrolls INSIDE the sheet instead of
+   escaping it.
+   --------------------------------------------------------------------------- */
+.drawer-sheet,
+.drawer-body,
+.drawer-body > *,
+.drawer-head > div:first-child {
+  min-width: 0;
+}
+/* Prose inside a sheet wraps; only genuinely tabular or preformatted content is
+   allowed its own horizontal scroller. */
+.drawer-body p,
+.drawer-body li,
+.drawer-body dd {
+  overflow-wrap: anywhere;
+}
+.drawer-body .table-wrap {
+  overflow-x: auto;
+}
+
+/* A code reference is not a record detail. The design system sizes the sheet at
+   50vw for a row opened from a register, where the list behind it is the point;
+   a page whose content is 80-column code samples needs the width more than it
+   needs the list. Opt-in, so the default stays exactly as designed. */
+.drawer-sheet.drawer-wide {
+  width: min(920px, 92vw);
+}
+
+/* `.detail-panel` carried a brand accent bar and a bottom margin from when it
+   was a panel sitting in the page flow. Inside a sheet the sheet's own edge is
+   the boundary, so the bar reads as a stray rule down the middle of the
+   dialog. */
+.drawer-body .detail-panel {
+  margin-bottom: 0;
+  border-left: 0;
+  padding-left: 0;
+}

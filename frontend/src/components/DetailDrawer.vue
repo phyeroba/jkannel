@@ -30,6 +30,16 @@ const props = defineProps<{
   subtitle?: string;
   /** Small uppercase kicker above the title — the record's type, usually. */
   eyebrow?: string;
+  /**
+   * Widens the sheet past the design system's 50vw.
+   *
+   * The 50vw default is sized for a record opened from a register, where seeing
+   * the list behind the sheet is the whole point of using a sheet. Content that
+   * is itself wide — code samples at 80 columns, a table of a dozen columns —
+   * needs the width more than it needs the list, and wraps into unreadability
+   * without it. Opt-in, so the default stays as designed.
+   */
+  wide?: boolean;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -95,6 +105,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       <aside
         ref="sheet"
         class="drawer-sheet"
+        :class="{ 'drawer-wide': wide }"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
