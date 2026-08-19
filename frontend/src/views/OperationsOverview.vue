@@ -312,28 +312,37 @@ function statusTone(status: string) {
     >
   </div>
   <section class="metrics-grid">
+    <!--
+      Each tile drills into the screen that owns the figure. Reading a worrying
+      number and then hunting the sidebar for where to act on it is friction the
+      tile can remove.
+    -->
     <MetricCard
       label="Queue depth"
       :value="queueMetric.value"
       :detail="queueMetric.detail"
       :tone="queueMetric.tone"
       icon="queue"
+      to="/queues"
     /><MetricCard
       label="Messages (latest daily)"
       :value="messagesMetric.value"
       :detail="messagesMetric.detail"
       icon="sms"
+      to="/messages"
     /><MetricCard
       label="DLRs (latest daily)"
       :value="dlrMetric.value"
       :detail="dlrMetric.detail"
       icon="check"
+      to="/dlr-performance"
     /><MetricCard
       label="Alerts"
       :value="alertsMetric.value"
       :detail="alertsMetric.detail"
       :tone="alertsMetric.tone"
       icon="alert"
+      to="/alerts"
     />
   </section>
   <section class="dashboard-grid">
@@ -343,6 +352,15 @@ function statusTone(status: string) {
           <h2>Message volume</h2>
           <p>Daily total-scope report snapshots</p>
         </div>
+        <!--
+          A link in the header, not a click handler on the whole panel. These
+          panels contain their own links and controls, so making the container
+          clickable would swallow those clicks and give a screen reader a single
+          enormous ambiguous target.
+        -->
+        <RouterLink class="text-link" to="/reports" data-testid="open-reports"
+          >Open reports</RouterLink
+        >
       </header>
       <div
         v-if="volumeState === 'ok' && volumeSnapshots.length"
@@ -377,6 +395,11 @@ function statusTone(status: string) {
           <h2>Platform health</h2>
           <p>Observed dependency state</p>
         </div>
+        <!-- The services board is the fuller version of this list: every
+             component, its dependencies, and which one to fix first. -->
+        <RouterLink class="text-link" to="/services" data-testid="open-services"
+          >All services</RouterLink
+        >
       </header>
       <ul class="health-list" data-testid="health-list">
         <li v-for="row in healthRows" :key="row.name">

@@ -4,8 +4,18 @@ const ok = (data: unknown) =>
   Promise.resolve(new Response(JSON.stringify({ success: true, data }), { status: 200 }));
 
 describe('session route guard', () => {
-  beforeEach(() => vi.resetModules());
+  beforeEach(() => {
+    vi.resetModules();
+    // The later tests seed an access token, and resetModules does not touch
+    // localStorage. Without this, "unauthenticated" is only true because this
+    // test happens to run first — an ordering dependency, not a fact.
+    localStorage.clear();
+  });
 
+  // 30s, not 15s. Importing the router pulls in the whole lazy route table, and
+  // under `fullyParallel` on a loaded machine that occasionally crossed 15s and
+  // failed a test that passes 3/3 in isolation. A flaky test costs more than a
+  // slow one: it teaches people to re-run the suite instead of reading it.
   it('redirects an unauthenticated protected route to login', async () => {
     vi.stubGlobal(
       'fetch',
@@ -19,7 +29,7 @@ describe('session route guard', () => {
     await router.push('/messages');
     await router.isReady();
     expect(router.currentRoute.value.name).toBe('login');
-  }, 15_000);
+  }, 30_000);
 
   it('permits an authorized route and rejects a missing permission', async () => {
     localStorage.setItem('jkannel-access-token', 'access');
