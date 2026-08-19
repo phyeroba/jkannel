@@ -884,7 +884,12 @@ describe('module workspace per-module enhancements', () => {
       expect(wrapper.find('[data-testid="api-client-form"]').exists()).toBe(true),
     );
     await wrapper.get('[data-testid="api-client-name"]').setValue('Billing');
-    await wrapper.get('[data-testid="api-client-scopes"]').setValue('messages.send, reports.read');
+    // Chosen from the catalogue, not typed. This test previously entered
+    // "messages.send, reports.read" — neither of which is a scope the gateway
+    // enforces — so it asserted that the console would happily mint a key that
+    // authenticates and is then refused on every business route.
+    await wrapper.get('[data-testid="scope-checkbox-sms.send"]').setValue(true);
+    await wrapper.get('[data-testid="scope-checkbox-sms.read"]').setValue(true);
     await wrapper.get('[data-testid="api-client-submit"]').trigger('click');
 
     await vi.waitFor(() =>
@@ -893,7 +898,9 @@ describe('module workspace per-module enhancements', () => {
     const post = fetchMock.mock.calls.find(
       (call) => String(call[0]).endsWith('/api-gateway/clients') && call[1]?.method === 'POST',
     );
-    expect(bodyOf(post)).toEqual({ name: 'Billing', scopes: ['messages.send', 'reports.read'] });
+    // Emitted in catalogue order rather than click order, so two keys granted
+    // the same scopes always serialise identically and are diffable.
+    expect(bodyOf(post)).toEqual({ name: 'Billing', scopes: ['sms.send', 'sms.read'] });
 
     await wrapper.get('[data-testid="secret-dismiss"]').trigger('click');
     expect(wrapper.find('[data-testid="secret-box"]').exists()).toBe(false);

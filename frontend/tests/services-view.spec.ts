@@ -70,7 +70,12 @@ describe('the services board', () => {
             observedAt: null,
           }),
         ],
-        { healthy: 1, unknown: 1, worst: 'unknown', statement: '1 not observable of 2 components.' },
+        {
+          healthy: 1,
+          unknown: 1,
+          worst: 'unknown',
+          statement: '1 not observable of 2 components.',
+        },
       ),
     );
 
@@ -96,9 +101,7 @@ describe('the services board', () => {
         service({ name: 'sqlbox', state: 'critical' }),
       ]),
     );
-    const names = wrapper
-      .findAll('tbody tr')
-      .map((row) => row.find('td').text());
+    const names = wrapper.findAll('tbody tr').map((row) => row.find('td').text());
     expect(names).toEqual(['sqlbox', 'smsbox', 'database']);
   });
 

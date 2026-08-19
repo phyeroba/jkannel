@@ -94,7 +94,9 @@ describe('requesting a window', () => {
 
     await wrapper.find('[data-testid="privacy-reveal-reason-input"]').setValue('x');
     expect(wrapper.find('[data-testid="privacy-reveal-reason-problem"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="privacy-reveal-submit"]').attributes('disabled')).toBeDefined();
+    expect(
+      wrapper.find('[data-testid="privacy-reveal-submit"]').attributes('disabled'),
+    ).toBeDefined();
   });
 
   it('sends the reason, the window and the message scope, then tells the parent', async () => {
@@ -145,9 +147,12 @@ describe('requesting a window', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) =>
       init?.method === 'POST'
         ? Promise.resolve(
-            new Response(JSON.stringify({ success: false, error: { message: 'Reason too short' } }), {
-              status: 400,
-            }),
+            new Response(
+              JSON.stringify({ success: false, error: { message: 'Reason too short' } }),
+              {
+                status: 400,
+              },
+            ),
           )
         : envelope({ grant: null }),
     );
@@ -182,7 +187,9 @@ describe('a window already in force', () => {
     });
     await settle();
     expect(wrapper.find('[data-testid="privacy-reveal-state"]').text()).toContain('Revealed');
-    expect(wrapper.find('[data-testid="privacy-reveal-countdown"]').text()).toMatch(/\d+m \d+s left/);
+    expect(wrapper.find('[data-testid="privacy-reveal-countdown"]').text()).toMatch(
+      /\d+m \d+s left/,
+    );
     expect(wrapper.find('[data-testid="privacy-reveal-grant-reason"]').text()).toContain(
       'ticket 4412',
     );

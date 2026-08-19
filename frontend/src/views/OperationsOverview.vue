@@ -147,7 +147,12 @@ const carriers = ref<CarrierSummary[]>([]);
 
 async function checkCarriers() {
   try {
-    carriers.value = await apiRequest<CarrierSummary[]>('/carriers');
+    // Coerced through asItems rather than trusted as an array. `/carriers`
+    // returns a bare list today, but every other list endpoint here returns a
+    // `{ items }` page, and assuming the wrong one turns a shape change into a
+    // render-time crash that takes the whole dashboard down — not a panel
+    // showing "unavailable", which is what a data problem should look like.
+    carriers.value = asItems(await apiRequest<unknown>('/carriers')) as unknown as CarrierSummary[];
     carriersState.value = 'ok';
   } catch {
     carriers.value = [];

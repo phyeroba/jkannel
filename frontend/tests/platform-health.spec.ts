@@ -28,7 +28,9 @@ describe('an unwatched component never renders like a healthy one', () => {
   it('says "not observed", not "unknown"', () => {
     // "Unknown" reads as a transient gap that the next poll might fill. Nothing
     // is polling, and the word has to say so.
-    expect(stateWord(reading({ state: 'unknown', observation: 'unobserved' }))).toBe('not observed');
+    expect(stateWord(reading({ state: 'unknown', observation: 'unobserved' }))).toBe(
+      'not observed',
+    );
     expect(stateWord(reading({ state: 'unknown', observation: 'derived' }))).toBe('unknown');
   });
 
@@ -62,7 +64,9 @@ describe('advise', () => {
   it('sends the operator to the dependency, not to the symptom', () => {
     // The failure this prevents: restarting bearerbox six times while
     // PostgreSQL is the thing that is actually down.
-    const text = advise(reading({ state: 'critical', dependsOn: ['database'], rootCause: 'database' }));
+    const text = advise(
+      reading({ state: 'critical', dependsOn: ['database'], rootCause: 'database' }),
+    );
     expect(text).toContain('Fix database first');
     expect(text).toContain('usually changes nothing');
   });

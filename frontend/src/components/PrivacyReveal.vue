@@ -212,7 +212,12 @@ async function revoke() {
           >
             {{ busy ? 'Requesting…' : 'Open the window' }}
           </button>
-          <button type="button" class="ghost" :data-testid="`${testid}-cancel`" @click="asking = false">
+          <button
+            type="button"
+            class="ghost"
+            :data-testid="`${testid}-cancel`"
+            @click="asking = false"
+          >
             Cancel
           </button>
         </div>
@@ -223,7 +228,13 @@ async function revoke() {
       <p class="row-id mono" :data-testid="`${testid}-grant-reason`">
         Reason on record: {{ grant?.reason }}
       </p>
-      <button type="button" class="ghost" :disabled="busy" :data-testid="`${testid}-revoke`" @click="revoke">
+      <button
+        type="button"
+        class="ghost"
+        :disabled="busy"
+        :data-testid="`${testid}-revoke`"
+        @click="revoke"
+      >
         Close the window now
       </button>
     </div>

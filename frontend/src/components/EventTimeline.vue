@@ -19,9 +19,9 @@
  * token values, because inline styles cannot express the `:last-child` rule
  * that drops the connector on the final step.
  */
-export type TimelineState = 'ok' | 'warn' | 'error' | 'missing' | 'info';
+type TimelineState = 'ok' | 'warn' | 'error' | 'missing' | 'info';
 
-export interface TimelineItem {
+interface TimelineItem {
   /** Clock or stamp, rendered mono in the left rail. */
   at: string;
   label: string;

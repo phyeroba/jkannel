@@ -146,6 +146,14 @@ async function mountReference(initial = '/api-reference') {
   return { wrapper, router };
 }
 
+/**
+ * The operation detail is a DetailDrawer, which teleports to <body>. It is
+ * therefore outside the mounted wrapper by design — the same reason it now
+ * opens where the reader is looking instead of at the foot of a 345-row page.
+ */
+const inDrawer = (selector: string) => document.body.querySelector(selector);
+const drawerAll = (selector: string) => [...document.body.querySelectorAll(selector)];
+const drawerText = (selector: string) => inDrawer(selector)?.textContent ?? '';
 describe('API reference workspace', () => {
   it('renders every operation from the live OpenAPI document with its permission and auth', async () => {
     const fetchSpy = stubFetch(() => jsonResponse(DOCUMENT));
@@ -200,9 +208,8 @@ describe('API reference workspace', () => {
     await wrapper
       .get('[data-testid="api-reference-open-MessagesController_send"]')
       .trigger('click');
-    let caveats = wrapper
-      .findAll('[data-testid="api-reference-detail-caveat"]')
-      .map((node) => node.text())
+    let caveats = drawerAll('[data-testid="api-reference-detail-caveat"]')
+      .map((node) => node.textContent ?? '')
       .join(' ');
     expect(caveats).toContain('generic object');
     expect(caveats).toContain('validates bodies imperatively');
@@ -211,9 +218,8 @@ describe('API reference workspace', () => {
     await wrapper
       .get('[data-testid="api-reference-open-AlertLifecycleController_acknowledge"]')
       .trigger('click');
-    caveats = wrapper
-      .findAll('[data-testid="api-reference-detail-caveat"]')
-      .map((node) => node.text())
+    caveats = drawerAll('[data-testid="api-reference-detail-caveat"]')
+      .map((node) => node.textContent ?? '')
       .join(' ');
     expect(caveats).toContain('records a body only when the handler binds one');
 
@@ -221,9 +227,8 @@ describe('API reference workspace', () => {
     await wrapper
       .get('[data-testid="api-reference-open-MessagesController_list"]')
       .trigger('click');
-    caveats = wrapper
-      .findAll('[data-testid="api-reference-detail-caveat"]')
-      .map((node) => node.text())
+    caveats = drawerAll('[data-testid="api-reference-detail-caveat"]')
+      .map((node) => node.textContent ?? '')
       .join(' ');
     expect(caveats).toContain('per-resource whitelist');
 
@@ -231,9 +236,8 @@ describe('API reference workspace', () => {
     await wrapper
       .get('[data-testid="api-reference-open-GatewayMessagingController_submit"]')
       .trigger('click');
-    caveats = wrapper
-      .findAll('[data-testid="api-reference-detail-caveat"]')
-      .map((node) => node.text())
+    caveats = drawerAll('[data-testid="api-reference-detail-caveat"]')
+      .map((node) => node.textContent ?? '')
       .join(' ');
     expect(caveats).toContain('appear unauthenticated here');
   });
@@ -245,10 +249,10 @@ describe('API reference workspace', () => {
     await wrapper
       .get('[data-testid="api-reference-open-MessagesController_list"]')
       .trigger('click');
-    const search = wrapper.get('[data-testid="api-reference-param-search"]');
+    const search = { text: () => drawerText('[data-testid="api-reference-param-search"]') };
     expect(search.text()).toContain('query');
     expect(search.text()).toContain('Free-text search over the whitelisted columns.');
-    expect(wrapper.get('[data-testid="api-reference-param-sort"]').text()).toContain(
+    expect({ text: () => drawerText('[data-testid="api-reference-param-sort"]') }.text()).toContain(
       'whitelisted sort fields',
     );
   });
@@ -311,11 +315,12 @@ describe('API reference workspace', () => {
     );
 
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="api-reference-detail"]').exists()).toBe(true),
+      expect(Boolean(inDrawer('[data-testid="api-reference-detail"]'))).toBe(true),
     );
-    const detail = wrapper.get('[data-testid="api-reference-detail"]');
-    expect(detail.text()).toContain('/alerts/{id}/acknowledge');
-    expect(detail.get('[data-testid="api-reference-detail-permissions"]').text()).toContain(
+    // The path is in the drawer's own header, which the sheet renders outside
+    // the detail body — so read the whole sheet for it.
+    expect(drawerText('.drawer-sheet')).toContain('/alerts/{id}/acknowledge');
+    expect(drawerText('[data-testid="api-reference-detail-permissions"]')).toContain(
       'alerts.manage',
     );
     expect(

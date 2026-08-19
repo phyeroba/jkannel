@@ -33,7 +33,7 @@
  * this API emits, so the shape around `data` is never a guess.
  */
 
-export type ExampleLanguage = 'curl' | 'node' | 'python';
+export type ExampleLanguage = 'curl' | 'php' | 'python' | 'node' | 'java' | 'go';
 
 export interface ExampleSchema {
   type?: string | string[];
@@ -337,6 +337,159 @@ function pythonSnippet(endpoint: ExampleEndpoint, url: string, body: string | nu
   ].join('\n');
 }
 
+/**
+ * PHP with cURL rather than Guzzle: it runs on a stock PHP install with no
+ * Composer step, which is what a reader pasting an example into an existing
+ * codebase actually needs.
+ */
+function phpSnippet(endpoint: ExampleEndpoint, url: string, body: string | null): string {
+  const auth = authHeader(credentialFor(endpoint));
+  const headers: string[] = [];
+  if (auth?.name === 'Authorization')
+    headers.push(`    'Authorization: Bearer ' . getenv('JKANNEL_ACCESS_TOKEN'),`);
+  else if (auth?.name === 'X-API-Key')
+    headers.push(`    'X-API-Key: ' . getenv('JKANNEL_API_KEY'),`);
+  for (const header of extraHeaders(endpoint))
+    headers.push(`    '${header.name}: ${header.value}',`);
+  if (body) headers.push("    'Content-Type: application/json',");
+
+  return [
+    '<?php',
+    '',
+    `$ch = curl_init('${url}');`,
+    'curl_setopt_array($ch, [',
+    '    CURLOPT_RETURNTRANSFER => true,',
+    `    CURLOPT_CUSTOMREQUEST  => '${endpoint.method.toUpperCase()}',`,
+    ...(headers.length
+      ? ['    CURLOPT_HTTPHEADER     => [', ...headers.map((l) => `    ${l}`), '    ],']
+      : []),
+    ...(body ? [`    CURLOPT_POSTFIELDS     => json_encode(${phpArray(body)}),`] : []),
+    '    CURLOPT_TIMEOUT        => 15,',
+    ']);',
+    '',
+    '$response = curl_exec($ch);',
+    'curl_close($ch);',
+    '$envelope = json_decode($response, true);',
+    '',
+    "if (!$envelope['success']) {",
+    '    // request_id is the key the platform logs are indexed by. Quote it in',
+    '    // a support ticket rather than pasting the whole response.',
+    "    throw new RuntimeException(\"{$envelope['error_code']}: {$envelope['message']} ({$envelope['request_id']})\");",
+    '}',
+    '',
+    "print_r($envelope['data']);",
+  ].join('\n');
+}
+
+/** Rewrites a JSON object literal as a PHP associative array. */
+function phpArray(json: string): string {
+  return json
+    .replace(/^\{/, '[')
+    .replace(/\}$/, ']')
+    .replace(/^(\s*)"([^"]+)":/gm, "$1'$2' =>")
+    .replace(/\btrue\b/g, 'true')
+    .replace(/\bnull\b/g, 'null')
+    .replace(/\n/g, '\n    ');
+}
+
+/** Java 11+ java.net.http — in the JDK, so no dependency to justify. */
+function javaSnippet(endpoint: ExampleEndpoint, url: string, body: string | null): string {
+  const auth = authHeader(credentialFor(endpoint));
+  const headerCalls: string[] = [];
+  if (auth?.name === 'Authorization')
+    headerCalls.push(
+      '    .header("Authorization", "Bearer " + System.getenv("JKANNEL_ACCESS_TOKEN"))',
+    );
+  else if (auth?.name === 'X-API-Key')
+    headerCalls.push('    .header("X-API-Key", System.getenv("JKANNEL_API_KEY"))');
+  for (const header of extraHeaders(endpoint))
+    headerCalls.push(`    .header("${header.name}", "${header.value}")`);
+  if (body) headerCalls.push('    .header("Content-Type", "application/json")');
+
+  const method = endpoint.method.toUpperCase();
+  const publisher = body
+    ? `HttpRequest.BodyPublishers.ofString(BODY)`
+    : 'HttpRequest.BodyPublishers.noBody()';
+
+  return [
+    'import java.net.URI;',
+    'import java.net.http.*;',
+    '',
+    ...(body ? [`static final String BODY = """`, body, '""";', ''] : []),
+    'HttpRequest request = HttpRequest.newBuilder()',
+    `    .uri(URI.create("${url}"))`,
+    ...headerCalls,
+    `    .method("${method}", ${publisher})`,
+    '    .build();',
+    '',
+    'HttpResponse<String> response = HttpClient.newHttpClient()',
+    '    .send(request, HttpResponse.BodyHandlers.ofString());',
+    '',
+    '// Check envelope.success before reading data: a 200 with success=false is',
+    '// still a failure, and the body carries the request_id you need to report.',
+    'System.out.println(response.body());',
+  ].join('\n');
+}
+
+/** Go with the standard library only. */
+function goSnippet(endpoint: ExampleEndpoint, url: string, body: string | null): string {
+  const auth = authHeader(credentialFor(endpoint));
+  const headerCalls: string[] = [];
+  if (auth?.name === 'Authorization')
+    headerCalls.push(
+      'req.Header.Set("Authorization", "Bearer "+os.Getenv("JKANNEL_ACCESS_TOKEN"))',
+    );
+  else if (auth?.name === 'X-API-Key')
+    headerCalls.push('req.Header.Set("X-API-Key", os.Getenv("JKANNEL_API_KEY"))');
+  for (const header of extraHeaders(endpoint))
+    headerCalls.push(`req.Header.Set("${header.name}", "${header.value}")`);
+  if (body) headerCalls.push('req.Header.Set("Content-Type", "application/json")');
+
+  return [
+    'package main',
+    '',
+    'import (',
+    '\t"bytes"',
+    '\t"encoding/json"',
+    '\t"fmt"',
+    '\t"net/http"',
+    '\t"os"',
+    ')',
+    '',
+    'func main() {',
+    ...(body
+      ? [
+          `\tbody := []byte(\`${body}\`)`,
+          '',
+          `\treq, _ := http.NewRequest("${endpoint.method.toUpperCase()}", "${url}", bytes.NewReader(body))`,
+        ]
+      : [`\treq, _ := http.NewRequest("${endpoint.method.toUpperCase()}", "${url}", nil)`]),
+    ...headerCalls.map((line) => `\t${line}`),
+    '',
+    '\tres, err := http.DefaultClient.Do(req)',
+    '\tif err != nil {',
+    '\t\tpanic(err)',
+    '\t}',
+    '\tdefer res.Body.Close()',
+    '',
+    '\tvar envelope struct {',
+    '\t\tSuccess   bool            `json:"success"`',
+    '\t\tRequestID string          `json:"request_id"`',
+    '\t\tErrorCode string          `json:"error_code"`',
+    '\t\tMessage   string          `json:"message"`',
+    '\t\tData      json.RawMessage `json:"data"`',
+    '\t}',
+    '\tjson.NewDecoder(res.Body).Decode(&envelope)',
+    '',
+    '\tif !envelope.Success {',
+    '\t\t// request_id is the key the platform logs are indexed by.',
+    '\t\tpanic(fmt.Sprintf("%s: %s (%s)", envelope.ErrorCode, envelope.Message, envelope.RequestID))',
+    '\t}',
+    '\tfmt.Println(string(envelope.Data))',
+    '}',
+  ].join('\n');
+}
+
 // --- Envelopes -------------------------------------------------------------
 /**
  * The success envelope, exactly as ResponseEnvelopeInterceptor emits it.
@@ -482,8 +635,11 @@ export function buildExample(endpoint: ExampleEndpoint): EndpointExample {
     bodyIsPlaceholder: sendsBody && placeholder,
     snippets: {
       curl: curlSnippet(endpoint, url, payload),
-      node: nodeSnippet(endpoint, url, payload),
+      php: phpSnippet(endpoint, url, payload),
       python: pythonSnippet(endpoint, url, payload),
+      node: nodeSnippet(endpoint, url, payload),
+      java: javaSnippet(endpoint, url, payload),
+      go: goSnippet(endpoint, url, payload),
     },
     successStatus: successStatus(endpoint),
     successBody: successEnvelope(endpoint),
@@ -491,8 +647,17 @@ export function buildExample(endpoint: ExampleEndpoint): EndpointExample {
   };
 }
 
+/**
+ * Order matters: this is the tab order in the reference, and it is deliberately
+ * cURL, PHP, Python first. cURL is the one every reader can paste into a
+ * terminal to confirm the endpoint works before writing any code, and PHP and
+ * Python are what integrators actually reach for against an SMS gateway.
+ */
 export const LANGUAGE_LABELS: Record<ExampleLanguage, string> = {
   curl: 'cURL',
-  node: 'Node.js',
+  php: 'PHP',
   python: 'Python',
+  node: 'Node.js',
+  java: 'Java',
+  go: 'Go',
 };

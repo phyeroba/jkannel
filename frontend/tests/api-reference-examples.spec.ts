@@ -1,6 +1,6 @@
-﻿import { mount } from '@vue/test-utils';
+import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 
 import CodeConsole from '../src/components/CodeConsole.vue';
@@ -75,6 +75,21 @@ async function settle(times = 4) {
   }
 }
 
+/**
+ * The operation detail is a DetailDrawer, which teleports to <body> — so it is
+ * deliberately outside the component wrapper and `wrapper.find` cannot see it.
+ * That is the same reason it now works for a reader: the sheet is anchored to
+ * the viewport rather than appended to the bottom of a 345-row page.
+ */
+const inDrawer = (selector: string) => document.body.querySelector(selector);
+const drawerText = (selector: string) => inDrawer(selector)?.textContent ?? '';
+
+// Teleported nodes outlive their wrapper, so without this each test inherits
+// the previous test's open drawer and asserts against stale markup.
+beforeEach(() => {
+  document.body.innerHTML = '';
+});
+
 describe('CodeConsole', () => {
   it('renders every line of the sample, including blank ones', () => {
     // A dropped blank line silently joins two shell commands into one.
@@ -115,10 +130,10 @@ describe('API reference worked examples', () => {
     await wrapper.get('[data-testid="api-reference-open-MessagesController_get"]').trigger('click');
     await settle();
 
-    const request = wrapper.get('[data-testid="api-reference-example-request"]');
-    expect(request.text()).toContain('curl -X GET');
-    expect(request.text()).toContain('/api/v1/messages/');
-    expect(request.text()).toContain('Authorization: Bearer');
+    const request = drawerText('[data-testid="api-reference-example-request"]');
+    expect(request).toContain('curl -X GET');
+    expect(request).toContain('/api/v1/messages/');
+    expect(request).toContain('Authorization: Bearer');
   });
 
   it('switches language without losing the operation', async () => {
@@ -126,12 +141,12 @@ describe('API reference worked examples', () => {
     await settle(6);
     await wrapper.get('[data-testid="api-reference-open-MessagesController_get"]').trigger('click');
     await settle();
-    await wrapper.get('[data-testid="api-reference-lang-python"]').trigger('click');
+    await (inDrawer('[data-testid="api-reference-lang-python"]') as HTMLElement).click();
     await settle();
 
-    const request = wrapper.get('[data-testid="api-reference-example-request"]');
-    expect(request.text()).toContain('import requests');
-    expect(request.text()).toContain('/api/v1/messages/');
+    const request = drawerText('[data-testid="api-reference-example-request"]');
+    expect(request).toContain('import requests');
+    expect(request).toContain('/api/v1/messages/');
   });
 
   it('uses the API key, not a bearer token, on a gateway route', async () => {
@@ -144,10 +159,10 @@ describe('API reference worked examples', () => {
       .trigger('click');
     await settle();
 
-    const request = wrapper.get('[data-testid="api-reference-example-request"]');
-    expect(request.text()).toContain('X-API-Key');
-    expect(request.text()).not.toContain('Bearer');
-    expect(wrapper.get('[data-testid="api-reference-example-credential"]').text()).toContain(
+    const request = drawerText('[data-testid="api-reference-example-request"]');
+    expect(request).toContain('X-API-Key');
+    expect(request).not.toContain('Bearer');
+    expect(drawerText('[data-testid="api-reference-example-credential"]')).toContain(
       'not by a bearer token',
     );
   });
@@ -161,13 +176,13 @@ describe('API reference worked examples', () => {
     // Has a path identifier, a permission and a bearer requirement, so all
     // three apply — and so does 400, because a malformed UUID in a required
     // path segment is rejected before the handler runs.
-    expect(wrapper.find('[data-testid="api-reference-example-error-400"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="api-reference-example-error-401"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="api-reference-example-error-403"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="api-reference-example-error-404"]').exists()).toBe(true);
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-error-400"]'))).toBe(true);
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-error-401"]'))).toBe(true);
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-error-403"]'))).toBe(true);
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-error-404"]'))).toBe(true);
     // A read cannot exhaust a write rate limit; 429 is listed on gateway and
     // mutating routes only. The unit tests cover the omissions in detail.
-    expect(wrapper.find('[data-testid="api-reference-example-error-429"]').exists()).toBe(false);
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-error-429"]'))).toBe(false);
   });
 
   it('flags a placeholder body rather than passing invented fields off as the contract', async () => {
@@ -180,9 +195,7 @@ describe('API reference worked examples', () => {
 
     // POST /gateway/messages is curated from the controller, so it must NOT be
     // flagged — the flag has to mean something.
-    expect(wrapper.find('[data-testid="api-reference-example-placeholder"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="api-reference-example-request"]').text()).toContain(
-      '"receiver"',
-    );
+    expect(Boolean(inDrawer('[data-testid="api-reference-example-placeholder"]'))).toBe(false);
+    expect(drawerText('[data-testid="api-reference-example-request"]')).toContain('"receiver"');
   });
 });

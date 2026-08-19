@@ -10,6 +10,7 @@ import QueueRatesPanel from '../components/QueueRatesPanel.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
+import ScopePicker from '../components/ScopePicker.vue';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
 import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
@@ -994,7 +995,9 @@ const settingDrafts = ref<Record<string, string>>({});
 /* API gateway one-time secret + client composer. */
 const showApiClientForm = ref(false);
 const apiClientName = ref('');
-const apiClientScopes = ref('');
+// A chosen set, not typed text. The old comma-separated field let an operator
+// invent scope names the gateway does not enforce; see ScopePicker.vue.
+const apiClientScopes = ref<string[]>([]);
 const revealedSecret = ref('');
 const revealedSecretLabel = ref('');
 
@@ -2500,7 +2503,7 @@ function closeSnapshot() {
 function openApiClientForm() {
   showApiClientForm.value = true;
   apiClientName.value = '';
-  apiClientScopes.value = '';
+  apiClientScopes.value = [];
 }
 async function createApiClient() {
   if (!apiClientName.value.trim()) return;
@@ -2508,10 +2511,7 @@ async function createApiClient() {
   error.value = '';
   notice.value = '';
   try {
-    const scopes = apiClientScopes.value
-      .split(',')
-      .map((scope) => scope.trim())
-      .filter(Boolean);
+    const scopes = apiClientScopes.value;
     const result = await apiRequest<RecordValue>('/api-gateway/clients', {
       method: 'POST',
       body: JSON.stringify({ name: apiClientName.value.trim(), scopes }),
@@ -4258,14 +4258,7 @@ onUnmounted(() => {
         Name
         <input v-model="apiClientName" data-testid="api-client-name" />
       </label>
-      <label>
-        Scopes (comma-separated)
-        <input
-          v-model="apiClientScopes"
-          data-testid="api-client-scopes"
-          placeholder="messages.read, messages.send"
-        />
-      </label>
+      <ScopePicker v-model="apiClientScopes" />
       <div>
         <button
           class="primary-button"

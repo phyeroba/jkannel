@@ -148,9 +148,7 @@ export function formatUptime(seconds: number | null | undefined): string {
  * operator will act on, so it must never stand in for "not measured".
  */
 export function formatPercent(value: number | null | undefined): string {
-  return value === null || value === undefined || !Number.isFinite(value)
-    ? 'unknown'
-    : `${value}%`;
+  return value === null || value === undefined || !Number.isFinite(value) ? 'unknown' : `${value}%`;
 }
 
 export function pressureTone(percent: number | null): Tone {

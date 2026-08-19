@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { apiRequest, saveDownloadedFile } from '../api';
 import AppIcon from '../components/AppIcon.vue';
 import CodeConsole from '../components/CodeConsole.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import {
   LANGUAGE_LABELS,
   buildExample,
@@ -841,65 +842,63 @@ onMounted(() => {
       </div>
     </section>
 
-    <!-- Selected operation ---------------------------------------------------------- -->
-    <section
-      v-if="selected"
-      class="panel detail-panel"
-      data-testid="api-reference-detail"
-      aria-label="Operation detail"
+    <!--
+      Selected operation.
+
+      A DRAWER, NOT A PANEL BELOW THE LIST. This used to render as another panel
+      at the bottom of the page, which meant that on a 345-operation document
+      opening an endpoint appended its detail somewhere far below the fold —
+      invisible unless a search had already narrowed the list enough to shorten
+      the page. The detail only appeared to work because filtering hid the
+      problem. A sheet is anchored to the viewport, so it opens where the reader
+      is looking, and the endpoint list stays in place behind it.
+    -->
+    <DetailDrawer
+      :open="Boolean(selected)"
+      :title="selected ? `${selected.method.toUpperCase()} ${selected.path}` : ''"
+      :subtitle="selected?.summary || undefined"
+      :eyebrow="selected?.tag ? `/${selected.tag}` : undefined"
+      @close="selectedId = ''"
     >
-      <header>
-        <h2>
-          <span class="method-badge" :class="`method-${selected.method}`">{{
-            selected.method.toUpperCase()
-          }}</span>
-          <span class="mono">{{ selected.path }}</span>
-        </h2>
-        <button
-          class="secondary-button"
-          type="button"
-          data-testid="api-reference-detail-close"
-          @click="selectedId = ''"
+      <div v-if="selected" class="detail-panel" data-testid="api-reference-detail">
+        <dl class="detail-grid">
+          <dt>Summary</dt>
+          <dd>{{ selected.summary || '—' }}</dd>
+          <dt>Operation ID</dt>
+          <dd class="mono">{{ selected.operationId || '—' }}</dd>
+          <dt>Full URL</dt>
+          <dd class="mono">{{ serverUrl }}{{ selected.path }}</dd>
+          <dt>Group</dt>
+          <dd class="mono">{{ selected.tag }}</dd>
+          <dt>Bearer auth</dt>
+          <dd data-testid="api-reference-detail-auth">
+            <span v-if="selected.secured" class="status-badge good">required</span>
+            <span v-else class="status-badge muted">not reflected</span>
+          </dd>
+          <dt>Permission required</dt>
+          <dd data-testid="api-reference-detail-permissions">
+            <template v-if="selected.permissions.length">
+              <span
+                v-for="permission in selected.permissions"
+                :key="permission"
+                class="chip mono"
+                >{{ permission }}</span
+              >
+            </template>
+            <span v-else class="cell-health">none declared</span>
+          </dd>
+        </dl>
+
+        <p
+          v-for="caveat in selectedCaveats"
+          :key="caveat"
+          class="warn-notice"
+          data-testid="api-reference-detail-caveat"
         >
-          Close
-        </button>
-      </header>
+          {{ caveat }}
+        </p>
 
-      <dl class="detail-grid">
-        <dt>Summary</dt>
-        <dd>{{ selected.summary || '—' }}</dd>
-        <dt>Operation ID</dt>
-        <dd class="mono">{{ selected.operationId || '—' }}</dd>
-        <dt>Full URL</dt>
-        <dd class="mono">{{ serverUrl }}{{ selected.path }}</dd>
-        <dt>Group</dt>
-        <dd class="mono">{{ selected.tag }}</dd>
-        <dt>Bearer auth</dt>
-        <dd data-testid="api-reference-detail-auth">
-          <span v-if="selected.secured" class="status-badge good">required</span>
-          <span v-else class="status-badge muted">not reflected</span>
-        </dd>
-        <dt>Permission required</dt>
-        <dd data-testid="api-reference-detail-permissions">
-          <template v-if="selected.permissions.length">
-            <span v-for="permission in selected.permissions" :key="permission" class="chip mono">{{
-              permission
-            }}</span>
-          </template>
-          <span v-else class="cell-health">none declared</span>
-        </dd>
-      </dl>
-
-      <p
-        v-for="caveat in selectedCaveats"
-        :key="caveat"
-        class="warn-notice"
-        data-testid="api-reference-detail-caveat"
-      >
-        {{ caveat }}
-      </p>
-
-      <!--
+        <!--
         Worked example.
 
         Placed above the reference tables on purpose: the tables answer "what
@@ -908,158 +907,164 @@ onMounted(() => {
         is generated from this operation — see utils/api-examples.ts for the
         line between what is derived and the few bodies that are curated.
       -->
-      <h3>Example</h3>
-      <p class="source-note" data-testid="api-reference-example-credential">
-        {{ CREDENTIAL_NOTE[exampleCredential] }}
-      </p>
-      <div class="status-chips lang-chips" role="group" aria-label="Example language">
-        <button
-          v-for="language in exampleLanguages"
-          :key="language"
-          type="button"
-          :data-testid="`api-reference-lang-${language}`"
-          :aria-pressed="exampleLanguage === language"
-          @click="exampleLanguage = language"
-        >
-          {{ LANGUAGE_LABELS[language] }}
-        </button>
-      </div>
-
-      <CodeConsole
-        v-if="example"
-        :key="`${selected.id}-${exampleLanguage}`"
-        :title="`${selected.method.toUpperCase()} ${selected.path}`"
-        :badge="LANGUAGE_LABELS[exampleLanguage]"
-        :code="example.snippets[exampleLanguage]"
-        :prompt="exampleLanguage === 'curl'"
-        data-testid="api-reference-example-request"
-      />
-
-      <p
-        v-if="example?.bodyIsPlaceholder"
-        class="warn-notice"
-        data-testid="api-reference-example-placeholder"
-      >
-        The body in this example is a <strong>placeholder</strong>. This endpoint takes a JSON body,
-        but its fields are not reflected in the document, so nothing here invents them — read the
-        controller or the operator guide for the real field list.
-      </p>
-
-      <CodeConsole
-        v-if="example"
-        title="Response"
-        :badge="String(example.successStatus)"
-        :badge-tone="toneForStatus(example.successStatus)"
-        :code="example.successBody"
-        data-testid="api-reference-example-response"
-      />
-      <p class="source-note">
-        Every response is wrapped in this envelope; the endpoint's own payload is the
-        <span class="mono">data</span> field. Sample identifiers and timestamps are illustrative —
-        the envelope shape around them is not.
-      </p>
-
-      <h3>Failure modes</h3>
-      <p class="source-note">
-        Only the failures this operation can actually produce. A 404 is not listed on an endpoint
-        with no identifier in its path, and a 403 is not listed on one that requires no permission.
-      </p>
-      <div
-        v-for="failure in example?.errors ?? []"
-        :key="failure.status"
-        class="failure-case"
-        :data-testid="`api-reference-example-error-${failure.status}`"
-      >
-        <p class="failure-when">
-          <span class="status-badge" :class="failure.status >= 500 ? 'bad' : 'warn'"
-            >{{ failure.status }} {{ failure.title }}</span
+        <h3>Example</h3>
+        <p class="source-note" data-testid="api-reference-example-credential">
+          {{ CREDENTIAL_NOTE[exampleCredential] }}
+        </p>
+        <div class="status-chips lang-chips" role="group" aria-label="Example language">
+          <button
+            v-for="language in exampleLanguages"
+            :key="language"
+            type="button"
+            :data-testid="`api-reference-lang-${language}`"
+            :aria-pressed="exampleLanguage === language"
+            @click="exampleLanguage = language"
           >
-          {{ failure.when }}
-        </p>
+            {{ LANGUAGE_LABELS[language] }}
+          </button>
+        </div>
+
         <CodeConsole
-          :title="`${failure.status} ${failure.title}`"
-          :badge="String(failure.status)"
-          :badge-tone="toneForStatus(failure.status)"
-          :code="failure.body"
+          v-if="example"
+          :key="`${selected.id}-${exampleLanguage}`"
+          :title="`${selected.method.toUpperCase()} ${selected.path}`"
+          :badge="LANGUAGE_LABELS[exampleLanguage]"
+          :code="example.snippets[exampleLanguage]"
+          :prompt="exampleLanguage === 'curl'"
+          data-testid="api-reference-example-request"
         />
-      </div>
 
-      <h3>Parameters</h3>
-      <div v-if="selected.parameters.length" class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">In</th>
-              <th scope="col">Required</th>
-              <th scope="col">Type</th>
-              <th scope="col">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="param in selected.parameters"
-              :key="`${param.in}-${param.name}`"
-              :data-testid="`api-reference-param-${param.name}`"
-            >
-              <td class="mono">{{ text(param.name) }}</td>
-              <td>{{ text(param.in) }}</td>
-              <td>{{ param.required ? 'yes' : 'no' }}</td>
-              <td class="mono">{{ schemaLabel(param.schema) }}</td>
-              <td>{{ text(param.description, '—') }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-else class="source-note" data-testid="api-reference-no-params">
-        No path, query or header parameter was reflected for this operation.
-      </p>
-
-      <h3>Request body</h3>
-      <template v-if="selected.requestBody">
-        <p class="source-note">
-          Content type:
-          <span class="mono">{{
-            Object.keys(selected.requestBody.content ?? {}).join(', ') || 'application/json'
-          }}</span>
+        <p
+          v-if="example?.bodyIsPlaceholder"
+          class="warn-notice"
+          data-testid="api-reference-example-placeholder"
+        >
+          The body in this example is a <strong>placeholder</strong>. This endpoint takes a JSON
+          body, but its fields are not reflected in the document, so nothing here invents them —
+          read the controller or the operator guide for the real field list.
         </p>
-        <pre class="json-block" data-testid="api-reference-request-body">{{
-          JSON.stringify(selected.requestBody.content?.['application/json']?.schema ?? {}, null, 2)
-        }}</pre>
-      </template>
-      <p v-else class="source-note" data-testid="api-reference-no-body">
-        No request body is declared for this operation.
-      </p>
 
-      <h3>Responses</h3>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Status</th>
-              <th scope="col">Description</th>
-              <th scope="col">Schema</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="response in selected.responses"
-              :key="response.status"
-              :data-testid="`api-reference-response-${response.status}`"
+        <CodeConsole
+          v-if="example"
+          title="Response"
+          :badge="String(example.successStatus)"
+          :badge-tone="toneForStatus(example.successStatus)"
+          :code="example.successBody"
+          data-testid="api-reference-example-response"
+        />
+        <p class="source-note">
+          Every response is wrapped in this envelope; the endpoint's own payload is the
+          <span class="mono">data</span> field. Sample identifiers and timestamps are illustrative —
+          the envelope shape around them is not.
+        </p>
+
+        <h3>Failure modes</h3>
+        <p class="source-note">
+          Only the failures this operation can actually produce. A 404 is not listed on an endpoint
+          with no identifier in its path, and a 403 is not listed on one that requires no
+          permission.
+        </p>
+        <div
+          v-for="failure in example?.errors ?? []"
+          :key="failure.status"
+          class="failure-case"
+          :data-testid="`api-reference-example-error-${failure.status}`"
+        >
+          <p class="failure-when">
+            <span class="status-badge" :class="failure.status >= 500 ? 'bad' : 'warn'"
+              >{{ failure.status }} {{ failure.title }}</span
             >
-              <td class="mono">{{ response.status }}</td>
-              <td>{{ response.description || '—' }}</td>
-              <td class="mono">
-                {{ response.schema ? schemaLabel(response.schema) : 'not reflected' }}
-              </td>
-            </tr>
-            <tr v-if="!selected.responses.length">
-              <td colspan="3" class="empty-cell">No response is declared for this operation.</td>
-            </tr>
-          </tbody>
-        </table>
+            {{ failure.when }}
+          </p>
+          <CodeConsole
+            :title="`${failure.status} ${failure.title}`"
+            :badge="String(failure.status)"
+            :badge-tone="toneForStatus(failure.status)"
+            :code="failure.body"
+          />
+        </div>
+
+        <h3>Parameters</h3>
+        <div v-if="selected.parameters.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">In</th>
+                <th scope="col">Required</th>
+                <th scope="col">Type</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="param in selected.parameters"
+                :key="`${param.in}-${param.name}`"
+                :data-testid="`api-reference-param-${param.name}`"
+              >
+                <td class="mono">{{ text(param.name) }}</td>
+                <td>{{ text(param.in) }}</td>
+                <td>{{ param.required ? 'yes' : 'no' }}</td>
+                <td class="mono">{{ schemaLabel(param.schema) }}</td>
+                <td>{{ text(param.description, '—') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="source-note" data-testid="api-reference-no-params">
+          No path, query or header parameter was reflected for this operation.
+        </p>
+
+        <h3>Request body</h3>
+        <template v-if="selected.requestBody">
+          <p class="source-note">
+            Content type:
+            <span class="mono">{{
+              Object.keys(selected.requestBody.content ?? {}).join(', ') || 'application/json'
+            }}</span>
+          </p>
+          <pre class="json-block" data-testid="api-reference-request-body">{{
+            JSON.stringify(
+              selected.requestBody.content?.['application/json']?.schema ?? {},
+              null,
+              2,
+            )
+          }}</pre>
+        </template>
+        <p v-else class="source-note" data-testid="api-reference-no-body">
+          No request body is declared for this operation.
+        </p>
+
+        <h3>Responses</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                <th scope="col">Description</th>
+                <th scope="col">Schema</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="response in selected.responses"
+                :key="response.status"
+                :data-testid="`api-reference-response-${response.status}`"
+              >
+                <td class="mono">{{ response.status }}</td>
+                <td>{{ response.description || '—' }}</td>
+                <td class="mono">
+                  {{ response.schema ? schemaLabel(response.schema) : 'not reflected' }}
+                </td>
+              </tr>
+              <tr v-if="!selected.responses.length">
+                <td colspan="3" class="empty-cell">No response is declared for this operation.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </section>
+    </DetailDrawer>
 
     <!-- Shared components ------------------------------------------------------------- -->
     <section
