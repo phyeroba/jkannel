@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+
 import MessagePriority from '../components/MessagePriority.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import EventTimeline from '../components/EventTimeline.vue';
 import {
   PRIORITY_RESEND_CAVEAT,
   PRIORITY_UNSET,
@@ -11,6 +13,141 @@ import {
   priorityFields,
   type PriorityChoice,
 } from '../utils/message-priority';
+
+/**
+ * Per-destination queue register — the design system's QueuesScreen.
+ *
+ * A "queue" here is a BIND, because that is the only per-destination queue this
+ * engine has: bearerbox holds one outbound queue per `smsc-id` and reports its
+ * depth. Everything below comes from `smsc_bind_snapshots`, which the poller has
+ * been writing every cycle.
+ */
+interface DestinationQueue {
+  engineId: string;
+  carrier: string;
+  depth: number;
+  ingress: number | null;
+  egress: number | null;
+  /** Messages per second the queue is growing by. Null until two samples exist. */
+  growth: number | null;
+  /** How long to clear at the current egress, or why that cannot be said. */
+  drain: string;
+}
+
+const destinationQueues = ref<DestinationQueue[]>([]);
+
+const formatPerSecond = (value: number | null) =>
+  value === null || !Number.isFinite(value) ? 'unknown' : `${value.toFixed(1)}/s`;
+
+/** Signed, because the sign is the whole message: + is filling, − is draining. */
+const formatGrowth = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) return 'unknown';
+  const rounded = Math.abs(value) < 0.05 ? 0 : value;
+  return `${rounded > 0 ? '+' : ''}${rounded.toFixed(1)}/s`;
+};
+
+/**
+ * Recovery progress for the deepest queue.
+ *
+ * The kit PROJECTS a recovery curve. This does not: a projection needs a drain
+ * rate that holds, and the only thing actually known here is what already
+ * happened to the bind — when it dropped, when it came back, how many times.
+ * So this is the observed history, labelled as observation, which is the
+ * evidence an operator uses to decide whether a queue is recovering or whether
+ * the bind is going to drop again.
+ */
+const recoveryFor = ref<string>('');
+const recoverySteps = ref<
+  Array<{ at: string; label: string; detail?: string; state: 'ok' | 'warn' | 'error' | 'missing' }>
+>([]);
+
+async function loadRecovery(engineId: string) {
+  recoveryFor.value = engineId;
+  recoverySteps.value = [];
+  if (!engineId) return;
+  try {
+    const detail = await apiRequest<{
+      transitions?: Array<{
+        observedAt?: string;
+        fromState?: string | null;
+        toState?: string | null;
+        kind?: string;
+      }>;
+    }>(`/smscs/${engineId}/detail`);
+    recoverySteps.value = (detail.transitions ?? []).slice(0, 12).map((entry) => ({
+      at: text(entry.observedAt, '—').slice(11, 19) || text(entry.observedAt, '—'),
+      label: `${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+      detail: entry.kind,
+      state:
+        entry.toState === 'bound'
+          ? ('ok' as const)
+          : entry.toState === 'failed' || entry.toState === 'disconnected'
+            ? ('error' as const)
+            : entry.toState === null
+              ? ('missing' as const)
+              : ('warn' as const),
+    }));
+  } catch {
+    recoverySteps.value = [];
+  }
+}
+
+async function loadDestinationQueues() {
+  try {
+    const page = await apiRequest<{ items?: Record<string, unknown>[] }>(
+      '/smscs?limit=200&offset=0',
+    );
+    const rows = Array.isArray(page?.items) ? page.items : [];
+    destinationQueues.value = rows
+      .map((row) => {
+        const depth = Number(row.queued_count ?? 0) || 0;
+        const previous = row.queued_previous;
+        const gap = Number(row.sample_gap_seconds);
+        // Two samples and a real interval, or no growth figure at all. A single
+        // poll cannot tell a queue that is filling from one that has always
+        // been deep, and 0 would assert the first.
+        const growth =
+          previous === null || previous === undefined || !Number.isFinite(gap) || gap <= 0
+            ? null
+            : (depth - Number(previous)) / gap;
+        const egress =
+          row.outbound_rate === null || row.outbound_rate === undefined
+            ? null
+            : Number(row.outbound_rate);
+        return {
+          engineId: String(row.engine_id ?? row.id),
+          carrier: String(row.carrier_name ?? 'unassigned'),
+          depth,
+          ingress:
+            row.inbound_rate === null || row.inbound_rate === undefined
+              ? null
+              : Number(row.inbound_rate),
+          egress,
+          growth,
+          // Only quotable when the queue is actually moving. A drain estimate
+          // against zero egress is infinity dressed up as a number.
+          drain:
+            depth === 0
+              ? 'empty'
+              : egress === null
+                ? 'unknown'
+                : egress <= 0
+                  ? 'not draining'
+                  : `${Math.round(depth / egress)}s`,
+        };
+      })
+      .filter((queue) => queue.depth > 0 || (queue.egress ?? 0) > 0)
+      .sort((a, b) => b.depth - a.depth);
+    // The deepest queue is the one an operator is looking at, so its history is
+    // the one worth fetching. One extra call, not one per row.
+    const deepest = destinationQueues.value[0]?.engineId ?? '';
+    if (deepest && deepest !== recoveryFor.value) await loadRecovery(deepest);
+  } catch {
+    // The spool panels above own their own error reporting; this register
+    // simply shows nothing rather than claiming every queue is empty.
+    destinationQueues.value = [];
+  }
+}
 
 type RecordValue = Record<string, unknown>;
 
@@ -784,6 +921,7 @@ onMounted(() => {
   void loadSpool();
   void loadLog();
   void loadSmscOptions();
+  void loadDestinationQueues();
 });
 </script>
 
@@ -1431,6 +1569,106 @@ onMounted(() => {
         </button>
       </footer>
     </section>
+
+    <!--
+      Queues by destination — the register the design system's QueuesScreen
+      leads with. The panels above are the SQLBox SPOOL, a list of individual
+      messages; this is the different question of which CONNECTION is backing
+      up, which is what an operator asks first when sending slows down.
+
+      A "queue" here is a bind. That is the only per-destination queue this
+      engine has: bearerbox holds one outbound queue per smsc-id and reports its
+      depth, so there is nothing finer to show.
+    -->
+    <section class="panel" data-testid="queue-by-destination">
+      <header class="panel-header">
+        <div>
+          <h2>Queues by destination</h2>
+          <p>Depth, rate and growth per connection — deepest first</p>
+        </div>
+        <RouterLink class="text-button" to="/smsc">Open SMSC Connections</RouterLink>
+      </header>
+
+      <div v-if="destinationQueues.length" class="table-wrap">
+        <table data-testid="queue-destinations">
+          <thead>
+            <tr>
+              <th scope="col">Queue</th>
+              <th scope="col">Carrier</th>
+              <th scope="col" class="numeric">Depth</th>
+              <th scope="col" class="numeric">Ingress</th>
+              <th scope="col" class="numeric">Egress</th>
+              <th scope="col" class="numeric">Growth</th>
+              <th scope="col" class="numeric">Drain</th>
+              <!-- The kit also lists Oldest, Retries and Expired. Queue age is
+                   per-message in SQLBox rather than per-bind, and Kannel counts
+                   neither retries nor expiries per queue, so those columns are
+                   absent rather than drawn as dashes. -->
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="queue in destinationQueues"
+              :key="queue.engineId"
+              :data-testid="`queue-dest-${queue.engineId}`"
+            >
+              <td class="mono">{{ queue.engineId }}</td>
+              <td>{{ queue.carrier }}</td>
+              <td class="figures numeric" :class="{ 'queue-warn': queue.depth > 500 }">
+                {{ queue.depth.toLocaleString() }}
+              </td>
+              <td class="figures numeric">{{ formatPerSecond(queue.ingress) }}</td>
+              <td
+                class="figures numeric"
+                :class="{ 'queue-bad': queue.egress === 0 && queue.depth > 0 }"
+              >
+                {{ formatPerSecond(queue.egress) }}
+              </td>
+              <td
+                class="figures numeric"
+                :class="{
+                  'queue-bad': (queue.growth ?? 0) > 0,
+                  'queue-good': (queue.growth ?? 0) < 0,
+                }"
+              >
+                {{ formatGrowth(queue.growth) }}
+              </td>
+              <td class="mono numeric">{{ queue.drain }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="chart-empty" data-testid="queue-destinations-empty">
+        No connection is holding a queue. Depth, rate and growth come from the bind poller, so an
+        empty table here means every bind reported an empty queue — or that the poller has never
+        observed one, which the SMSC register shows as “never observed”.
+      </p>
+    </section>
+
+    <!--
+      Recovery progress. The kit PROJECTS a recovery curve; this does not. A
+      projection needs a drain rate that holds, and the only thing actually
+      known is what already happened to the bind. Observed history is what an
+      operator uses to judge whether a queue is recovering or whether the bind
+      is about to drop again, so that is what is shown — labelled as such.
+    -->
+    <section v-if="recoveryFor" class="panel" data-testid="queue-recovery">
+      <header class="panel-header">
+        <div>
+          <h2>Recovery progress</h2>
+          <p>
+            Observed bind history for <span class="mono">{{ recoveryFor }}</span
+            >, the deepest queue — not a projection
+          </p>
+        </div>
+        <RouterLink class="text-button" :to="`/smsc/${recoveryFor}`">Open connection</RouterLink>
+      </header>
+      <EventTimeline v-if="recoverySteps.length" dense :items="recoverySteps" />
+      <p v-else class="chart-empty" data-testid="queue-recovery-empty">
+        No transition has been recorded for this connection, so there is no recovery to show. That
+        is not the same as a stable bind — it means the poller has never seen this one change state.
+      </p>
+    </section>
   </div>
 </template>
 
@@ -1442,5 +1680,19 @@ onMounted(() => {
 .resend-priority {
   margin: 8px 0 4px;
   max-width: 640px;
+}
+</style>
+
+<style scoped>
+/* The sign and the colour say the same thing, so colour-blind readers lose
+   nothing: a growing queue is "+1.4/s" whether or not the red registers. */
+.queue-bad {
+  color: var(--bad);
+}
+.queue-good {
+  color: var(--good);
+}
+.queue-warn {
+  color: var(--warn);
 }
 </style>
