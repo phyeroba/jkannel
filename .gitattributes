@@ -1,0 +1,5 @@
+
+# Shell scripts run on Linux. Without this, git checks them out CRLF on Windows
+# and every line ends in a carriage return the remote shell tries to execute:
+#   bash: line 103: $'\r': command not found
+*.sh text eol=lf
