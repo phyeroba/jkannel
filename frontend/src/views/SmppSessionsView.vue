@@ -34,6 +34,8 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
 import ObservabilityLimits from '../components/ObservabilityLimits.vue';
+import EventTimeline from '../components/EventTimeline.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
   bindTone,
@@ -60,6 +62,79 @@ const SORT_FIELDS = [
 const PAGE_SIZES = [10, 25, 50];
 
 const rows = ref<SmscDetail[]>([]);
+
+/**
+ * How many times a bind has come up.
+ *
+ * Counted from the transition history the detail read already returns, not from
+ * a counter the engine keeps — bearerbox keeps none. Every transition INTO a
+ * bound state is one reconnect, and the first observation counts too: a bind
+ * that has come up once has reconnected once as far as this register is
+ * concerned.
+ *
+ * This is the honest half of what the design system's Sessions screen asks for.
+ * Its Timeouts, Enquire RTT, P95 latency and Top error columns are not here
+ * because /status.json carries none of them and only bearerbox's own log does.
+ */
+function reconnectCount(detail: SmscDetail): number {
+  return (detail.transitions ?? []).filter((entry) => entry.toState === 'bound').length;
+}
+
+/**
+ * A bind is flapping when it has come up repeatedly rather than once and
+ * stayed. Three is the threshold the alerting side already uses for "this is a
+ * pattern, not an incident".
+ */
+const FLAP_THRESHOLD = 3;
+const flapping = computed(() =>
+  rows.value
+    .map((row) => ({ row, reconnects: reconnectCount(row) }))
+    .filter((entry) => entry.reconnects >= FLAP_THRESHOLD)
+    .sort((a, b) => b.reconnects - a.reconnects),
+);
+
+/**
+ * Every bind's history on one rail, newest first — the design system's "Bind
+ * timeline". Reading one bind's page tells you what happened to that bind;
+ * this answers the different question of what happened to the estate, which is
+ * how a correlated outage across several carriers becomes visible at all.
+ */
+const bindTimeline = computed(() =>
+  rows.value
+    .flatMap((row) => (row.transitions ?? []).map((entry) => ({ row, entry })))
+    .sort((a, b) => String(b.entry.observedAt).localeCompare(String(a.entry.observedAt)))
+    .slice(0, 50)
+    .map(({ row, entry }) => ({
+      at: formatMoment(entry.observedAt),
+      label: `${row.name}: ${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+      detail: entry.kind,
+      state:
+        entry.toState === 'bound'
+          ? ('ok' as const)
+          : entry.toState === 'failed' || entry.toState === 'disconnected'
+            ? ('error' as const)
+            : entry.toState === null
+              ? ('missing' as const)
+              : ('warn' as const),
+    })),
+);
+/**
+ * The bind opened in the detail sheet.
+ *
+ * Held by engine id rather than by object so the sheet keeps following the same
+ * bind across a refresh — a poll that replaces `rows` would otherwise leave the
+ * sheet showing a detached snapshot that quietly stops updating.
+ *
+ * No fetch: the register already holds each bind's full detail, so opening a
+ * row is free. That is also why this is a sheet and not a navigation — the
+ * estate list stays behind it, which is the whole point when you are working
+ * down a list of forty binds looking for the one that is wrong.
+ */
+const openBindId = ref('');
+const openBind = computed(
+  () => rows.value.find((row) => row.engineId === openBindId.value) ?? null,
+);
+
 const state = ref<State>('loading');
 const error = ref('');
 /** Connections whose detail read failed; named so `partial` means something. */
@@ -342,11 +417,24 @@ onMounted(load);
                 <th scope="col">Out rate</th>
                 <th scope="col">Ceiling</th>
                 <th scope="col">Utilisation</th>
+                <!-- Counted from the transition history. The kit also asks for
+                     Enquire RTT, Timeouts, P95 latency and Top error;
+                     /status.json carries none of them and only bearerbox's own
+                     log does, so they are absent rather than drawn as dashes. -->
+                <th scope="col">Reconnects</th>
                 <th scope="col">Last transition</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in rows" :key="row.id" :data-testid="`session-${row.engineId}`">
+              <tr
+                v-for="row in rows"
+                :key="row.id"
+                class="selectable"
+                tabindex="0"
+                :data-testid="`session-${row.engineId}`"
+                @click="openBindId = row.engineId"
+                @keydown.enter="openBindId = row.engineId"
+              >
                 <td>
                   <router-link class="text-link" :to="`/smsc/${row.engineId}`">{{
                     row.name
@@ -391,6 +479,9 @@ onMounted(load);
                 <td class="mono">{{ formatCeiling(row.capacity) }}</td>
                 <td class="mono" :data-testid="`session-utilisation-${row.engineId}`">
                   {{ formatUtilisation(row.capacity?.utilisation, state) }}
+                </td>
+                <td class="mono" :data-testid="`session-reconnects-${row.engineId}`">
+                  {{ reconnectCount(row) }}
                 </td>
                 <td class="mono">{{ lastTransition(row) }}</td>
               </tr>
@@ -456,6 +547,129 @@ onMounted(load);
       :applies-to="group.engineIds"
       :testid="`sessions-limits-${group.engineIds[0]}`"
     />
+
+    <!--
+      Diagnostic summary and Bind timeline — two of the three panels the design
+      system's SessionsScreen specifies. Both are derived from the transition
+      history each detail read already returns.
+
+      Its third, "Top command statuses", is absent: /status.json reports no
+      submit_sm_resp status, and /diagnostics/smpp-statuses is a static
+      dictionary of code meanings, not a count of what this gateway has seen.
+    -->
+    <section class="split-grid" data-testid="sessions-diagnostics">
+      <article class="panel" data-testid="sessions-diagnostic-summary">
+        <header class="panel-header">
+          <div>
+            <h2>Diagnostic summary</h2>
+            <p>Binds that have come up more than once rather than come up and stayed</p>
+          </div>
+        </header>
+        <ul v-if="flapping.length" class="health-list">
+          <li
+            v-for="entry in flapping"
+            :key="entry.row.engineId"
+            :data-testid="`sessions-flap-${entry.row.engineId}`"
+          >
+            <span class="status-dot warn"></span>
+            <span>
+              <strong>{{ entry.row.name }}</strong>
+              <small
+                >bound {{ entry.reconnects }} times · now
+                {{ entry.row.bindState ?? 'never observed' }}</small
+              >
+            </span>
+            <router-link class="secondary-button" :to="`/smsc/${entry.row.engineId}`"
+              >Open</router-link
+            >
+          </li>
+        </ul>
+        <p v-else class="chart-empty" data-testid="sessions-no-flap">
+          No bind has come up more than {{ FLAP_THRESHOLD - 1 }} times. That is not a claim that
+          every bind is healthy — a bind that has never been observed at all has no transitions to
+          count, and appears in the register above as “never observed”.
+        </p>
+      </article>
+
+      <article class="panel" data-testid="sessions-bind-timeline">
+        <header class="panel-header">
+          <div>
+            <h2>Bind timeline</h2>
+            <p>Every connection's transitions on one rail, newest first</p>
+          </div>
+        </header>
+        <EventTimeline v-if="bindTimeline.length" dense :items="bindTimeline" />
+        <p v-else class="chart-empty" data-testid="sessions-timeline-empty">
+          No bind transition has been recorded across the estate. The history is never pruned, so an
+          empty rail means nothing has been observed to change.
+        </p>
+      </article>
+    </section>
+
+    <!-- Row detail as a sheet: the register stays in place behind it. -->
+    <DetailDrawer
+      :open="Boolean(openBind)"
+      eyebrow="Bind"
+      :title="openBind?.name ?? ''"
+      :subtitle="openBind ? `${openBind.engineId} · ${openBind.type}` : undefined"
+      @close="openBindId = ''"
+    >
+      <template #actions>
+        <router-link
+          v-if="openBind"
+          class="secondary-button"
+          :to="`/smsc/${openBind.engineId}`"
+          data-testid="session-drawer-open"
+          >Open full page</router-link
+        >
+      </template>
+      <template v-if="openBind">
+        <dl class="detail-grid">
+          <dt>Bind state</dt>
+          <dd>
+            <span class="status-badge" :class="bindTone(openBind.bindState)">{{
+              bindWord(openBind.bindState)
+            }}</span>
+          </dd>
+          <dt>Since</dt>
+          <dd class="mono">{{ formatMoment(openBind.bindStateSince) }}</dd>
+          <dt>Last observed</dt>
+          <dd class="mono">{{ formatMoment(openBind.bindObservedAt) }}</dd>
+          <dt>Reconnects</dt>
+          <dd class="mono">{{ reconnectCount(openBind) }}</dd>
+          <dt>Queued</dt>
+          <dd class="mono">{{ displayValue(openBind.queued, state) }}</dd>
+          <dt>Out rate</dt>
+          <dd class="mono">{{ formatRate(openBind.outboundRate, state) }}</dd>
+          <dt>Ceiling</dt>
+          <dd class="mono">{{ formatCeiling(openBind.capacity) }}</dd>
+          <dt>Utilisation</dt>
+          <dd class="mono">{{ formatUtilisation(openBind.capacity?.utilisation, state) }}</dd>
+        </dl>
+
+        <h3>Transitions</h3>
+        <EventTimeline
+          v-if="openBind.transitions?.length"
+          dense
+          :items="
+            openBind.transitions.map((entry) => ({
+              at: formatMoment(entry.observedAt),
+              label: `${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+              detail: entry.kind,
+              state:
+                entry.toState === 'bound'
+                  ? 'ok'
+                  : entry.toState === 'failed' || entry.toState === 'disconnected'
+                    ? 'error'
+                    : entry.toState === null
+                      ? 'missing'
+                      : 'warn',
+            }))
+          "
+        />
+        <p v-else class="chart-empty">No transition has been recorded for this bind.</p>
+      </template>
+    </DetailDrawer>
   </div>
 </template>
 
