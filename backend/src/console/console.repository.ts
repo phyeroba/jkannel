@@ -255,6 +255,18 @@ export class ConsoleRepository {
           '(SELECT n.inbound_rate FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS inbound_rate,' +
           '(SELECT n.sent FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS sent_total,' +
           '(SELECT n.received FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS received_total,' +
+          // QUEUE GROWTH needs two samples of the same bind, so the previous
+          // snapshot's depth and age come back alongside the latest. The rate
+          // is derived on the client rather than here because the two samples
+          // are what makes it honest: a single reading cannot distinguish a
+          // queue that is filling from one that has simply always been deep,
+          // and OFFSET 1 returns nothing at all when only one poll has ever
+          // run — which the console must render as unknown, not as zero growth.
+          '(SELECT n.queued FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC OFFSET 1 LIMIT 1) AS queued_previous,' +
+          '(SELECT EXTRACT(EPOCH FROM (' +
+          '   (SELECT a.observed_at FROM smsc_bind_snapshots a WHERE a.smsc_id=s.id ORDER BY a.observed_at DESC LIMIT 1) -' +
+          '   (SELECT b.observed_at FROM smsc_bind_snapshots b WHERE b.smsc_id=s.id ORDER BY b.observed_at DESC OFFSET 1 LIMIT 1)' +
+          '))) AS sample_gap_seconds,' +
           // The most recent thing that happened to this bind, for the design's
           // "Last event" column.
           "(SELECT concat_ws(' ', t.to_state, to_char(t.observed_at, 'YYYY-MM-DD HH24:MI')) FROM smsc_bind_transitions t WHERE t.smsc_id=s.id ORDER BY t.observed_at DESC LIMIT 1) AS last_event," +
