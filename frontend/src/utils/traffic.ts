@@ -169,6 +169,18 @@ export interface DeliveryQuality {
   /** delivered ÷ accepted. Every pending message counted as a failure. */
   deliveryRateIncludingPending: number | null;
   noReceiptRate: number | null;
+
+  /**
+
+   * Round-trip receipt latency in seconds, over delivered receipts only.
+
+   * Optional because an aggregate funnel has no meaningful percentile —
+
+   * percentiles cannot be summed across binds.
+
+   */
+
+  latency?: { p50: number | null; p95: number | null; p99: number | null };
   maturity: MaturityAssessment;
 }
 
@@ -327,4 +339,20 @@ export function describeCoverage(
   if (destination.resetsDetected > 0)
     parts.push(`${destination.resetsDetected} engine restart(s) discarded`);
   return parts.join(' · ');
+}
+
+/**
+ * Round-trip receipt latency, in the units an operator thinks in.
+ *
+ * `unknown` rather than a dash or a zero when the percentile is null: a
+ * percentile over zero delivered receipts is not "0 seconds", and a bind that
+ * delivered nothing must not appear to be the fastest on the screen.
+ */
+export function formatLatency(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return 'unknown';
+  if (seconds < 1) return '<1s';
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
 }

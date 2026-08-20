@@ -53,6 +53,14 @@ const DLR_BUFFERED = 4;
 const DLR_ACCEPTED = 8;
 const DLR_REJECTED = 16;
 
+/**
+ * A percentile over zero delivered receipts comes back NULL, and must stay
+ * null: rendering 0s would claim instant delivery for a bind that delivered
+ * nothing at all.
+ */
+const numberOrNull = (value: unknown): number | null =>
+  value === null || value === undefined ? null : Number(value);
+
 @Injectable()
 export class DlrPerformanceService {
   constructor(private readonly database: DatabaseService) {}
@@ -85,12 +93,22 @@ export class DlrPerformanceService {
           // was delivered. Those figures sit side by side on the screen, and
           // pendingShare also drives the maturity warning, so the warning
           // fired spuriously too.
+          // ROUND-TRIP LATENCY. `sent_sms.time` is a unix epoch on both the MT
+          // row and its receipt, so the delay a subscriber's handset took to
+          // confirm is simply the difference — the correlation this query
+          // already performs is the whole mechanism, and only the receipt's
+          // timestamp had to be carried out of the CTE to get it.
+          //
+          // percentile_cont over the delivered receipts only. Including
+          // failures would mix "the network took nine seconds to confirm" with
+          // "the network rejected this instantly", and the fast rejection would
+          // flatter the percentile.
           `WITH mt AS (
-             SELECT smsc_id, foreign_id
+             SELECT smsc_id, foreign_id, time AS submitted_at
                FROM sent_sms
               WHERE momt = 'MT' AND time BETWEEN $1 AND $2 AND foreign_id IS NOT NULL
            ), dlr AS (
-             SELECT DISTINCT ON (d.foreign_id) d.foreign_id, d.dlr_mask
+             SELECT DISTINCT ON (d.foreign_id) d.foreign_id, d.dlr_mask, d.time AS receipt_at
                FROM sent_sms d
               WHERE d.momt = 'DLR' AND d.foreign_id IS NOT NULL
                 AND d.time BETWEEN $1 AND $2 + $8
@@ -103,7 +121,16 @@ export class DlrPerformanceService {
                   count(*) FILTER (WHERE dlr.dlr_mask = $4)             AS failed,
                   count(*) FILTER (WHERE dlr.dlr_mask = $5)             AS rejected,
                   count(*) FILTER (WHERE dlr.dlr_mask IN ($6, $7))      AS in_flight,
-                  count(*) FILTER (WHERE dlr.foreign_id IS NULL)        AS pending
+                  count(*) FILTER (WHERE dlr.foreign_id IS NULL)        AS pending,
+                  percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p50,
+                  percentile_cont(0.95) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p95,
+                  percentile_cont(0.99) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p99
              FROM mt
              LEFT JOIN dlr ON dlr.foreign_id = mt.foreign_id
             GROUP BY mt.smsc_id`,
@@ -155,7 +182,19 @@ export class DlrPerformanceService {
             smscName: (meta?.name as string) ?? null,
             carrierId: (meta?.carrier_id as string) ?? null,
             carrierName: (meta?.carrier_name as string) ?? null,
-            quality: buildDeliveryQuality({ funnel: bindFunnel, ...window }),
+            // Per-bind percentiles come straight from the query. They are NOT
+            // rolled up into overall below: percentiles cannot be summed, and
+            // averaging one bind's P95 with another's would produce a number
+            // that describes no bind and no message.
+            quality: buildDeliveryQuality({
+              funnel: bindFunnel,
+              ...window,
+              latency: {
+                p50: numberOrNull(row.latency_p50),
+                p95: numberOrNull(row.latency_p95),
+                p99: numberOrNull(row.latency_p99),
+              },
+            }),
           };
         });
 

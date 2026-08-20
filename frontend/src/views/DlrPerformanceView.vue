@@ -44,6 +44,7 @@ import { resolveWindow, selectedRange } from '../stores/time-range';
 import {
   DELIVERY_RATE_VIEWS,
   formatShare,
+  formatLatency,
   type BindQuality,
   type DeliveryQuality,
   type DlrPerformanceReport,
@@ -393,6 +394,9 @@ onMounted(load);
                 <th scope="col">Settled rate</th>
                 <th scope="col">Worst-case rate</th>
                 <th scope="col">No receipt</th>
+                <th scope="col">P50</th>
+                <th scope="col">P95</th>
+                <th scope="col">P99</th>
                 <th scope="col">Window</th>
               </tr>
             </thead>
@@ -429,6 +433,15 @@ onMounted(load);
                   {{ formatShare(row.quality.deliveryRateIncludingPending, state) }}
                 </td>
                 <td class="mono">{{ formatShare(row.quality.noReceiptRate, state) }}</td>
+                <!-- Round-trip receipt latency over DELIVERED receipts only, so
+                     a carrier that rejects instantly cannot flatter its own
+                     percentile. `unknown` when nothing was delivered: a
+                     percentile over an empty set is not zero. -->
+                <td class="mono" :data-testid="`dlr-bind-p50-${row.engineId}`">
+                  {{ formatLatency(row.quality.latency?.p50) }}
+                </td>
+                <td class="mono">{{ formatLatency(row.quality.latency?.p95) }}</td>
+                <td class="mono">{{ formatLatency(row.quality.latency?.p99) }}</td>
                 <td :data-testid="`dlr-bind-maturity-${row.engineId}`">
                   <span
                     v-if="row.quality.maturity.immature"

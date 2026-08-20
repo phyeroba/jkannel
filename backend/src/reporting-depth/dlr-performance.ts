@@ -62,6 +62,18 @@ export interface DeliveryQuality {
   deliveryRateIncludingPending: number | null;
   /** Accepted messages with no receipt at all, as a share. */
   noReceiptRate: number | null;
+  /**
+   * Round-trip receipt latency in SECONDS, over delivered receipts only.
+   *
+   * Null when nothing was delivered in the window — a percentile over an empty
+   * set is not zero, and rendering 0s would claim instant delivery for a bind
+   * that delivered nothing at all.
+   *
+   * Failures and rejections are excluded from the ordering: a carrier that
+   * rejects instantly would otherwise pull the percentile down and make a bad
+   * bind look fast.
+   */
+  latency: { p50: number | null; p95: number | null; p99: number | null };
   maturity: MaturityAssessment;
 }
 
@@ -133,6 +145,13 @@ export function buildDeliveryQuality(input: {
   windowStartMs: number;
   windowEndMs: number;
   nowMs?: number;
+  /**
+   * Receipt-latency percentiles in seconds, when the caller measured them.
+   * Omitted by callers that aggregate a funnel without the underlying rows —
+   * percentiles cannot be summed, so an aggregate of several binds has no
+   * meaningful latency and says so rather than averaging averages.
+   */
+  latency?: { p50: number | null; p95: number | null; p99: number | null };
 }): DeliveryQuality {
   const { funnel } = input;
   const settled = funnel.delivered + funnel.failed + funnel.expired + funnel.rejected;
@@ -141,6 +160,7 @@ export function buildDeliveryQuality(input: {
     deliveryRate: settled > 0 ? funnel.delivered / settled : null,
     deliveryRateIncludingPending: funnel.accepted > 0 ? funnel.delivered / funnel.accepted : null,
     noReceiptRate: funnel.accepted > 0 ? funnel.pending / funnel.accepted : null,
+    latency: input.latency ?? { p50: null, p95: null, p99: null },
     maturity: assessMaturity({
       windowStartMs: input.windowStartMs,
       windowEndMs: input.windowEndMs,
