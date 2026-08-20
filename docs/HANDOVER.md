@@ -117,10 +117,17 @@ preserve. The design system does this too, so it is faithful, not a cop-out.
 
 ## 6. Deploying
 
-```bash
-cd d:/JKANNEL
-Get-Content scripts/deploy.sh -Raw | ssh hyeroba@gw1.speedamobile.com "bash -s"
+```powershell
+cd d:\JKANNEL
+scp scripts/deploy.sh hyeroba@gw1.speedamobile.com:/tmp/deploy.sh
+ssh hyeroba@gw1.speedamobile.com "bash /tmp/deploy.sh; rm -f /tmp/deploy.sh"
 ```
+
+**Copy the file; do not pipe it.** `Get-Content -Raw | ssh "bash -s"` re-adds
+CRLF in the PowerShell pipeline even when the file on disk is pure LF, and the
+remote bash then fails on the last line with `$'\r': command not found`. The
+deploy itself succeeds, so it presents as a script that reports failure on
+success — which is how people learn to ignore a red exit code.
 
 The script repairs file ownership **before** pulling. This matters: a `sudo git`
 run leaves root-owned files, `git merge` then fails partway through checkout —
