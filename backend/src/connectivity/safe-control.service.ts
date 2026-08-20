@@ -347,6 +347,40 @@ export class SafeControlService {
     });
   }
 
+  /**
+   * Every failover this tenant has performed, ended ones included — §7's
+   * transition history.
+   *
+   * Separate from {@link activeFailovers} rather than a flag on it, because the
+   * two answer different questions and are read by different screens: one is
+   * "where is traffic going right now", this is "what has been moved, when, and
+   * why". `route_failovers` keeps ended rows with their `end_reason`, so the
+   * history is already recorded and nothing new had to be captured.
+   *
+   * Bounded at 100. The table is never pruned, and a gateway that has failed
+   * over for months would otherwise return a page nobody reads to the end of.
+   */
+  async failoverHistory(actor: Actor, limit = 100) {
+    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+      const { rows } = await client.query(
+        `SELECT f.id::text, f.route_id::text, r.name AS route_name,
+                f.from_smsc_id::text, f.to_smsc_id::text,
+                fr.engine_id AS from_engine_id,
+                t.engine_id AS to_engine_id, t.name AS to_name,
+                f.reason, f.started_by, f.started_at,
+                f.ended_at, f.ended_by, f.end_reason
+           FROM route_failovers f
+           JOIN routing_rules r ON r.id = f.route_id
+           LEFT JOIN smsc_definitions t ON t.id = f.to_smsc_id
+           LEFT JOIN smsc_definitions fr ON fr.id = f.from_smsc_id
+          ORDER BY f.started_at DESC
+          LIMIT $1`,
+        [Math.min(Math.max(1, limit), 500)],
+      );
+      return { items: rows };
+    });
+  }
+
   private async audit(
     client: PoolClient,
     actor: Actor,

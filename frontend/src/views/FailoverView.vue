@@ -31,6 +31,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import EventTimeline from '../components/EventTimeline.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import DataState from '../components/DataState.vue';
 import { canAccess, session } from '../stores/session';
@@ -57,6 +58,102 @@ import {
 const canManage = computed(() => canAccess(session.value, 'routes.manage'));
 
 const failovers = ref<ActiveFailover[]>([]);
+
+/**
+ * Failover history for the timeline.
+ *
+ * Each row of `route_failovers` is TWO events when it has ended — the move and
+ * the return — so one row expands into two steps. Collapsing them into one
+ * would hide the thing an operator most wants to see: how long traffic sat on
+ * the alternate path before it came back, and whether it ever did.
+ */
+interface FailoverRecord {
+  id: string;
+  route_name?: string | null;
+  to_engine_id?: string | null;
+  from_engine_id?: string | null;
+  reason?: string | null;
+  started_by?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  ended_by?: string | null;
+  end_reason?: string | null;
+}
+const history = ref<FailoverRecord[]>([]);
+
+/** Explicit, because flatMap over a conditional return widens to unknown[]. */
+interface HistoryStep {
+  at: string;
+  label: string;
+  detail: string;
+  state: 'ok' | 'warn' | 'error';
+}
+
+const historySteps = computed<HistoryStep[]>(() =>
+  history.value
+    .flatMap<HistoryStep>((row) => {
+      const moved = {
+        at: String(row.started_at ?? '')
+          .slice(0, 16)
+          .replace('T', ' '),
+        label: `${row.route_name ?? 'route'} → ${row.to_engine_id ?? 'unknown target'}`,
+        detail: [row.reason, row.started_by ? `by ${row.started_by}` : '']
+          .filter(Boolean)
+          .join(' · '),
+        // Amber, not red: a deliberate move is not a fault. The red step is the
+        // one below, when a route is still sitting on its alternate path.
+        state: 'warn' as const,
+      };
+      if (!row.ended_at) {
+        return [
+          {
+            ...moved,
+            detail: `${moved.detail}${moved.detail ? ' · ' : ''}still in effect`,
+            state: 'error' as const,
+          },
+        ];
+      }
+      return [
+        {
+          at: String(row.ended_at).slice(0, 16).replace('T', ' '),
+          label: `${row.route_name ?? 'route'} returned to ${row.from_engine_id ?? 'its primary'}`,
+          detail: [row.end_reason, row.ended_by ? `by ${row.ended_by}` : '']
+            .filter(Boolean)
+            .join(' · '),
+          state: 'ok' as const,
+        },
+        moved,
+      ];
+    })
+    .sort((a, b) => b.at.localeCompare(a.at)),
+);
+
+/**
+ * Spare capacity on a path, in messages per second.
+ *
+ * `unknown` when either half is unmeasured — a headroom computed against an
+ * unobserved rate would read as full capacity available, which is the single
+ * most dangerous wrong answer on this screen: it invites moving traffic onto a
+ * bind nobody has confirmed is even up.
+ */
+function headroomOf(detail: SmscDetail | null): string {
+  // effectiveTps is the ceiling across all this SMSC's connections, which is
+  // the number a failover decision has to respect - not the per-connection one.
+  const ceiling = detail?.capacity?.effectiveTps ?? null;
+  const observed = detail?.capacity?.observedTps ?? detail?.outboundRate ?? null;
+  if (ceiling === null || observed === null) return 'unknown';
+  return `${Math.max(0, ceiling - observed).toFixed(1)}/s free`;
+}
+async function loadHistory() {
+  try {
+    const page = await apiRequest<{ items?: FailoverRecord[] }>('/control/failovers/history');
+    history.value = Array.isArray(page?.items) ? page.items : [];
+  } catch {
+    // The control panels above report their own failures; an unreadable history
+    // shows its empty state rather than a second error banner for one screen.
+    history.value = [];
+  }
+}
 const routes = ref<RouteRow[]>([]);
 const smscs = ref<SmscOption[]>([]);
 const state = ref<State>('loading');
@@ -332,7 +429,10 @@ watch(targetOptions, (options) => {
   if (!options.some((option) => option.id === targetId.value)) targetId.value = '';
 });
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadHistory();
+});
 </script>
 
 <template>
@@ -466,7 +566,7 @@ onMounted(load);
               <tr>
                 <th scope="col">Route</th>
                 <th scope="col">Matches</th>
-                <th scope="col">Active path</th>
+                <th scope="col">Active target</th>
                 <th scope="col">Mode</th>
                 <th scope="col">Configured target</th>
                 <th scope="col">Configured fallback</th>
@@ -577,9 +677,13 @@ onMounted(load);
               <th scope="col">Connection</th>
               <th scope="col">Bind</th>
               <th scope="col">Queued</th>
-              <th scope="col">Observed rate</th>
-              <th scope="col">Ceiling</th>
-              <th scope="col">Utilisation</th>
+              <th scope="col">TPS</th>
+              <th scope="col">Used / capacity</th>
+              <!-- Headroom is the figure the decision actually turns on: how
+                   much of the proposed path's ceiling is still free. Utilisation
+                   says the same thing inverted, and an operator moving traffic
+                   under pressure should not have to do the subtraction. -->
+              <th scope="col">Headroom</th>
             </tr>
           </thead>
           <tbody>
@@ -594,7 +698,7 @@ onMounted(load);
               <td class="mono">{{ displayValue(currentDetail?.queued, 'live') }}</td>
               <td class="mono">{{ formatRate(currentDetail?.outboundRate) }}</td>
               <td class="mono">{{ formatCeiling(currentDetail?.capacity) }}</td>
-              <td class="mono">{{ formatUtilisation(currentDetail?.capacity?.utilisation) }}</td>
+              <td class="mono">{{ headroomOf(currentDetail) }}</td>
             </tr>
             <tr data-testid="failover-compare-proposed">
               <td>Proposed</td>
@@ -607,7 +711,7 @@ onMounted(load);
               <td class="mono">{{ displayValue(proposedDetail?.queued, 'live') }}</td>
               <td class="mono">{{ formatRate(proposedDetail?.outboundRate) }}</td>
               <td class="mono">{{ formatCeiling(proposedDetail?.capacity) }}</td>
-              <td class="mono">{{ formatUtilisation(proposedDetail?.capacity?.utilisation) }}</td>
+              <td class="mono">{{ headroomOf(proposedDetail) }}</td>
             </tr>
           </tbody>
         </table>
@@ -675,6 +779,26 @@ onMounted(load);
       @close="revertTarget = null"
       @confirm="confirmRevert"
     />
+
+    <!--
+      Transition history — §7, and the design system's second Failover panel.
+      Read from `route_failovers`, which keeps ended rows with their end reason,
+      so the record already existed and nothing new had to be captured.
+    -->
+    <section class="panel" data-testid="failover-history">
+      <header class="panel-header">
+        <div>
+          <h2 id="failover-history-heading">Transition history</h2>
+          <p>Every failover, with the reason given at the time</p>
+        </div>
+        <router-link class="text-button" to="/logs-audit">Open Audit Trail</router-link>
+      </header>
+      <EventTimeline v-if="historySteps.length" :items="historySteps" />
+      <p v-else class="chart-empty" data-testid="failover-history-empty">
+        No route has been failed over. The record is kept indefinitely, so an empty history means
+        traffic has never been moved by hand — not that older moves have aged out.
+      </p>
+    </section>
   </div>
 </template>
 

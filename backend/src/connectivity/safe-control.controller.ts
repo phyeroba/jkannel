@@ -72,6 +72,20 @@ export class SafeControlController {
     return this.control.activeFailovers(actor(r));
   }
 
+  /**
+   * Failover history — every move, ended ones included, with its reason.
+   *
+   * A separate route from `/failovers` rather than a query flag: that one
+   * answers "where is traffic going right now" and is polled by the control
+   * screen, this answers "what has been moved and why" and is read once. Giving
+   * them one path would make the polled call carry a growing history.
+   */
+  @Get('failovers/history')
+  @RequirePermissions('routes.view')
+  failoverHistory(@Req() r: Request) {
+    return this.control.failoverHistory(actor(r));
+  }
+
   @Post('routes/:id/failover')
   @RequirePermissions('routes.manage')
   failOver(@Req() r: Request, @Param('id') id: string, @Body() body: any = {}) {
