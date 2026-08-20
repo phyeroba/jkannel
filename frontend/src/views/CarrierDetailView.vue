@@ -24,6 +24,7 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { canAccess, session } from '../stores/session';
 import DataState from '../components/DataState.vue';
+import EventTimeline from '../components/EventTimeline.vue';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
@@ -91,6 +92,73 @@ async function loadCarrier() {
   }
 }
 
+/**
+ * Recent carrier events — §4.1's connectivity history for the whole network.
+ *
+ * Every member SMSC's detail already carries its own bind transitions, so this
+ * is a merge and a sort rather than a fetch: the carrier's history IS the union
+ * of its connections' histories, which is exactly the question an operator asks
+ * when a network degrades but no single bind looks obviously wrong.
+ *
+ * Capped at 40. The underlying history is never pruned, and a carrier with a
+ * dozen flapping binds would otherwise render thousands of rows into a panel
+ * nobody scrolls to the bottom of.
+ */
+const carrierEvents = computed(() =>
+  members.value
+    .flatMap((member) =>
+      (member.transitions ?? []).map((entry) => ({
+        engineId: member.engineId,
+        name: member.name,
+        entry,
+      })),
+    )
+    .sort((a, b) => String(b.entry.observedAt).localeCompare(String(a.entry.observedAt)))
+    .slice(0, 40)
+    .map(({ name, entry }) => ({
+      at: formatMoment(entry.observedAt),
+      label: `${name}: ${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+      detail: entry.kind,
+      state:
+        entry.toState === 'bound'
+          ? ('ok' as const)
+          : entry.toState === 'failed' || entry.toState === 'disconnected'
+            ? ('error' as const)
+            : entry.toState === null
+              ? ('missing' as const)
+              : ('warn' as const),
+    })),
+);
+
+/**
+ * Open alerts against this carrier's binds.
+ *
+ * The poller keys bind alerts as `engine:bind:<engineId>`, so the carrier's
+ * open alerts are the ones whose dedup key names one of its connections. The
+ * summary already reports a COUNT; this panel says which, because "3 open
+ * alerts" tells an operator to go looking and nothing more.
+ */
+const alertsState = ref<State>('loading');
+const carrierAlerts = ref<Record<string, unknown>[]>([]);
+
+async function loadAlerts() {
+  alertsState.value = 'loading';
+  try {
+    const page = await apiRequest<{ items?: Record<string, unknown>[] }>(
+      '/alerts?filter.status=open&sort=-openedAt&limit=100&offset=0',
+    );
+    const mine = new Set(members.value.map((member) => `engine:bind:${member.engineId}`));
+    const rows = Array.isArray(page?.items) ? page.items : [];
+    carrierAlerts.value = rows.filter((row) =>
+      mine.has(String(row.dedup_key ?? row.dedupKey ?? '')),
+    );
+    alertsState.value = carrierAlerts.value.length ? 'live' : 'empty';
+  } catch (reason) {
+    carrierAlerts.value = [];
+    alertsState.value = failureState(reason);
+  }
+}
+
 async function loadMembers() {
   membersState.value = 'loading';
   membersMissed.value = [];
@@ -130,6 +198,8 @@ async function loadMembers() {
 
 async function reload() {
   await Promise.all([loadCarrier(), loadMembers()]);
+  // After members: an alert is matched to this carrier by its bind's engine id.
+  await loadAlerts();
 }
 
 async function attach() {
@@ -173,6 +243,20 @@ watch(carrierId, reload);
 
 <template>
   <div data-testid="carrier-detail-view">
+    <!--
+      Above the content, never in place of it. A carrier whose binds have never
+      been observed still has a name, a market and a connection list worth
+      reading; what it does not have is a health claim, and this says so without
+      hiding everything else.
+    -->
+    <p
+      v-if="carrier && carrier.health === 'unknown'"
+      class="stale-banner"
+      data-testid="carrier-stale-banner"
+    >
+      No bind under this carrier has been observed, so its health is reported unknown rather than
+      healthy. Throughput and utilisation below read “unknown” for the same reason.
+    </p>
     <p v-if="notice" class="notice" role="status" data-testid="carrier-detail-notice">
       {{ notice }}
     </p>
@@ -360,9 +444,15 @@ watch(carrierId, reload);
                   <th scope="col">Since</th>
                   <th scope="col">Queued</th>
                   <th scope="col">Failed</th>
-                  <th scope="col">Out rate</th>
+                  <th scope="col">TPS out</th>
                   <th scope="col">Ceiling</th>
                   <th scope="col">Utilisation</th>
+                  <!-- The kit also lists Sessions, Oldest and Delivery here. None
+                   are observable per connection: Kamex collapses instances=N
+                   behind one smsc-id, queue age is per-message in SQLBox, and
+                   per-SMSC delivery needs the receipt correlation that DLR
+                   Performance owns. Columns of dashes would imply we looked. -->
+                  <th scope="col">Last event</th>
                   <th scope="col">Actions</th>
                 </tr>
               </thead>
@@ -391,6 +481,13 @@ watch(carrierId, reload);
                   <td class="mono" :data-testid="`carrier-smsc-utilisation-${smsc.engineId}`">
                     {{ formatUtilisation(smsc.capacity?.utilisation) }}
                   </td>
+                  <td class="mono" :data-testid="`carrier-smsc-last-event-${smsc.engineId}`">
+                    {{
+                      smsc.transitions?.[0]
+                        ? `${smsc.transitions[0].toState ?? 'unknown'} ${formatMoment(smsc.transitions[0].observedAt)}`
+                        : 'no transitions recorded'
+                    }}
+                  </td>
                   <td class="row-actions">
                     <router-link class="secondary-button" :to="`/smsc/${smsc.engineId}`"
                       >Open</router-link
@@ -417,6 +514,72 @@ watch(carrierId, reload);
           therefore assembled by reading each connection's own detail. Connections already known to
           be unassigned are skipped, so a fresh install costs nothing extra here.
         </p>
+      </section>
+
+      <!--
+        Open alerts and Recent carrier events — two of the four panels the
+        design system's CarrierDetailScreen specifies.
+
+        Both are assembled from data this page already had: the alert register
+        keys bind alerts as `engine:bind:<engineId>`, and every member SMSC's
+        detail carries its own transition history. Neither needed a new endpoint.
+      -->
+      <section class="split-grid" data-testid="carrier-context">
+        <article class="panel" data-testid="carrier-open-alerts">
+          <header class="panel-header">
+            <div>
+              <h2>Open alerts</h2>
+              <p>Unresolved alerts raised against this carrier's binds</p>
+            </div>
+            <router-link class="text-button" to="/alerts">Open Alerts</router-link>
+          </header>
+          <DataState
+            :state="alertsState"
+            subject="alerts for this carrier"
+            skeleton="text"
+            :skeleton-rows="3"
+            empty-message="No open alert names a bind belonging to this carrier."
+            testid="carrier-alerts-state"
+            :on-retry="loadAlerts"
+          >
+            <ul class="health-list">
+              <li
+                v-for="alert in carrierAlerts"
+                :key="String(alert.id)"
+                :data-testid="`carrier-alert-${alert.id}`"
+              >
+                <span
+                  class="status-dot"
+                  :class="String(alert.severity) === 'critical' ? 'bad' : 'warn'"
+                ></span>
+                <span>
+                  <strong>{{ alert.summary ?? alert.rule_name ?? 'alert' }}</strong>
+                  <small>{{ alert.opened_at ?? alert.openedAt }}</small>
+                </span>
+                <span
+                  class="status-badge"
+                  :class="String(alert.severity) === 'critical' ? 'bad' : 'warn'"
+                  >{{ alert.severity }}</span
+                >
+              </li>
+            </ul>
+          </DataState>
+        </article>
+
+        <article class="panel" data-testid="carrier-events">
+          <header class="panel-header">
+            <div>
+              <h2>Recent carrier events</h2>
+              <p>Bind transitions across every connection filed under this carrier</p>
+            </div>
+          </header>
+          <EventTimeline v-if="carrierEvents.length" dense :items="carrierEvents" />
+          <p v-else class="chart-empty" data-testid="carrier-events-empty">
+            No bind transition has been recorded for any connection under this carrier. The history
+            is never pruned, so an empty timeline means nothing has been observed to change — not
+            that older entries aged out.
+          </p>
+        </article>
       </section>
     </template>
   </div>
