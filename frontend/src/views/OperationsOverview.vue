@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
+import MiniChart from '../components/MiniChart.vue';
 import { apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { healthTone, type CarrierSummary } from '../utils/connectivity';
@@ -187,6 +188,62 @@ const unobservedCarriers = computed(
 
 const utilisationLabel = (carrier: CarrierSummary) =>
   carrier.utilisation === null ? '—' : `${Math.round(carrier.utilisation * 100)}%`;
+
+/**
+ * The Traffic panel's series, for the design system's dashboard line chart.
+ *
+ * The kit plots MT, MO and DLR as per-minute rates over the selected range. We
+ * do not sample traffic per minute — the volume report is a DAILY roll-up — so
+ * this plots what we actually have and the subtitle says so, rather than
+ * inventing a resolution the data does not carry. Same shape, honest period.
+ */
+const trafficSeries = computed(() => {
+  const rows = [...volumeSnapshots.value].reverse();
+  const mt = rows.map((row) => Number(row.message_count) || 0);
+  const dlr = rows.map((row) => Number(row.dlr_count ?? row.dlrCount) || 0);
+  const series = [{ label: 'Messages', values: mt }];
+  // Only plot DLRs when the report actually carries them; an all-zero series
+  // reads as "no receipts came back", which is a very different claim.
+  if (dlr.some((value) => value > 0)) series.push({ label: 'DLRs', values: dlr });
+  return series;
+});
+const trafficLabels = computed(() =>
+  [...volumeSnapshots.value]
+    .reverse()
+    .map((row) => String(row.period_start ?? '').slice(5, 10) || '—'),
+);
+const hasTraffic = computed(() => trafficSeries.value[0]?.values.some((value) => value > 0));
+
+/**
+ * Queue pressure, ranked by depth — the design system's second dashboard panel.
+ *
+ * The kit ranks per-destination queues by depth and growth. Our per-destination
+ * depth is per BIND (`smsc_bind_state.queued_count`, surfaced on the SMSC
+ * register), which is the same operational question: which connection is
+ * backing up. Growth needs two samples of the same bind and is left out rather
+ * than approximated from one.
+ */
+interface QueuePressureRow {
+  id: string;
+  label: string;
+  depth: number;
+  share: number;
+  rate: number | null;
+}
+const queuePressure = computed<QueuePressureRow[]>(() => {
+  const rows = carriers.value
+    .map((carrier) => ({
+      id: carrier.id,
+      label: carrier.name,
+      depth: Number(carrier.queuedMessages) || 0,
+      rate: carrier.observedTps,
+    }))
+    .filter((row) => row.depth > 0)
+    .sort((a, b) => b.depth - a.depth)
+    .slice(0, 5);
+  const deepest = Math.max(1, ...rows.map((row) => row.depth));
+  return rows.map((row) => ({ ...row, share: Math.round((row.depth / deepest) * 100) }));
+});
 
 async function checkAlerts() {
   try {
@@ -415,54 +472,73 @@ function statusTone(status: string) {
       to="/alerts"
     />
   </section>
-  <section class="dashboard-grid">
-    <article class="panel wide">
-      <header class="panel-header">
-        <div>
-          <h2>Message volume</h2>
-          <p>Daily total-scope report snapshots</p>
-        </div>
-        <!--
-          A link in the header, not a click handler on the whole panel. These
-          panels contain their own links and controls, so making the container
-          clickable would swallow those clicks and give a screen reader a single
-          enormous ambiguous target.
-        -->
-        <RouterLink class="text-link" to="/reports" data-testid="open-reports"
-          >Open reports</RouterLink
-        >
-      </header>
-      <div
-        v-if="volumeState === 'ok' && volumeSnapshots.length"
-        class="chart"
-        aria-label="Daily message volume"
-        data-testid="volume-chart"
-      >
-        <div
-          v-for="row in volumeSnapshots"
-          :key="text(row.id)"
-          :style="{
-            height: `${Math.max(4, Math.round(((Number(row.message_count) || 0) / volumeMax) * 100))}%`,
-          }"
-          :title="`${text(row.period_start)}: ${text(row.message_count, '0')} messages`"
-        ></div>
-      </div>
-      <p v-else-if="volumeState === 'checking'" class="chart-empty">Loading volume snapshots…</p>
-      <p
-        v-else-if="volumeState === 'unavailable'"
-        class="chart-empty"
-        data-testid="volume-unavailable"
-      >
-        Volume report data is unavailable.
-      </p>
-      <p v-else class="chart-empty" data-testid="volume-empty">
-        No daily volume snapshots have been generated yet.
-      </p>
-    </article>
+  <!--
+    Traffic and Queue pressure — the two panels the design system's
+    DashboardScreen leads with, and the two this dashboard was missing. Their
+    absence is why the console did not look like the package even after every
+    token and component class matched.
+  -->
+  <section class="split-grid wide-left" data-testid="dashboard-traffic-row">
     <article class="panel">
       <header class="panel-header">
         <div>
-          <h2>Platform health</h2>
+          <h2>Traffic</h2>
+          <p>Daily message and receipt volume, from the report snapshots</p>
+        </div>
+        <RouterLink class="text-button" to="/live-traffic">Open Live Traffic</RouterLink>
+      </header>
+      <MiniChart
+        v-if="hasTraffic"
+        type="line"
+        title="Daily message volume"
+        :series="trafficSeries"
+        :labels="trafficLabels"
+        :height="180"
+        grid
+        data-testid="dashboard-traffic-chart"
+      />
+      <p v-else-if="volumeState === 'checking'" class="chart-empty">Loading volume snapshots…</p>
+      <p v-else-if="volumeState === 'unavailable'" class="chart-empty">
+        Volume report data is unavailable.
+      </p>
+      <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
+        No traffic has been recorded in the snapshots held so far.
+      </p>
+    </article>
+
+    <article class="panel" data-testid="dashboard-queue-pressure">
+      <header class="panel-header">
+        <div>
+          <h2>Queue pressure</h2>
+          <p>Carriers with messages waiting, deepest first</p>
+        </div>
+        <RouterLink class="text-button" to="/queues">Open Queues</RouterLink>
+      </header>
+      <div v-if="queuePressure.length" class="pressure-list">
+        <div v-for="row in queuePressure" :key="row.id" class="pressure-row">
+          <div class="pressure-head">
+            <span class="mono">{{ row.label }}</span>
+            <strong class="figures">{{ row.depth.toLocaleString() }}</strong>
+          </div>
+          <span class="breakdown-track"
+            ><span class="breakdown-fill" :style="{ width: `${row.share}%` }"></span
+          ></span>
+          <span class="pressure-note">
+            {{ row.rate === null ? 'drain rate unknown' : `draining at ${row.rate}/s` }}
+          </span>
+        </div>
+      </div>
+      <p v-else-if="carriersState === 'checking'" class="chart-empty">Loading carriers…</p>
+      <p v-else class="chart-empty" data-testid="dashboard-queue-pressure-empty">
+        Nothing is queued. Every carrier's spool is empty.
+      </p>
+    </article>
+  </section>
+  <section class="dashboard-grid">
+    <article class="panel">
+      <header class="panel-header">
+        <div>
+          <h2>System health</h2>
           <p>Observed dependency state</p>
         </div>
         <!-- The services board is the fuller version of this list: every
@@ -484,8 +560,8 @@ function statusTone(status: string) {
     <article class="panel wide">
       <header class="panel-header">
         <div>
-          <h2>Operational attention</h2>
-          <p>Most recent alert instances</p>
+          <h2>Active incidents</h2>
+          <p>Longest running first</p>
         </div>
         <RouterLink class="text-link" to="/alerts">View all alerts</RouterLink>
       </header>
@@ -617,3 +693,32 @@ function statusTone(status: string) {
     </div>
   </article>
 </template>
+
+<style scoped>
+/* Queue pressure rows. The track and fill themselves come from the design
+   system's components.css (`breakdown-track` / `breakdown-fill`); only the row
+   rhythm around them is local. */
+.pressure-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.pressure-row {
+  display: grid;
+  gap: 5px;
+}
+.pressure-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+}
+.pressure-head strong {
+  color: var(--text-strong);
+}
+.pressure-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+</style>

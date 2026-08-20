@@ -84,8 +84,10 @@ describe('operations overview remote state', () => {
     expect(wrapper.text()).toContain('running');
     expect(wrapper.text()).toContain('120');
     expect(wrapper.text()).toContain('Queue depth above threshold');
-    expect(wrapper.find('[data-testid="volume-chart"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="volume-chart"]').findAll('div')).toHaveLength(2);
+    // The CSS bar chart was replaced by the design system's Traffic line chart,
+    // which is what its DashboardScreen leads with. Same source (the daily
+    // volume report), same question, the shape the package specifies.
+    expect(wrapper.find('[data-testid="dashboard-traffic-chart"]').exists()).toBe(true);
     // The query string carries the daily/total filters and page bounds.
     const volumeCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes('/reports/volume'),
@@ -108,7 +110,8 @@ describe('operations overview remote state', () => {
     await vi.waitFor(() =>
       expect(wrapper.find('[data-testid="alerts-unavailable"]').exists()).toBe(true),
     );
-    expect(wrapper.find('[data-testid="volume-unavailable"]').exists()).toBe(true);
+    // The Traffic panel states the outage in words rather than rendering an axis.
+    expect(wrapper.text()).toContain('Volume report data is unavailable.');
     expect(wrapper.text()).toContain('unknown');
     expect(wrapper.text()).not.toContain('Healthy');
     expect(wrapper.text()).not.toContain('Online');
