@@ -234,6 +234,14 @@ describe('module workspace operational density', () => {
               host: 'smpp.example',
               port: 2775,
               credential_secret_ref: 'sysid-primary',
+              carrier_name: 'MTN Uganda',
+              carrier_country: 'UG',
+              carrier_network: '64110',
+              bind_state: 'bound',
+              queued_count: 7,
+              outbound_rate: 12.5,
+              inbound_rate: 0.4,
+              last_event: 'connected 2026-08-04 09:12',
               tps: 25,
               priority: 1,
               tags: ['ug', 'mtn'],
@@ -251,10 +259,18 @@ describe('module workspace operational density', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="record-s1"]').exists()).toBe(true));
     const row = wrapper.get('[data-testid="record-s1"]').text();
     expect(row).toContain('smpp.example:2775');
-    expect(row).toContain('sysid-primary');
-    expect(row).toContain('25');
-    expect(row).toContain('reachable · 42 ms');
-    expect(row).toContain('ug, mtn');
+    // The design system's register is an OPERATIONAL view: carrier, state,
+    // throughput against capacity, queue and last event. System ID, tags,
+    // priority and health latency were dropped from it — they are configuration
+    // and diagnostics, and they are all still on the record's detail sheet.
+    expect(row).toContain('MTN Uganda');
+    expect(row).toContain('bound');
+    // Throughput and headroom, from smsc_bind_snapshots.
+    expect(row).toContain('12.5');
+    expect(row).toContain('50% of 25');
+    expect(row).toContain('connected 2026-08-04 09:12');
+    // A bind with no sample reads unknown, never 0.0 — see rateText.
+    expect(row).not.toContain('sysid-primary');
     // The reachability dot the SMSC screen has always shown survives the change.
     expect(wrapper.get('[data-testid="smsc-dot-s1"]').classes()).toContain('good');
     wrapper.unmount();

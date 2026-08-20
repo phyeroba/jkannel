@@ -173,6 +173,39 @@ function hostPort(raw: RecordValue) {
   return port ? `${host || '—'}:${port}` : host;
 }
 
+/**
+ * A throughput reading, or `unknown` when there is no reading.
+ *
+ * The distinction is the whole point. A bind the poller has never sampled has
+ * no rate at all; printing `0.0` for it reports a measured silence and is
+ * indistinguishable from a carrier that is bound and simply idle. The design
+ * system shows `unknown` in exactly this case, so this follows it.
+ */
+function rateText(value: unknown) {
+  if (value === null || value === undefined || value === '') return 'unknown';
+  const rate = Number(value);
+  if (!Number.isFinite(rate)) return 'unknown';
+  // One decimal: the engine reports a moving average, and more digits imply a
+  // precision a 30-second poll does not have.
+  return rate.toFixed(1);
+}
+
+/**
+ * Observed throughput against the agreed ceiling, e.g. "53% of 100".
+ *
+ * Falls back to the bare ceiling when there is no observation, because the
+ * ceiling is a configured fact and is worth showing even when the numerator is
+ * unknown — an operator checking whether a carrier's TPS is provisioned
+ * correctly needs it whether or not traffic is flowing.
+ */
+function utilisationText(raw: RecordValue) {
+  const capacity = Number(raw.tps);
+  if (!Number.isFinite(capacity) || capacity <= 0) return 'not set';
+  const observed = Number(raw.outbound_rate ?? raw.outboundRate);
+  if (!Number.isFinite(observed)) return `— of ${capacity}`;
+  return `${Math.round((observed / capacity) * 100)}% of ${capacity}`;
+}
+
 /** Trims long message bodies so one row stays one row. */
 function truncate(value: unknown, limit = 80) {
   const body = text(value, '');
@@ -310,6 +343,32 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/smscs/export',
     },
+    /**
+     * The column set from the design system's SmscsScreen, adapted to what this
+     * deployment can actually observe.
+     *
+     * Designed:  SMSC · Country · Carrier · Protocol · State · Sessions ·
+     *            TPS out · TPS in · Capacity · Queue · Oldest · DLR · Last event
+     *
+     * Kept, because the data exists: everything except Sessions, Oldest and
+     * DLR. Throughput, capacity headroom and the last connectivity event all
+     * come from `smsc_bind_snapshots` and `smsc_bind_transitions`, which the
+     * poller has been writing since it was built and nothing was reading.
+     *
+     * Dropped rather than faked:
+     *   Sessions — Kamex collapses `instances = N` behind one smsc-id, so the
+     *              engine reports one bind however many connections exist.
+     *   Oldest   — queue age is per-message in SQLBox, not per-bind; it belongs
+     *              to the Queues screen, which already has it.
+     *   DLR      — delivery rate per SMSC needs the sqlbox correlation, which
+     *              is the DLR Performance screen's job.
+     * Adding those headers with a dash under them would imply we look and find
+     * nothing, when the truth is we do not look here.
+     *
+     * Kept from the old set because they are operationally load-bearing and the
+     * kit has no equivalent: Lifecycle (draft/approved/deployed is JKANNEL's own
+     * config workflow) and Last error.
+     */
     columns: [
       {
         header: 'SMSC',
@@ -317,28 +376,38 @@ const definitions: Record<string, Workspace> = {
         dot: (raw) => smscDotClass(raw),
         hint: (raw) => text(raw.engine_id ?? raw.engineId, ''),
       },
-      { header: 'Type', value: (raw) => text(raw.type) },
+      {
+        header: 'Carrier',
+        value: (raw) => text(raw.carrier_name ?? raw.carrierName, 'unassigned'),
+        hint: (raw) =>
+          [raw.carrier_country ?? raw.carrierCountry, raw.carrier_network ?? raw.carrierNetwork]
+            .filter(Boolean)
+            .join(' · '),
+      },
+      { header: 'Protocol', value: (raw) => text(raw.type) },
       { header: 'Host:port', value: (raw) => hostPort(raw), mono: true },
       {
-        header: 'System ID',
-        value: (raw) => text(raw.credential_secret_ref ?? raw.credentialSecretRef),
-        mono: true,
+        header: 'State',
+        value: (raw) => text(raw.bind_state ?? raw.bindState, 'never observed'),
+        badge: (raw) => badgeTone(raw.bind_state ?? raw.bindState),
       },
-      { header: 'TPS', value: (raw) => text(raw.tps) },
-      { header: 'Priority', value: (raw) => text(raw.priority) },
+      // `unknown`, not 0 — a bind the poller has never sampled has no rate, and
+      // printing 0.0 would report an idle carrier as a measured silence.
+      { header: 'TPS out', value: (raw) => rateText(raw.outbound_rate ?? raw.outboundRate) },
+      { header: 'TPS in', value: (raw) => rateText(raw.inbound_rate ?? raw.inboundRate) },
+      { header: 'Capacity', value: (raw) => utilisationText(raw) },
+      { header: 'Queue', value: (raw) => text(raw.queued_count ?? raw.queuedCount, '0') },
       {
         header: 'Lifecycle',
         value: (raw) => text(raw.lifecycle_state ?? raw.lifecycleState),
         badge: (raw) => badgeTone(raw.lifecycle_state ?? raw.lifecycleState),
       },
       {
-        header: 'Enabled',
-        value: (raw) => (raw.enabled === true || raw.enabled === 'true' ? 'yes' : 'no'),
+        header: 'Last event',
+        value: (raw) => text(raw.last_event ?? raw.lastEvent, 'no transitions recorded'),
+        mono: true,
       },
-      { header: 'Health', value: (raw) => smscHealthText(raw) || '—' },
-      { header: 'Tags', value: (raw) => list(raw.tags) },
       { header: 'Last error', value: (raw) => truncate(raw.last_error ?? raw.lastError, 48) },
-      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
     ],
   },
   routing: {

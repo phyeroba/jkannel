@@ -232,12 +232,38 @@ export class ConsoleRepository {
     return this.grid(
       actor,
       {
+        // The register's operational columns — carrier, throughput, capacity
+        // headroom and the last connectivity event — come from data the poller
+        // has been recording all along and nothing was reading:
+        //
+        //   smsc_bind_snapshots   one row per poll, with the engine's own
+        //                         outbound/inbound rate, queue and counters
+        //   smsc_bind_transitions append-only bind history, never pruned
+        //   carriers              the network the connection belongs to
+        //
+        // All three are correlated subqueries rather than joins, because a join
+        // to a per-poll history table multiplies the register by its own
+        // sample count, and a DISTINCT ON large enough to fix that would sort
+        // the whole snapshot table on every page of the grid.
         select:
-          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,s.carrier_id::text AS carrier_id,s.connection_count,s.traffic_suspended_at,s.traffic_suspended_reason,b.state AS bind_state,b.observed_at AS bind_observed_at,b.queued_count,b.failed_count,(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
+          'SELECT s.id,s.engine_id,s.name,s.description,s.type,s.host,s.port,s.credential_secret_ref,s.tps,s.priority,s.tags,s.enabled,s.lifecycle_state,s.last_error,s.created_at,s.updated_at,s.carrier_id::text AS carrier_id,s.connection_count,s.traffic_suspended_at,s.traffic_suspended_reason,' +
+          'b.state AS bind_state,b.observed_at AS bind_observed_at,b.queued_count,b.failed_count,' +
+          'c.name AS carrier_name,c.country_code AS carrier_country,c.network_code AS carrier_network,' +
+          // Latest sample only. NULL when the poller has never seen this bind,
+          // which the console must render as "unknown" and never as zero.
+          '(SELECT n.outbound_rate FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS outbound_rate,' +
+          '(SELECT n.inbound_rate FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS inbound_rate,' +
+          '(SELECT n.sent FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS sent_total,' +
+          '(SELECT n.received FROM smsc_bind_snapshots n WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS received_total,' +
+          // The most recent thing that happened to this bind, for the design's
+          // "Last event" column.
+          "(SELECT concat_ws(' ', t.to_state, to_char(t.observed_at, 'YYYY-MM-DD HH24:MI')) FROM smsc_bind_transitions t WHERE t.smsc_id=s.id ORDER BY t.observed_at DESC LIMIT 1) AS last_event," +
+          '(SELECT t.observed_at FROM smsc_bind_transitions t WHERE t.smsc_id=s.id ORDER BY t.observed_at DESC LIMIT 1) AS last_event_at,' +
+          '(SELECT row_to_json(h) FROM (SELECT state,latency_ms,detail,observed_at FROM smsc_health WHERE smsc_id=s.id ORDER BY observed_at DESC LIMIT 1) h) health',
         // LEFT JOIN, so an SMSC that has never been observed still appears —
         // with a null bind state, which the console renders as 'never
-        // observed' rather than as a down bind.
-        from: 'FROM smsc_definitions s LEFT JOIN smsc_bind_state b ON b.smsc_id = s.id',
+        // observed' rather than as a down bind. Same for an unassigned carrier.
+        from: 'FROM smsc_definitions s LEFT JOIN smsc_bind_state b ON b.smsc_id = s.id LEFT JOIN carriers c ON c.id = s.carrier_id',
       },
       CONSOLE_GRIDS.smscs,
       query,
