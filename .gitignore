@@ -58,3 +58,6 @@ deploy/
 # Playwright run artefacts (traces, videos, failure screenshots).
 e2e/test-results/
 test-results/
+
+# Throwaway capture scripts copied into e2e/ so they resolve @playwright/test.
+e2e/*.tmp.mjs
