@@ -149,7 +149,34 @@ export class CarrierService {
                 WHERE a.tenant_id = c.tenant_id AND a.resolved_at IS NULL
                   AND a.dedup_key = ANY(
                     SELECT 'engine:bind:' || s2.engine_id FROM smsc_definitions s2
-                     WHERE s2.carrier_id = c.id AND s2.deleted_at IS NULL))    AS open_alerts
+                     WHERE s2.carrier_id = c.id AND s2.deleted_at IS NULL))    AS open_alerts,
+              -- Observed throughput, summed across the carrier's binds from the
+              -- LATEST snapshot of each. smsc_bind_snapshots has carried this
+              -- since the poller was built; observedTps was hardcoded null here
+              -- because nothing read it, not because it was unavailable.
+              --
+              -- NULL when no bind has ever been sampled, so the console can say
+              -- "unknown" rather than reporting an unobserved carrier as idle.
+              (SELECT sum(latest.outbound_rate) FROM smsc_definitions s3
+                 CROSS JOIN LATERAL (
+                   SELECT n.outbound_rate FROM smsc_bind_snapshots n
+                    WHERE n.smsc_id = s3.id ORDER BY n.observed_at DESC LIMIT 1
+                 ) latest
+                WHERE s3.carrier_id = c.id AND s3.deleted_at IS NULL)          AS observed_tps,
+              (SELECT sum(latest.inbound_rate) FROM smsc_definitions s4
+                 CROSS JOIN LATERAL (
+                   SELECT n.inbound_rate FROM smsc_bind_snapshots n
+                    WHERE n.smsc_id = s4.id ORDER BY n.observed_at DESC LIMIT 1
+                 ) latest
+                WHERE s4.carrier_id = c.id AND s4.deleted_at IS NULL)          AS observed_tps_in,
+              -- The newest bind transition across every SMSC this carrier owns:
+              -- §4.1's "last connectivity event".
+              (SELECT concat_ws(' ', t.engine_id, t.to_state,
+                                to_char(t.observed_at, 'YYYY-MM-DD HH24:MI'))
+                 FROM smsc_bind_transitions t
+                 JOIN smsc_definitions s5 ON s5.id = t.smsc_id
+                WHERE s5.carrier_id = c.id AND s5.deleted_at IS NULL
+                ORDER BY t.observed_at DESC LIMIT 1)                           AS last_event
          FROM carriers c
          LEFT JOIN smsc_definitions s
                 ON s.carrier_id = c.id AND s.deleted_at IS NULL
@@ -167,6 +194,11 @@ export class CarrierService {
       const bindsHealthy = Number(row.binds_healthy ?? 0);
       const bindsUnobserved = Number(row.binds_unobserved ?? 0);
       const capacityTps = row.capacity_tps === null ? null : Number(row.capacity_tps);
+      // Postgres returns SUM() over zero rows as NULL, which is exactly the
+      // distinction wanted here: no bind sampled yet, rather than sampled at 0.
+      const numberOrNull = (value: unknown) =>
+        value === null || value === undefined ? null : Number(value);
+      const observedTps = numberOrNull(row.observed_tps);
       return {
         id: String(row.id),
         name: String(row.name),
@@ -184,11 +216,20 @@ export class CarrierService {
         queuedMessages: Number(row.queued_messages ?? 0),
         failedMessages: Number(row.failed_messages ?? 0),
         capacityTps,
-        // Observed throughput is per-bind and lives in snapshots, not in the
-        // bind-state row; the detail read joins it. Null here rather than 0,
-        // because "not computed in this projection" is not "zero traffic".
-        observedTps: null,
-        utilisation: null,
+        // Summed from the latest snapshot of each bind. NULL — not 0 — when no
+        // bind has ever been sampled: "we have never looked" and "there is no
+        // traffic" are different claims and the console renders them
+        // differently.
+        observedTps,
+        observedTpsIn: numberOrNull(row.observed_tps_in),
+        // Only a ratio when both halves are real. A utilisation computed
+        // against a null numerator would read as 0% — a carrier at rest —
+        // when the truth is that nothing was measured.
+        utilisation:
+          observedTps !== null && capacityTps !== null && capacityTps > 0
+            ? observedTps / capacityTps
+            : null,
+        lastEvent: (row.last_event as string) ?? null,
         openAlerts: Number(row.open_alerts ?? 0),
       };
     });

@@ -29,6 +29,7 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
 import ObservabilityLimits from '../components/ObservabilityLimits.vue';
+import EventTimeline from '../components/EventTimeline.vue';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
@@ -60,6 +61,20 @@ function toneForTransition(entry: BindTransition): string {
   if (entry.toState === 'bound') return 'good';
   if (entry.toState === 'failed' || entry.toState === 'disconnected') return 'bad';
   if (entry.toState === null) return 'muted';
+  return 'warn';
+}
+
+/**
+ * The same judgement as {@link toneForTransition}, in the timeline's own
+ * vocabulary. `missing` is deliberately reachable: a transition recorded with
+ * no destination state is a gap in what we observed, and the design system
+ * draws that as a hollow dashed dot rather than letting it pass as a normal
+ * step.
+ */
+function timelineState(entry: BindTransition): 'ok' | 'warn' | 'error' | 'missing' {
+  if (entry.toState === 'bound') return 'ok';
+  if (entry.toState === 'failed' || entry.toState === 'disconnected') return 'error';
+  if (entry.toState === null) return 'missing';
   return 'warn';
 }
 
@@ -377,34 +392,28 @@ watch(engineId, load);
           </div>
         </header>
 
-        <div v-if="transitions.length" class="table-wrap">
-          <table data-testid="smsc-transitions">
-            <thead>
-              <tr>
-                <th scope="col">Observed</th>
-                <th scope="col">Kind</th>
-                <th scope="col">Transition</th>
-                <th scope="col">Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(entry, index) in transitions"
-                :key="`${entry.observedAt}-${index}`"
-                :data-testid="`smsc-transition-${index}`"
-              >
-                <td class="mono">{{ formatMoment(entry.observedAt) }}</td>
-                <td>
-                  <span class="status-badge" :class="toneForTransition(entry)">{{
-                    entry.kind
-                  }}</span>
-                </td>
-                <td class="mono">{{ describeTransition(entry) }}</td>
-                <td class="mono">{{ transitionDetail(entry) || '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <!--
+          A TIMELINE, NOT A TABLE.
+
+          This is the design system's treatment for bind history, and it is the
+          right one: a table invites you to read down a column, and the question
+          here is what happened in what order. The rail makes the sequence the
+          primary axis, and a flap — the thing this panel exists to diagnose —
+          shows up as a visible rhythm of dots rather than as repeated words in
+          a "Transition" column.
+        -->
+        <EventTimeline
+          v-if="transitions.length"
+          data-testid="smsc-transitions"
+          :items="
+            transitions.map((entry) => ({
+              at: formatMoment(entry.observedAt),
+              label: describeTransition(entry),
+              detail: transitionDetail(entry) || entry.kind,
+              state: timelineState(entry),
+            }))
+          "
+        />
         <p v-else class="chart-empty" data-testid="smsc-timeline-empty">
           No bind transition has been recorded for this connection. The history is kept forever, so
           an empty timeline means the poller has never seen this bind change state — not that older

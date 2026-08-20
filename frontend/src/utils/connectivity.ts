@@ -38,6 +38,10 @@ export interface CarrierSummary {
   capacityTps: number | null;
   observedTps: number | null;
   utilisation: number | null;
+  /** Latest inbound rate summed across the carrier's binds. */
+  observedTpsIn?: number | null;
+  /** Newest bind transition across the carrier's SMSCs — §4.1's last event. */
+  lastEvent?: string | null;
   openAlerts: number;
 }
 

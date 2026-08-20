@@ -476,8 +476,10 @@ onMounted(() => {
                 <th scope="col">Binds up</th>
                 <th scope="col">Queued</th>
                 <th scope="col">Failed</th>
+                <th scope="col">MT TPS</th>
                 <th scope="col">Utilisation</th>
                 <th scope="col">Open alerts</th>
+                <th scope="col">Last connectivity event</th>
                 <th scope="col">Status</th>
                 <th scope="col">Actions</th>
               </tr>
@@ -515,10 +517,19 @@ onMounted(() => {
                 </td>
                 <td class="mono">{{ displayValue(carrier.queuedMessages, carrierState) }}</td>
                 <td class="mono">{{ displayValue(carrier.failedMessages, carrierState) }}</td>
+                <!-- Summed from the latest snapshot of each bind. `unknown`,
+                     not 0, when no bind has ever been sampled: an unobserved
+                     carrier is not an idle one. -->
+                <td class="mono" :data-testid="`carrier-tps-${carrier.id}`">
+                  {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps.toFixed(1) }}
+                </td>
                 <td class="mono" :data-testid="`carrier-utilisation-${carrier.id}`">
                   {{ formatUtilisation(carrier.utilisation, carrierState) }}
                 </td>
                 <td class="mono">{{ displayValue(carrier.openAlerts, carrierState) }}</td>
+                <td class="mono" :data-testid="`carrier-last-event-${carrier.id}`">
+                  {{ carrier.lastEvent || 'no transitions recorded' }}
+                </td>
                 <td>
                   <span class="status-badge" :class="carrier.status === 'active' ? '' : 'warn'">{{
                     carrier.status
