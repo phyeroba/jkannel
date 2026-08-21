@@ -523,6 +523,34 @@ const definitions: Record<string, Workspace> = {
         value: (raw) =>
           text(raw.fallback_smsc_name ?? raw.fallbackSmscName ?? raw.fallback_smsc_id),
       },
+      {
+        /*
+         * The design system's "Alternatives" column: can this route go anywhere
+         * else if its target fails?
+         *
+         * Counted from the route's own record — a configured fallback plus any
+         * weighted targets. "none configured" is the answer that matters: a
+         * route with no alternative does not fail over, it queues, and that is
+         * worth seeing in the register rather than discovering during an
+         * incident.
+         *
+         * The kit also has an "Active target" column here. This grid
+         * deliberately does NOT rename its target to that: a manual override
+         * can be redirecting traffic somewhere else entirely, and this endpoint
+         * knows nothing about overrides. Failover is the screen that resolves
+         * the real active path, and calling a configured target "active" here
+         * would state something we cannot see.
+         */
+        header: 'Alternatives',
+        value: (raw) => {
+          const fallback = raw.fallback_smsc_name ?? raw.fallbackSmscName ?? raw.fallback_smsc_id;
+          const weighted = Array.isArray(raw.weighted_targets ?? raw.weightedTargets)
+            ? ((raw.weighted_targets ?? raw.weightedTargets) as unknown[]).length
+            : 0;
+          const count = (fallback ? 1 : 0) + weighted;
+          return count ? `${count} configured` : 'none configured';
+        },
+      },
       { header: 'Cost', value: (raw) => text(raw.cost), mono: true },
       {
         header: 'Window',
