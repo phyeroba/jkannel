@@ -483,6 +483,15 @@ export const navigation: NavigationItem[] = [
     permission: 'monitoring.view',
     group: 'System',
   },
+  // Directly after Logs & Audit: that screen shows the trail, this one answers
+  // whether the trail can be trusted.
+  {
+    label: 'Data Integrity',
+    to: '/data-integrity',
+    icon: 'db',
+    permission: 'system.view',
+    group: 'System',
+  },
   {
     label: 'Log Explorer',
     to: '/log-explorer',

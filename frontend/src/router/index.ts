@@ -301,6 +301,21 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // The audit trail carries a tamper-evidence chain and nothing in the
+    // console could verify it. An audit trail nobody can check is a record you
+    // are asked to take on trust, which is the opposite of what it is for.
+    path: '/data-integrity',
+    name: 'data-integrity',
+    component: () => import('../views/DataIntegrityView.vue'),
+    meta: {
+      title: 'Data Integrity',
+      description:
+        'Verify the audit trail’s tamper-evidence chain, see what retention is archiving and pruning per table, and exercise the platform’s optimistic-locking conventions.',
+      breadcrumb: ['System', 'Data Integrity'],
+      permission: 'system.view',
+    },
+  },
+  {
     // Held sends could be created and then neither seen, cancelled nor moved
     // from the console — the only way to stop one was to call the API by hand,
     // against a deadline.

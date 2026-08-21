@@ -397,7 +397,7 @@
   },
   {
     "route": "/services",
-    "chars": 3386,
+    "chars": 3388,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -409,7 +409,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1992,
+    "chars": 1988,
     "panels": 4,
     "errorState": false,
     "partial": true,
@@ -445,7 +445,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8674,
+    "chars": 8806,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -456,8 +456,20 @@
     "failedRequests": []
   },
   {
+    "route": "/data-integrity",
+    "chars": 1728,
+    "panels": 5,
+    "errorState": false,
+    "partial": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
     "route": "/log-explorer",
-    "chars": 15303,
+    "chars": 15543,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -541,7 +553,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 9345,
+    "chars": 9107,
     "panels": 2,
     "errorState": false,
     "partial": false,
