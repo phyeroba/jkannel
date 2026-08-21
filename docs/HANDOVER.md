@@ -1,6 +1,6 @@
 # JKANNEL — design-system implementation handover
 
-**Last updated:** 2026-08-20 · **Production:** `f315fb7` · **main:** `7552594`
+**Last updated:** 2026-08-21 · **Production:** `8fe99e5` · **main:** `8fe99e5`
 
 Read this first, then run the three tools in §3. Everything needed to continue is
 here; nothing has to be rediscovered.
@@ -27,20 +27,24 @@ That is what `kit-shots.mjs` now does automatically.
 
 | Metric | At start | Now |
 |---|---|---|
-| Panels absent | 36 | **27** |
-| Columns absent | 74 | **59** |
-| Primitives absent | 25 | **18** |
+| Panels absent | 36 | **24** |
+| Columns absent | 74 | **45** |
+| Primitives absent | 25 | **15** |
 
-**Screens that fully `[MATCHES]`:** LoginScreen, SmscsScreen, SessionsScreen.
+**Screens that fully `[MATCHES]`:** LoginScreen, SmscsScreen, SessionsScreen, QueuesScreen.
 
 **Substantially done:** Dashboard (Traffic chart + Queue pressure + carrier
 connectivity + stale banner), Carriers (MT TPS / utilisation / last event),
 Carrier Detail (recent events + open alerts + last event + stale banner),
 SMSC Detail (bind history as Timeline), DLR Performance (P50/P95/P99).
 
-**Not started:** Test Tools (5 panels — largest single gap), Queues, Failover,
-Routes, Engine Config, Performance, Traffic, Alerts, Trace, Events, Logs, Audit,
-Users, Services, Nodes, Simulator, SMPP Errors, Service Detail.
+**Also substantially done:** Queues (per-destination register with real growth +
+recovery history), Failover (transition history + headroom), Engine Config
+(read-only banner + directive ownership).
+
+**Not started:** Test Tools (5 panels — largest single gap), Routes (2 panels),
+Performance (2), Traffic, Alerts, Trace, Events, Logs, Audit, Users, Services,
+Nodes, Simulator, SMPP Errors, Service Detail.
 
 ### Shared primitives — all built, ready to reuse
 - `components/EventTimeline.vue` — the design's Timeline. `missing` state renders
@@ -187,14 +191,16 @@ role, so role-by-role review is not possible without creating some.
 
 Take these five, in this order — every one uses a pattern already proven:
 
-1. **Queues** — `Recovery progress` panel (Timeline) + Destination/Depth/Ingress/
-   Egress/Growth from `smsc_bind_snapshots`. Retries and Expired are not measured.
-2. **Failover** — `Transition history` panel (Timeline); Active target / used-vs-
-   capacity / headroom from routes + snapshots.
-3. **Routes** — `Carrier routes` and `Continuity` panels.
-4. **Engine Config** — `Generated configuration` and `Who owns each directive`.
-5. **Test Tools** — 5 panels, the largest remaining gap. Needs `Tabs` and
-   `ConfirmAction` primitives.
+1. **Test Tools** — 5 panels, the largest remaining gap. Needs `Tabs`; the
+   `ConfirmAction` component already exists.
+2. **Routes** — `Carrier routes` and `Continuity` panels, plus Active target /
+   Alternatives / Last transition / Used-vs-capacity. Same sources as Failover.
+3. **Engine Config** — only `Generated configuration` remains; it needs the
+   DEPLOYED config content, not the draft the composer holds.
+4. **Performance** — `Gateway latency` and `Capacity` panels.
+5. **Traffic** — `Traffic matrix`. Note LiveTrafficView has no server-side time
+   series, only browser-tracked peaks, so a matrix would have to be invented —
+   check this one before building.
 
 **Working rhythm that has held up:** read the kit screen's JSX → check the
 feasibility table in §4 → build only what has data → `screen-diff` to confirm →
