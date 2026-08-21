@@ -301,6 +301,38 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Held sends could be created and then neither seen, cancelled nor moved
+    // from the console — the only way to stop one was to call the API by hand,
+    // against a deadline.
+    path: '/scheduled-sends',
+    name: 'scheduled-sends',
+    component: () => import('../views/ScheduledSendsView.vue'),
+    meta: {
+      title: 'Scheduled Sends',
+      description:
+        'Messages held for a future instant, soonest first, with the two things you can still do to one — cancel it or move it — offered only while it can actually be stopped.',
+      breadcrumb: ['Messaging', 'Scheduled Sends'],
+      permission: 'messages.view',
+    },
+  },
+  {
+    // The blacklist / whitelist / DND lists the send path has consulted since
+    // migration 032, with no screen anywhere that could say a number was on
+    // one. A blocked destination produces no receipt and no trace, so its
+    // symptom is "the message vanished" — which is a poor thing to have no
+    // answer for.
+    path: '/recipient-policy',
+    name: 'recipient-policy',
+    component: () => import('../views/RecipientPolicyView.vue'),
+    meta: {
+      title: 'Recipient Policy',
+      description:
+        'The blacklist, whitelist and DND lists the send path evaluates before choosing a route, and a check that answers whether one destination would be accepted right now.',
+      breadcrumb: ['Messaging', 'Recipient Policy'],
+      permission: 'messages.view',
+    },
+  },
+  {
     // Nine delivery-retry operations with no surface: retrying could be switched
     // on, tuned and swept only by calling the API, so nobody using the console
     // could see whether it was on or what it had done. Retrying spends a

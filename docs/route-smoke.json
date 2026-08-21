@@ -85,7 +85,7 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2474,
+    "chars": 2481,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -97,7 +97,7 @@
   },
   {
     "route": "/queues",
-    "chars": 2227,
+    "chars": 2229,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -121,7 +121,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4298,
+    "chars": 4299,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -171,6 +171,30 @@
     "route": "/content-rules",
     "chars": 2518,
     "panels": 3,
+    "errorState": false,
+    "partial": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
+    "route": "/recipient-policy",
+    "chars": 1250,
+    "panels": 3,
+    "errorState": false,
+    "partial": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
+    "route": "/scheduled-sends",
+    "chars": 1111,
+    "panels": 2,
     "errorState": false,
     "partial": false,
     "denied": false,
@@ -289,7 +313,7 @@
   },
   {
     "route": "/smpp-errors",
-    "chars": 5395,
+    "chars": 5401,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -373,7 +397,7 @@
   },
   {
     "route": "/services",
-    "chars": 3384,
+    "chars": 3386,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -397,7 +421,7 @@
   },
   {
     "route": "/performance",
-    "chars": 2129,
+    "chars": 2135,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -409,7 +433,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3457,
+    "chars": 3456,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -421,7 +445,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8713,
+    "chars": 8674,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -433,7 +457,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 15336,
+    "chars": 15303,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -517,7 +541,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 9499,
+    "chars": 9345,
     "panels": 2,
     "errorState": false,
     "partial": false,
