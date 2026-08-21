@@ -252,9 +252,13 @@ describe('tagged test sends', () => {
 
   it('does not let an empty register read as "no test has ever been run"', async () => {
     const { wrapper } = await mountView({ sends: [] });
-    expect(wrapper.get('[data-testid="sends-state"]').text()).toContain(
-      'no caller has used it, not that no test has ever been run',
-    );
+    // The screen now has a control that tags, so the copy names it — but it
+    // must still keep the two meanings apart: nothing tagged from here is not
+    // the same as nothing ever tested, because an API caller can submit
+    // without tagging and will never appear in this list.
+    const text = wrapper.get('[data-testid="sends-state"]').text();
+    expect(text).toContain('no test has been sent from here');
+    expect(text).toContain('will not appear either');
   });
 
   it('states the permission rather than showing an empty table', async () => {
