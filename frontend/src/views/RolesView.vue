@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import TabStrip from '../components/TabStrip.vue';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -379,6 +380,20 @@ const filteredGroups = computed(() => {
     .filter((group) => group.codes.length);
 });
 
+/**
+ * The two questions this screen answers, as tabs.
+ *
+ * Counts are on the tabs because they are the cheap orientation: how many roles
+ * exist, how many distinct permissions the catalogue holds. Both are already
+ * loaded, so neither costs a request.
+ */
+const tab = ref('roles');
+
+const ROLE_TABS = computed(() => [
+  { id: 'roles', label: 'Roles', count: roles.value.length },
+  { id: 'matrix', label: 'Capability matrix', count: catalogue.value.length || null },
+]);
+
 onMounted(() => {
   void loadRoles();
   void loadUsers();
@@ -393,8 +408,29 @@ onMounted(() => {
       requires the users.manage permission.
     </p>
 
+    <!--
+      Two questions, two tabs. "Which roles exist and who holds them" and "which
+      role may do what" are asked at different moments — the first when adding
+      somebody, the second during an access review — and stacking them meant
+      scrolling past a fourteen-column matrix to reach the role you came to edit.
+    -->
+    <TabStrip
+      v-model="tab"
+      :tabs="ROLE_TABS"
+      label="Roles and capabilities"
+      testid="roles-tab"
+      class="roles-tabs"
+    />
+
     <!-- Roles ----------------------------------------------------------------- -->
-    <section class="panel" data-testid="roles-panel" aria-label="Roles">
+    <section
+      v-show="tab === 'roles'"
+      id="roles-tab-panel-roles"
+      role="tabpanel"
+      aria-labelledby="roles-tab-roles"
+      class="panel"
+      data-testid="roles-panel"
+    >
       <header class="panel-header">
         <div>
           <h2>Roles</h2>
@@ -570,8 +606,8 @@ onMounted(() => {
           <thead>
             <tr>
               <th scope="col">Role</th>
-              <th scope="col">Description</th>
-              <th scope="col">Permissions</th>
+              <th scope="col">Primary goals</th>
+              <th scope="col">Typical privileges</th>
               <th scope="col">Users</th>
               <th scope="col">Members</th>
               <th v-if="canManageUsers" scope="col">Actions</th>
@@ -662,13 +698,27 @@ onMounted(() => {
       </p>
     </section>
 
-    <!-- Permission matrix ------------------------------------------------------ -->
-    <section class="panel" data-testid="permission-matrix-panel" aria-label="Permission matrix">
+    <!-- Capability matrix ------------------------------------------------------ -->
+    <section
+      v-show="tab === 'matrix'"
+      id="roles-tab-panel-matrix"
+      role="tabpanel"
+      aria-labelledby="roles-tab-matrix"
+      class="panel"
+      data-testid="permission-matrix-panel"
+    >
       <header class="panel-header">
         <div>
-          <h2>Permission matrix</h2>
+          <!--
+            The design calls this the Capability matrix, and its question is the
+            same one: which role may perform each action. Ours is built from the
+            live permission catalogue rather than a designed list of personas,
+            so it cannot fall out of step with what the API actually enforces.
+          -->
+          <h2>Capability matrix</h2>
           <p>
-            Every permission in the catalogue, against the roles that grant it.
+            Which role may perform each operational action — every permission in the catalogue,
+            against the roles that grant it.
             {{
               catalogueState === 'ok'
                 ? `${catalogue.length} code(s) in the catalogue.`
