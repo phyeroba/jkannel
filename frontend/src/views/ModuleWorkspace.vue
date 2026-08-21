@@ -11,6 +11,57 @@ import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import ScopePicker from '../components/ScopePicker.vue';
+
+/**
+ * Which operational object owns each engine directive.
+ *
+ * The generated Kannel config is read-only on purpose — it is rendered from the
+ * SMSC and service records — so "edit the object, not the file" is the rule.
+ * That rule is only actionable if an operator can see WHICH object, which is
+ * what this table is for.
+ *
+ * Transcribed from `backend/src/configuration/configuration-model.builder.ts`,
+ * which is the thing that actually decides. Credentials are listed deliberately
+ * so their row can say "never edited here": they resolve from the engine
+ * container's environment and are never rendered into a file or sent to a
+ * browser.
+ */
+const DIRECTIVE_OWNERS: Array<{
+  directive: string;
+  owner: string;
+  where: string;
+  to?: string;
+}> = [
+  {
+    directive: 'smsc-id, host, port, transceiver-mode',
+    owner: 'The SMSC record',
+    where: 'Connectivity → SMSC Connections',
+    to: '/smsc',
+  },
+  {
+    directive: 'throughput, max-pending-submits',
+    owner: 'The capacity ceiling on the SMSC',
+    where: 'Connectivity → SMSC Connections',
+    to: '/smsc',
+  },
+  {
+    directive: 'smsc-username, smsc-password',
+    owner: 'A secret reference resolved inside the engine container',
+    where: 'never edited here — the value never reaches a browser',
+  },
+  {
+    directive: 'group = smsbox, sendsms-port',
+    owner: 'Service topology',
+    where: 'System → Services',
+    to: '/services',
+  },
+  {
+    directive: 'dlr-storage',
+    owner: 'DLR datastore selection',
+    where: 'System → Services',
+    to: '/services',
+  },
+];
 import DetailDrawer from '../components/DetailDrawer.vue';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
@@ -3975,6 +4026,21 @@ onUnmounted(() => {
       </button>
     </section>
 
+    <!--
+      The design system puts this above Engine Configuration, and it is the
+      framing the whole screen depends on: what is rendered here is generated
+      from the operational objects, so editing it is not how anything changes.
+      The ownership table below says where to go instead.
+    -->
+    <p
+      v-if="key === 'configuration' && !error"
+      class="stale-banner"
+      data-testid="configuration-readonly-banner"
+    >
+      Engineering diagnostics. This is the configuration the gateway generated from your operational
+      objects — read-only on purpose. Change the object, not the file.
+    </p>
+
     <section
       v-if="key === 'configuration' && !error"
       class="panel help-box"
@@ -5443,6 +5509,54 @@ onUnmounted(() => {
         <p v-if="driftResult.note" class="source-note">{{ text(driftResult.note) }}</p>
       </template>
       <p v-else class="form-hint">Loading drift status…</p>
+    </section>
+
+    <section
+      v-if="key === 'configuration' && !error"
+      class="panel"
+      data-testid="configuration-owners"
+      aria-label="Directive ownership"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Who owns each directive</h2>
+          <p>Where to make the change instead of editing the generated file</p>
+        </div>
+      </header>
+      <!--
+        The design system's EngineConfigScreen panel, and the most useful thing
+        on this screen: the generated config is read-only, so an operator who
+        needs a directive changed has to know which OBJECT owns it. Without
+        this the honest answer "edit the object, not the file" is unactionable —
+        it says what not to do and not where to go.
+
+        Static because ownership is a property of the generator, not of a
+        deployment. It changes when configuration-model.builder.ts changes, and
+        that is a code change, not data.
+      -->
+      <div class="table-wrap">
+        <table data-testid="directive-owners">
+          <thead>
+            <tr>
+              <th scope="col">Directive</th>
+              <th scope="col">Owned by</th>
+              <th scope="col">Change it in</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in DIRECTIVE_OWNERS" :key="row.directive">
+              <td class="mono">{{ row.directive }}</td>
+              <td>{{ row.owner }}</td>
+              <td>
+                <RouterLink v-if="row.to" class="text-link" :to="row.to">{{
+                  row.where
+                }}</RouterLink>
+                <span v-else class="cell-health">{{ row.where }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section
