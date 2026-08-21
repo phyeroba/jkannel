@@ -111,7 +111,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4296,
+    "chars": 4298,
     "panels": 6,
     "errorState": false,
     "denied": false,
@@ -199,7 +199,7 @@
   },
   {
     "route": "/routing",
-    "chars": 683,
+    "chars": 696,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -342,7 +342,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1602,
+    "chars": 1604,
     "panels": 3,
     "errorState": true,
     "denied": false,
@@ -353,7 +353,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3462,
+    "chars": 3461,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -364,7 +364,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 7392,
+    "chars": 7411,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -375,7 +375,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 13251,
+    "chars": 13194,
     "panels": 3,
     "errorState": false,
     "denied": false,
