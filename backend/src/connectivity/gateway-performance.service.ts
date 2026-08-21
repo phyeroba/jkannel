@@ -121,14 +121,25 @@ export class GatewayPerformanceService {
     return { windowMinutes, bucketSeconds };
   }
 
-  async throughput(actor: Actor, minutes: unknown): Promise<ThroughputSeries> {
+  /**
+   * @param carrierId Restrict every figure to one carrier's connections. The
+   *   Carrier Detail screen asks the same question about a subset, and giving
+   *   it its own endpoint would mean a second implementation of the per-poll
+   *   summing rule that this one is careful about.
+   */
+  async throughput(
+    actor: Actor,
+    minutes: unknown,
+    carrierId?: string | null,
+  ): Promise<ThroughputSeries> {
     const { windowMinutes, bucketSeconds } = GatewayPerformanceService.resolveWindow(minutes);
+    const carrier = typeof carrierId === 'string' && carrierId.trim() ? carrierId.trim() : null;
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const since = new Date(Date.now() - windowMinutes * 60_000);
       const [points, sampling, ceiling] = await Promise.all([
-        this.series(client, since, bucketSeconds),
-        this.sampling(client, since),
-        this.ceiling(client),
+        this.series(client, since, bucketSeconds, carrier),
+        this.sampling(client, since, carrier),
+        this.ceiling(client, carrier),
       ]);
       const peakOutbound = points.length
         ? Math.max(...points.map((point) => point.peakOutbound))
@@ -160,18 +171,36 @@ export class GatewayPerformanceService {
    * tenant, so no tenant predicate is spelled out here; adding one would imply
    * the policy could not be relied on, which would be the more dangerous claim.
    */
+  /**
+   * Restricts a snapshot scan to one carrier's connections, or to all of them.
+   *
+   * A subquery on `smsc_definitions` rather than a join, for the same reason
+   * the register uses correlated subqueries: joining a per-poll history table
+   * to its definitions multiplies nothing here, but the predicate reads as what
+   * it is — a membership test — and cannot accidentally change the grouping.
+   */
+  private carrierPredicate(carrierId: string | null, position: number): string {
+    return carrierId
+      ? ` AND smsc_id IN (SELECT id FROM smsc_definitions
+                           WHERE carrier_id = $${position}::uuid AND deleted_at IS NULL)`
+      : '';
+  }
+
   private async series(
     client: PoolClient,
     since: Date,
     bucketSeconds: number,
+    carrierId: string | null,
   ): Promise<ThroughputPoint[]> {
+    const params: unknown[] = [since, bucketSeconds];
+    if (carrierId) params.push(carrierId);
     const result = await client.query(
       `WITH per_poll AS (
          SELECT observed_at,
                 SUM(outbound_rate) AS outbound,
                 SUM(inbound_rate)  AS inbound
            FROM smsc_bind_snapshots
-          WHERE observed_at >= $1
+          WHERE observed_at >= $1${this.carrierPredicate(carrierId, 3)}
           GROUP BY observed_at
        )
        SELECT to_timestamp(floor(extract(epoch FROM observed_at) / $2) * $2) AS bucket_at,
@@ -182,7 +211,7 @@ export class GatewayPerformanceService {
          FROM per_poll
         GROUP BY 1
         ORDER BY 1`,
-      [since, bucketSeconds],
+      params,
     );
     return result.rows.map((row) => ({
       at: new Date(String(row.bucket_at)).toISOString(),
@@ -201,12 +230,14 @@ export class GatewayPerformanceService {
    * something is wrong — a wedged engine, a cycle overrunning its interval. The
    * measured figure is the one worth showing on a screen about performance.
    */
-  private async sampling(client: PoolClient, since: Date) {
+  private async sampling(client: PoolClient, since: Date, carrierId: string | null) {
+    const params: unknown[] = [since];
+    if (carrierId) params.push(carrierId);
     const result = await client.query(
       `WITH per_poll AS (
          SELECT observed_at, SUM(outbound_rate) AS outbound
            FROM smsc_bind_snapshots
-          WHERE observed_at >= $1
+          WHERE observed_at >= $1${this.carrierPredicate(carrierId, 2)}
           GROUP BY observed_at
        ), gaps AS (
          SELECT extract(epoch FROM observed_at - lag(observed_at) OVER (ORDER BY observed_at)) AS gap
@@ -217,7 +248,7 @@ export class GatewayPerformanceService {
                  FROM gaps WHERE gap IS NOT NULL) AS median_gap,
               (SELECT max(observed_at) FROM per_poll) AS last_at,
               (SELECT outbound FROM per_poll ORDER BY observed_at DESC LIMIT 1) AS latest_outbound`,
-      [since],
+      params,
     );
     const row = result.rows[0] ?? {};
     const lastAt = row.last_at ? new Date(String(row.last_at)) : null;
@@ -245,7 +276,9 @@ export class GatewayPerformanceService {
    * Disabled connections are excluded: their capacity is not available to
    * carry today's traffic, and counting it would understate utilisation.
    */
-  private async ceiling(client: PoolClient): Promise<GatewayCeiling> {
+  private async ceiling(client: PoolClient, carrierId: string | null): Promise<GatewayCeiling> {
+    const params: unknown[] = [];
+    if (carrierId) params.push(carrierId);
     const result = await client.query(
       `SELECT COALESCE(SUM(tps * GREATEST(COALESCE(connection_count, 1), 1))
                 FILTER (WHERE tps IS NOT NULL), 0)::float8 AS effective_tps,
@@ -253,7 +286,10 @@ export class GatewayPerformanceService {
               count(*) FILTER (WHERE tps IS NULL)::int      AS without_ceiling,
               COALESCE(SUM(GREATEST(COALESCE(connection_count, 1), 1)), 0)::int AS connections
          FROM smsc_definitions
-        WHERE enabled = true`,
+        WHERE enabled = true AND deleted_at IS NULL${
+          carrierId ? ' AND carrier_id = $1::uuid' : ''
+        }`,
+      params,
     );
     const row = result.rows[0] ?? {};
     const withCeiling = Number(row.with_ceiling ?? 0);

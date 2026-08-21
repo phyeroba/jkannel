@@ -43,6 +43,12 @@ import {
   type CarrierSummary,
   type UnassignedSmsc,
 } from '../utils/connectivity';
+import {
+  formatLatency,
+  formatShare,
+  type BindQuality,
+  type DlrPerformanceReport,
+} from '../utils/traffic';
 
 const canManage = computed(() => canAccess(session.value, 'smsc.manage'));
 
@@ -111,6 +117,55 @@ async function loadCarriers() {
     carrierError.value = messageFrom(reason, 'The carrier register could not be loaded.');
     carrierState.value = failureState(reason);
   }
+}
+
+/* --- DELIVERY QUALITY --------------------------------------------------------
+ *
+ * Delivery rate and receipt latency come from the DLR report rather than from
+ * the carrier register, because they are a property of MESSAGES and the
+ * register is a property of CONNECTIONS. One endpoint already computes them
+ * per carrier over an explicit window, correlating MT to receipt on foreign_id
+ * and taking percentiles per carrier — copying that into the carrier query
+ * would mean two implementations of a correlation that has already been got
+ * wrong once.
+ *
+ * It is a second request and it is allowed to fail on its own. `reports.view`
+ * is a different permission from `smsc.view`, so an operator who can see the
+ * register may legitimately not be able to see delivery quality; when that
+ * happens the two columns say "not permitted" and the rest of the register is
+ * unaffected.
+ */
+const DELIVERY_WINDOW_HOURS = 24;
+
+const deliveryByCarrier = ref<Record<string, BindQuality>>({});
+const deliveryState = ref<State>('loading');
+const deliveryDenied = ref(false);
+
+async function loadDelivery() {
+  deliveryState.value = 'loading';
+  const to = new Date();
+  const from = new Date(to.getTime() - DELIVERY_WINDOW_HOURS * 3_600_000);
+  const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+  try {
+    const report = await apiRequest<DlrPerformanceReport>(
+      `/reports/dlr-performance?${params.toString()}`,
+    );
+    const map: Record<string, BindQuality> = {};
+    for (const row of report?.byCarrier ?? []) if (row.carrierId) map[row.carrierId] = row;
+    deliveryByCarrier.value = map;
+    deliveryDenied.value = false;
+    // `partial` when the store could not be read: the carrier rows are still
+    // real, so the register must not be blanked over a secondary failure.
+    deliveryState.value = report?.available === false ? 'partial' : 'live';
+  } catch (reason) {
+    deliveryByCarrier.value = {};
+    deliveryDenied.value = reason instanceof ApiError && reason.status === 403;
+    deliveryState.value = deliveryDenied.value ? 'permission-denied' : 'error';
+  }
+}
+
+function qualityFor(carrierId: string): BindQuality | null {
+  return deliveryByCarrier.value[carrierId] ?? null;
 }
 
 // --- Unassigned SMSCs ----------------------------------------------------------
@@ -263,6 +318,7 @@ async function confirmDelete() {
 onMounted(() => {
   void loadCarriers();
   void loadUnassigned();
+  void loadDelivery();
 });
 </script>
 
@@ -473,11 +529,14 @@ onMounted(() => {
                 <th scope="col">Market</th>
                 <th scope="col">Health</th>
                 <th scope="col">SMSCs</th>
+                <th scope="col">Sessions</th>
                 <th scope="col">Binds up</th>
                 <th scope="col">Queued</th>
                 <th scope="col">Failed</th>
                 <th scope="col">MT TPS</th>
                 <th scope="col">Utilisation</th>
+                <th scope="col">Delivery</th>
+                <th scope="col">P95 DLR</th>
                 <th scope="col">Open alerts</th>
                 <th scope="col">Last connectivity event</th>
                 <th scope="col">Status</th>
@@ -508,6 +567,16 @@ onMounted(() => {
                   >
                 </td>
                 <td class="mono">{{ displayValue(carrier.smscCount, carrierState) }}</td>
+                <!--
+                  Configured, not observed. `instances = N` forks N SMPP
+                  sessions behind one smsc-id and the engine reports them as
+                  one, so this is what we asked for rather than what is up. The
+                  Binds up column beside it is the observed half.
+                -->
+                <td class="mono" :data-testid="`carrier-sessions-${carrier.id}`">
+                  {{ displayValue(carrier.configuredSessions, carrierState) }}
+                  <small class="row-id">configured</small>
+                </td>
                 <td class="mono" :data-testid="`carrier-binds-${carrier.id}`">
                   {{ displayValue(carrier.bindsHealthy, carrierState) }} /
                   {{ displayValue(carrier.bindsTotal, carrierState) }}
@@ -525,6 +594,24 @@ onMounted(() => {
                 </td>
                 <td class="mono" :data-testid="`carrier-utilisation-${carrier.id}`">
                   {{ formatUtilisation(carrier.utilisation, carrierState) }}
+                </td>
+                <!--
+                  Delivery quality over the last 24 hours, from the DLR report.
+                  "not permitted" rather than an em dash when the operator lacks
+                  reports.view: they must be able to tell a permission boundary
+                  from a carrier that delivered nothing.
+                -->
+                <td class="mono" :data-testid="`carrier-delivery-${carrier.id}`">
+                  <template v-if="deliveryDenied">not permitted</template>
+                  <template v-else>{{
+                    formatShare(qualityFor(carrier.id)?.quality.deliveryRate ?? null, deliveryState)
+                  }}</template>
+                </td>
+                <td class="mono" :data-testid="`carrier-p95-${carrier.id}`">
+                  <template v-if="deliveryDenied">not permitted</template>
+                  <template v-else>{{
+                    formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                  }}</template>
                 </td>
                 <td class="mono">{{ displayValue(carrier.openAlerts, carrierState) }}</td>
                 <td class="mono" :data-testid="`carrier-last-event-${carrier.id}`">
@@ -558,7 +645,7 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="!visibleCarriers.length">
-                <td colspan="11" class="empty-cell" data-testid="carriers-filtered-empty">
+                <td colspan="14" class="empty-cell" data-testid="carriers-filtered-empty">
                   No carrier matches this search or health filter. {{ carriers.length }} carrier(s)
                   are in the register.
                 </td>

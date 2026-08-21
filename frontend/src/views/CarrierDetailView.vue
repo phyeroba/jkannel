@@ -25,6 +25,7 @@ import { ApiError, apiRequest } from '../api';
 import { canAccess, session } from '../stores/session';
 import DataState from '../components/DataState.vue';
 import EventTimeline from '../components/EventTimeline.vue';
+import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
@@ -159,6 +160,99 @@ async function loadAlerts() {
   }
 }
 
+/* --- TRAFFIC AND QUALITY -----------------------------------------------------
+ *
+ * The same throughput endpoint the Performance screen uses, narrowed to this
+ * carrier's connections. Six hours: long enough that an incident reported "this
+ * morning" is on the chart, short enough that the bucket stays fine.
+ */
+const TRAFFIC_WINDOW_MINUTES = 360;
+
+const trafficPoints = ref<{ at: string; outbound: number; inbound: number }[]>([]);
+const trafficState = ref<State>('loading');
+
+const trafficSeries = computed<ChartSeries[]>(() => [
+  { label: 'MT submitted (/s)', values: trafficPoints.value.map((point) => point.outbound) },
+  { label: 'MO received (/s)', values: trafficPoints.value.map((point) => point.inbound) },
+]);
+
+const trafficLabels = computed(() =>
+  trafficPoints.value.map((point) => {
+    const at = new Date(point.at);
+    return Number.isNaN(at.getTime())
+      ? point.at
+      : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }),
+);
+
+async function loadTraffic() {
+  trafficState.value = 'loading';
+  try {
+    const result = await apiRequest<{ points?: { at: string; outbound: number; inbound: number }[] }>(
+      `/performance/throughput?minutes=${TRAFFIC_WINDOW_MINUTES}&carrierId=${encodeURIComponent(carrierId.value)}`,
+    );
+    trafficPoints.value = Array.isArray(result?.points) ? result.points : [];
+    trafficState.value = trafficPoints.value.length ? 'live' : 'empty';
+  } catch (reason) {
+    trafficPoints.value = [];
+    trafficState.value = failureState(reason);
+  }
+}
+
+/* --- WHAT CHANGED ------------------------------------------------------------
+ *
+ * Audit entries touching this carrier or any connection filed under it.
+ *
+ * `audit_log` has no carrier column — it records the entity that was changed —
+ * so membership is resolved against the connections already loaded for this
+ * page. Filtering here rather than asking the API for each entity in turn: a
+ * carrier with a dozen connections would otherwise issue a dozen requests to
+ * paint one panel.
+ */
+interface CarrierChange {
+  id: string;
+  action: string;
+  summary: string;
+  when: string;
+  actor: string;
+}
+
+const carrierChanges = ref<CarrierChange[]>([]);
+const changesState = ref<State>('loading');
+
+async function loadChanges() {
+  changesState.value = 'loading';
+  try {
+    const page = await apiRequest<{ items?: Record<string, unknown>[] }>(
+      '/audit-events?limit=200&offset=0&sort=-createdAt',
+    );
+    const mine = new Set<string>([carrierId.value, ...members.value.map((member) => member.id)]);
+    for (const member of members.value) mine.add(member.engineId);
+    const rows = (Array.isArray(page?.items) ? page.items : []).filter((row) =>
+      mine.has(String(row.entity_id ?? row.entityId ?? '')),
+    );
+    carrierChanges.value = rows.slice(0, 12).map((row) => {
+      const actor = String(row.actor_id ?? row.actorId ?? '').trim();
+      const at = String(row.created_at ?? row.createdAt ?? '');
+      const parsed = Date.parse(at);
+      return {
+        id: String(row.id ?? `${at}-${row.action}`),
+        action: String(row.action ?? 'change'),
+        summary: String(
+          row.reason ??
+            `on ${String(row.entity_type ?? row.entityType ?? 'this carrier')} ${String(row.entity_id ?? row.entityId ?? '')}`.trim(),
+        ),
+        when: Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : at,
+        actor: actor ? ` · ${actor}` : ' · actor not recorded',
+      };
+    });
+    changesState.value = carrierChanges.value.length ? 'live' : 'empty';
+  } catch (reason) {
+    carrierChanges.value = [];
+    changesState.value = failureState(reason);
+  }
+}
+
 async function loadMembers() {
   membersState.value = 'loading';
   membersMissed.value = [];
@@ -197,9 +291,12 @@ async function loadMembers() {
 }
 
 async function reload() {
-  await Promise.all([loadCarrier(), loadMembers()]);
-  // After members: an alert is matched to this carrier by its bind's engine id.
-  await loadAlerts();
+  // Traffic is keyed on the carrier id from the route, so it does not wait for
+  // the member list the way the alert and audit matching do.
+  await Promise.all([loadCarrier(), loadMembers(), loadTraffic()]);
+  // After members: an alert is matched to this carrier by its bind's engine id,
+  // and an audit entry by the entity id of the carrier or one of its bindings.
+  await Promise.all([loadAlerts(), loadChanges()]);
 }
 
 async function attach() {
@@ -581,8 +678,103 @@ watch(carrierId, reload);
           </p>
         </article>
       </section>
+
+      <section class="split-grid wide-left">
+        <!-- TRAFFIC AND QUALITY -------------------------------------------- -->
+        <article class="panel" data-testid="carrier-traffic" aria-labelledby="carrier-traffic-heading">
+          <header class="panel-header">
+            <div>
+              <h2 id="carrier-traffic-heading">Traffic and quality</h2>
+              <p>
+                This carrier's connections only, from the status poller's own per-bind samples over
+                the last {{ Math.round(TRAFFIC_WINDOW_MINUTES / 60) }} hours — so a drop reads
+                against the time an incident was reported.
+              </p>
+            </div>
+            <RouterLink class="text-button" to="/traffic">Open Live Traffic</RouterLink>
+          </header>
+          <MiniChart
+            v-if="trafficPoints.length"
+            type="area"
+            :series="trafficSeries"
+            :labels="trafficLabels"
+            title="MT and MO on this carrier"
+            :height="160"
+            data-testid="carrier-traffic-chart"
+          />
+          <p v-else class="chart-empty" data-testid="carrier-traffic-empty">
+            {{
+              trafficState === 'error'
+                ? 'Throughput for this carrier could not be read.'
+                : 'The poller has recorded no sample for this carrier in the window. That is an absence of observation, not an idle carrier.'
+            }}
+          </p>
+        </article>
+
+        <!-- WHAT CHANGED --------------------------------------------------- -->
+        <article class="panel" data-testid="carrier-changes" aria-labelledby="carrier-changes-heading">
+          <header class="panel-header">
+            <div>
+              <h2 id="carrier-changes-heading">What changed</h2>
+              <!--
+                The design's subtitle, and it is a promise about the source: every
+                line here is an audit_log row written in the same transaction as
+                the change it describes. Nothing is inferred from the shape of
+                the telemetry.
+              -->
+              <p>Stated, not inferred — audit entries for this carrier and its connections</p>
+            </div>
+          </header>
+          <ul v-if="carrierChanges.length" class="change-list" data-testid="carrier-change-list">
+            <li v-for="change in carrierChanges" :key="change.id">
+              <span class="change-dot" aria-hidden="true"></span>
+              <span>
+                <strong>{{ change.action }}</strong> {{ change.summary }}
+                <small class="row-id">{{ change.when }}{{ change.actor }}</small>
+              </span>
+            </li>
+          </ul>
+          <p v-else class="chart-empty" data-testid="carrier-changes-empty">
+            {{
+              changesState === 'permission-denied'
+                ? 'Reading the audit trail needs the monitoring.view permission.'
+                : changesState === 'error'
+                  ? 'The audit trail could not be read, so this panel cannot say whether anything changed.'
+                  : 'Nothing has been changed on this carrier or its connections in the retained audit window.'
+            }}
+          </p>
+        </article>
+      </section>
     </template>
   </div>
 </template>
 
+<style scoped>
+/* The design's "what changed" list: a small amber dot per line, because these
+   are changes somebody made rather than events that happened. */
+.change-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.change-list li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.change-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-top: 6px;
+}
+.change-list small {
+  display: block;
+}
+</style>
 <style src="./workspace-extras.css"></style>
