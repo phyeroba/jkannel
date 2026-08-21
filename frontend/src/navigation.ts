@@ -293,6 +293,23 @@ export const navigation: NavigationItem[] = [
     permission: 'messages.view',
     group: 'Messaging',
   },
+  // Beside Content Filtering because they are the two things that refuse a
+  // message before it is routed: that one judges the text, this one the
+  // recipient.
+  {
+    label: 'Recipient Policy',
+    to: '/recipient-policy',
+    icon: 'shield',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
+  {
+    label: 'Scheduled Sends',
+    to: '/scheduled-sends',
+    icon: 'clock',
+    permission: 'messages.view',
+    group: 'Messaging',
+  },
   {
     label: 'Inbound Routing',
     to: '/mo-routing',
