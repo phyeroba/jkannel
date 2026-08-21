@@ -1,6 +1,11 @@
 # JKANNEL — design-system implementation handover
 
-**Last updated:** 2026-08-21 · **Production:** `8fe99e5` · **main:** `8fe99e5`
+**Last updated:** 2026-08-21 · **Production:** `8fe99e5` · **main:** `6aeefb9`
+
+> **PRODUCTION DEPLOYS ARE PAUSED.** Peter asked on 2026-08-21 to hold at
+> `8fe99e5` until at least 15 more kit screens are done. Keep committing and
+> pushing to GitHub so nothing is lost and the work is reviewable — just do not
+> run `scripts/deploy.sh` until he says go.
 
 Read this first, then run the three tools in §3. Everything needed to continue is
 here; nothing has to be rediscovered.
@@ -28,7 +33,7 @@ That is what `kit-shots.mjs` now does automatically.
 | Metric | At start | Now |
 |---|---|---|
 | Panels absent | 36 | **24** |
-| Columns absent | 74 | **45** |
+| Columns absent | 74 | **43** |
 | Primitives absent | 25 | **15** |
 
 **Screens that fully `[MATCHES]`:** LoginScreen, SmscsScreen, SessionsScreen, QueuesScreen.
