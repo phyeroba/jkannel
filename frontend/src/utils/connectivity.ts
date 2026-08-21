@@ -38,6 +38,12 @@ export interface CarrierSummary {
   capacityTps: number | null;
   observedTps: number | null;
   utilisation: number | null;
+  /**
+   * SMPP sessions configured across the carrier's enabled connections
+   * (`instances = N`, summed). Configuration, never an observation — the engine
+   * collapses all N behind one smsc-id and cannot say how many are up.
+   */
+  configuredSessions: number;
   /** Latest inbound rate summed across the carrier's binds. */
   observedTpsIn?: number | null;
   /** Newest bind transition across the carrier's SMSCs — §4.1's last event. */

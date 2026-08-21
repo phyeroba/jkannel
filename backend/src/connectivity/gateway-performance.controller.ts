@@ -28,9 +28,19 @@ const actor = (request: Request) => ({
 export class GatewayPerformanceController {
   constructor(private readonly performance: GatewayPerformanceService) {}
 
+  /**
+   * `carrierId` narrows every figure to one carrier's connections, which is
+   * what Carrier Detail asks for. Same endpoint rather than a second one: the
+   * per-poll summing rule is subtle enough that two implementations of it would
+   * drift, and the only difference between the two questions is a predicate.
+   */
   @Get('throughput')
   @RequirePermissions('smsc.view')
-  throughput(@Req() r: Request, @Query('minutes') minutes?: string) {
-    return this.performance.throughput(actor(r), minutes);
+  throughput(
+    @Req() r: Request,
+    @Query('minutes') minutes?: string,
+    @Query('carrierId') carrierId?: string,
+  ) {
+    return this.performance.throughput(actor(r), minutes, carrierId);
   }
 }

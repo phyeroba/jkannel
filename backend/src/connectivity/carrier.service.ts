@@ -53,6 +53,15 @@ export interface CarrierSummary extends CarrierRow {
   capacityTps: number | null;
   observedTps: number | null;
   utilisation: number | null;
+  /**
+   * SMPP sessions configured across this carrier's enabled connections.
+   *
+   * Configuration, not observation. `instances = N` forks N sessions that all
+   * share one `smsc-id`, so the engine reports them as a single entry and can
+   * never say how many are established — which is why this is not called
+   * "sessions up" and why the console labels it as configured.
+   */
+  configuredSessions: number;
   openAlerts: number;
 }
 
@@ -145,6 +154,15 @@ export class CarrierService {
               COALESCE(sum(b.queued_count), 0)                                 AS queued_messages,
               COALESCE(sum(b.failed_count), 0)                                 AS failed_messages,
               sum(s.tps) FILTER (WHERE s.tps IS NOT NULL)                      AS capacity_tps,
+              -- SMPP sessions this carrier is CONFIGURED for: the instances
+              -- setting on each enabled connection, summed. Configuration and
+              -- not an observation, and the console labels it as such — the
+              -- engine collapses all N sessions behind one smsc-id and never
+              -- reports how many of them are actually established.
+              -- (No backticks in this comment: it sits inside a JS template
+              -- literal, and one would terminate the string.)
+              COALESCE(sum(GREATEST(COALESCE(s.connection_count, 1), 1))
+                FILTER (WHERE s.enabled), 0)                                    AS configured_sessions,
               (SELECT count(*) FROM alert_instances a
                 WHERE a.tenant_id = c.tenant_id AND a.resolved_at IS NULL
                   AND a.dedup_key = ANY(
@@ -229,6 +247,7 @@ export class CarrierService {
           observedTps !== null && capacityTps !== null && capacityTps > 0
             ? observedTps / capacityTps
             : null,
+        configuredSessions: Number(row.configured_sessions ?? 0),
         lastEvent: (row.last_event as string) ?? null,
         openAlerts: Number(row.open_alerts ?? 0),
       };
