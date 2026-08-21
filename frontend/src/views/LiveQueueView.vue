@@ -828,6 +828,54 @@ async function rerouteSelected() {
   }
 }
 
+/**
+ * Reprioritise the selected spool rows.
+ *
+ * The spool is drained in priority order, so raising one batch is how a stuck
+ * urgent message gets out ahead of a bulk campaign — without cancelling the
+ * campaign or rerouting anything.
+ *
+ * The same `skipped` caveat as reroute applies and is worded the same way: a
+ * healthy engine drains the spool in under a second, so a message handed over
+ * between loading the grid and pressing the button is expected rather than a
+ * fault. Priority applies to what is still waiting; it cannot recall what has
+ * gone.
+ */
+const reprioritiseTo = ref<number | null>(null);
+
+async function reprioritiseSelected() {
+  if (!canOperate.value || reprioritiseTo.value === null || !spoolSelection.value.length) return;
+  actionBusy.value = true;
+  spoolNotice.value = '';
+  spoolActionError.value = '';
+  spoolResults.value = [];
+  try {
+    const result = await apiRequest<Record<string, unknown>>(
+      '/queue-console/spool/reprioritize',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sqlIds: idPayload(spoolSelection.value),
+          priority: reprioritiseTo.value,
+        }),
+      },
+    );
+    const skipped = num(result.skipped);
+    spoolNotice.value =
+      `${num(result.reprioritized ?? result.updated)} of ${num(result.requested)} pending message(s) moved to ` +
+      `priority ${reprioritiseTo.value}.` +
+      (skipped
+        ? ` ${skipped} skipped — already handed to the engine. Priority orders what is still waiting; it cannot recall what has gone.`
+        : '');
+    spoolSelection.value = [];
+    await Promise.all([loadSpool(), loadLive()]);
+  } catch (reason) {
+    spoolActionError.value = messageFrom(reason, 'The priority could not be applied.');
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
 async function cancelSelected() {
   if (!canOperate.value || !spoolSelection.value.length) return;
   if (
@@ -1418,6 +1466,30 @@ onMounted(() => {
         >
           {{ actionBusy ? 'Working…' : `Reroute ${spoolSelection.length} selected` }}
         </button>
+        <!--
+          Raising priority is the recovery that changes nothing else: the spool
+          drains in priority order, so an urgent message stuck behind a bulk
+          campaign gets out without cancelling the campaign or rerouting it to a
+          different carrier.
+        -->
+        <label class="filter-select">
+          <span>Set priority</span>
+          <select v-model.number="reprioritiseTo" data-testid="spool-priority">
+            <option :value="null" disabled>Choose a priority</option>
+            <option :value="3">3 — highest</option>
+            <option :value="2">2 — high</option>
+            <option :value="1">1 — normal</option>
+            <option :value="0">0 — bulk</option>
+          </select>
+        </label>
+        <button
+          class="secondary-button"
+          data-testid="spool-reprioritise"
+          :disabled="actionBusy || reprioritiseTo === null || !spoolSelection.length"
+          @click="reprioritiseSelected"
+        >
+          Reprioritise selected
+        </button>
         <button
           class="secondary-button danger-button"
           data-testid="spool-cancel"
@@ -1428,7 +1500,8 @@ onMounted(() => {
         </button>
       </div>
       <p v-else class="source-note" data-testid="spool-readonly">
-        Rerouting and cancelling pending messages requires the messages.send permission.
+        Rerouting, reprioritising and cancelling pending messages requires the messages.send
+        permission.
       </p>
 
       <p v-if="spoolNotice" class="notice" role="status" data-testid="spool-notice">

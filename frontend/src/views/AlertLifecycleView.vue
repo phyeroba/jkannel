@@ -210,6 +210,30 @@ const suppressionActive = computed(() => {
   return Number.isFinite(until) && until > Date.now();
 });
 
+/* --- ESCALATION STEPS ---------------------------------------------------------
+ *
+ * `GET /monitoring/escalation/alerts/:id` returns each escalation the policy
+ * engine ran for this alert: which policy, which step, whether it succeeded.
+ *
+ * Folded into the incident timeline rather than given its own table, because it
+ * is part of the same story. "Opened 09:00, escalated to on-call 09:05,
+ * acknowledged 09:07" reads as a sequence; the same three facts in three panels
+ * has to be reassembled by the reader every time.
+ */
+const escalations = ref<RecordValue[]>([]);
+
+async function loadEscalations(id: string) {
+  try {
+    const rows = await apiRequest<unknown>(`/monitoring/escalation/alerts/${id}`);
+    escalations.value = asItems(rows);
+  } catch {
+    // Needs alerts.view, which this screen already has — but a deployment
+    // without the escalation module answers 404, and that is not an error
+    // worth showing beside a lifecycle that loaded fine.
+    escalations.value = [];
+  }
+}
+
 async function loadDetail(id: string) {
   detailState.value = 'loading';
   detailError.value = '';
@@ -244,7 +268,7 @@ async function selectAlert(id: string) {
   assignee.value = '';
   actionReason.value = '';
   commentDraft.value = '';
-  await Promise.all([loadDetail(id), loadComments(id)]);
+  await Promise.all([loadDetail(id), loadComments(id), loadEscalations(id)]);
   if (canListUsers.value && !userOptions.value.length) void loadUserOptions();
 }
 
@@ -252,6 +276,7 @@ function closeDetail() {
   selectedId.value = '';
   record.value = null;
   comments.value = [];
+  escalations.value = [];
   detailState.value = 'idle';
   commentsState.value = 'idle';
 }
@@ -437,6 +462,26 @@ const incidentTimeline = computed(() => {
         : undefined,
       state: 'error',
     });
+
+  // Each step the policy engine ran, with whether it actually reached anybody.
+  // A failed step is drawn as an error rather than omitted: an escalation that
+  // did not deliver is the most important thing on this timeline.
+  for (const step of escalations.value) {
+    const escalatedAt = step.escalated_at ?? step.escalatedAt;
+    const status = String(step.status ?? '').toLowerCase();
+    items.push({
+      order: at(escalatedAt),
+      at: clock(escalatedAt),
+      label: `Escalation step ${text(step.step_index ?? step.stepIndex, '?')}`,
+      detail: [
+        text(step.policy_name ?? step.policyName, 'policy not named'),
+        text(step.detail, ''),
+      ]
+        .filter((part) => part && part !== '—')
+        .join(' — '),
+      state: status === 'failed' || status === 'undeliverable' ? 'error' : 'info',
+    });
+  }
 
   if (alert.resolvedAt)
     items.push({

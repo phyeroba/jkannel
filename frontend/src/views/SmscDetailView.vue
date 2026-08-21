@@ -210,6 +210,39 @@ async function loadEvents() {
   }
 }
 
+/* --- CONTROLLED OPERATIONS ----------------------------------------------------
+ *
+ * `smsc_deployments` is not a config-deployment log despite the name: it is the
+ * record of every controlled operation run against this connection — reconnect,
+ * disable, suspend, resume — with who asked, the reason they gave and how it
+ * was verified.
+ *
+ * It belongs beside the page actions rather than in the audit trail, because
+ * the question it answers is local: "has somebody already tried this, and what
+ * happened". An operator about to reconnect a flapping bind for the third time
+ * should be able to see the first two.
+ */
+const operations = ref<Record<string, unknown>[]>([]);
+const operationsState = ref<State>('loading');
+
+async function loadOperations() {
+  operationsState.value = 'loading';
+  const id = smsc.value?.id;
+  if (!id) {
+    operationsState.value = 'empty';
+    return;
+  }
+  try {
+    const rows = await apiRequest<unknown>(`/smscs/${id}/deployments`);
+    operations.value = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+    operationsState.value = operations.value.length ? 'live' : 'empty';
+  } catch (reason) {
+    operations.value = [];
+    operationsState.value =
+      reason instanceof ApiError && reason.status === 403 ? 'permission-denied' : 'error';
+  }
+}
+
 /**
  * Whether the bind observation is old enough to distrust.
  *
@@ -273,7 +306,9 @@ async function confirmAction(reason: string) {
 
 async function reload() {
   await load();
-  await loadEvents();
+  // Both keyed on the record loaded above: events on the engine id, operations
+  // on the uuid, so neither can run before it is known.
+  await Promise.all([loadEvents(), loadOperations()]);
 }
 
 onMounted(reload);
@@ -713,6 +748,74 @@ watch(engineId, reload);
         <p v-else class="chart-empty" data-testid="smsc-routes-empty">
           No routing rule targets this connection, as a primary or as a fallback. Suspending it
           would divert nothing, because nothing is routed here.
+        </p>
+      </section>
+
+      <!-- CONTROLLED OPERATIONS ------------------------------------------------ -->
+      <section
+        v-if="smsc"
+        class="panel"
+        data-testid="smsc-operations"
+        aria-labelledby="smsc-operations-heading"
+      >
+        <header class="panel-header">
+          <div>
+            <h2 id="smsc-operations-heading">Operations on this connection</h2>
+            <p>
+              Every reconnect, disable, suspend and resume run against it — who asked, the reason
+              they gave, and how the result was verified.
+            </p>
+          </div>
+        </header>
+        <div v-if="operations.length" class="table-wrap">
+          <table data-testid="smsc-operations-table">
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Operation</th>
+                <th scope="col">Status</th>
+                <th scope="col">By</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Verification</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in operations" :key="String(row.id)">
+                <td class="mono cell-tight">{{ formatMoment(String(row.created_at ?? '')) }}</td>
+                <td class="mono">{{ row.operation }}</td>
+                <td>
+                  <span
+                    class="status-badge"
+                    :class="
+                      String(row.status) === 'succeeded'
+                        ? 'good'
+                        : String(row.status) === 'failed'
+                          ? 'bad'
+                          : 'warn'
+                    "
+                    >{{ row.status }}</span
+                  >
+                </td>
+                <td class="mono cell-tight">{{ row.requested_by ?? 'not recorded' }}</td>
+                <!--
+                  Reconnect, disable and enable do not persist a reason — their
+                  handler reads no body. Saying "not recorded for this
+                  operation" keeps that apart from an operator who gave none.
+                -->
+                <td>{{ row.reason ?? 'not recorded for this operation' }}</td>
+                <td class="cell-tight">{{ row.verification ?? row.detail ?? 'none' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="chart-empty" data-testid="smsc-operations-empty">
+          {{
+            operationsState === 'permission-denied'
+              ? 'Reading the operation history needs the smsc.view permission.'
+              : operationsState === 'error'
+                ? 'The operation history could not be read, so this panel cannot say whether anything has been run.'
+                : 'No controlled operation has been run against this connection.'
+          }}
         </p>
       </section>
 
