@@ -21,6 +21,13 @@ export interface ServiceReading {
   affects: string[];
   rootCause: string | null;
   observedAt: string | null;
+  /**
+   * How long the component has been running, where it reports one.
+   *
+   * Null for every process this container can reach but not interrogate — most
+   * of them. Null means "not reported", never "just started".
+   */
+  uptimeSeconds?: number | null;
 }
 
 export interface ServiceBoard {

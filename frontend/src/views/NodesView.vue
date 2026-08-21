@@ -58,6 +58,34 @@ const state = ref<State>('loading');
 const error = ref('');
 const node = computed(() => payload.value?.items[0] ?? null);
 
+/**
+ * What to do about the numbers, in one sentence, derived from them.
+ *
+ * The kit hardcodes a sentence per node. Here it is decided from the readings,
+ * so it cannot say "no action indicated" over a container at 94% of its memory
+ * limit. Order matters: an unreadable measurement is reported before any
+ * verdict, because advice about a number nobody has is worse than no advice.
+ */
+const readAs = computed(() => {
+  const reading = node.value;
+  if (!reading) return '';
+  if (reading.unavailableReason)
+    return 'Part of this container’s accounting could not be read, so the gauges above are incomplete. Treat the missing figure as unknown rather than as low.';
+
+  const memory = reading.memory.percent;
+  const cpu = reading.cpu.percent;
+
+  if (memory !== null && memory >= 90)
+    return 'Memory is close to the container limit. The kernel kills the process rather than slowing it down, so this ends as an abrupt restart mid-send, not as gradual degradation. Raise the limit or find the leak before it gets there.';
+  if (memory !== null && memory >= 75)
+    return 'Memory is high but not critical. Worth watching across a few polls: a flat high number is a working set, a climbing one is a leak, and only the trend tells them apart.';
+  if (cpu !== null && cpu >= 90)
+    return 'CPU is at the quota. Requests will queue behind it, which shows up as API latency rather than as an error — check submit throughput before assuming the carrier slowed down.';
+  if (reading.cpu.limitCores === null)
+    return 'No action indicated. CPU is uncapped here, so its percentage has no denominator and only the memory figure is a real proportion — watch that rather than acting on the CPU number.';
+  return 'No action indicated. Watch it rather than acting on it.';
+});
+
 async function load() {
   if (state.value !== 'live') state.value = 'loading';
   try {
@@ -199,6 +227,28 @@ onUnmounted(() => window.clearInterval(timer));
             {{ formatBytes(node.process.heapTotalBytes) }}
           </dd>
         </dl>
+      </section>
+
+      <!--
+        READ AS. The gauges above are numbers; this says what they mean for the
+        gateway, which is the question anybody opening this page actually has.
+        Every sentence is derived from the figures beside it — the backend's own
+        `pressure` verdict plus what the scope and the caps allow us to claim —
+        and where a percentage has no denominator it says so rather than
+        offering advice about a number that does not exist.
+      -->
+      <section class="panel" data-testid="nodes-read-as" aria-labelledby="nodes-read-as-heading">
+        <div class="panel-head">
+          <h2 id="nodes-read-as-heading">Read as</h2>
+          <span class="row-id">What the numbers above mean for the gateway</span>
+        </div>
+        <p class="pressure" data-testid="nodes-read-as-verdict">{{ node.pressure }}</p>
+        <p data-testid="nodes-read-as-detail">{{ readAs }}</p>
+        <p class="source-note">
+          This is about the container running JKANNEL's API, not about the host it sits on. A busy
+          host with an idle API reads calm here, and that is the honest answer to the only question
+          this container can answer about itself.
+        </p>
       </section>
 
       <section class="panel limits-panel" data-testid="nodes-not-measured">
