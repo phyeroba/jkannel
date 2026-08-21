@@ -29,14 +29,17 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import MiniChart from '../components/MiniChart.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 import { displayValue, type DataState as State } from '../utils/data-state';
-import { formatMoment, formatRate } from '../utils/connectivity';
+import { formatMoment, formatRate, formatUtilisation } from '../utils/connectivity';
+import { smscOptionsFrom, type SmscOption } from '../utils/safe-control';
 import {
   RATE_WINDOWS,
   engineStatusTone,
   engineStatusWord,
   formatAge,
+  formatDuration,
   rateAt,
   type LiveBind,
   type LiveSnapshot,
@@ -65,6 +68,123 @@ const binds = computed<LiveBind[]>(() => {
     ? ordered.sort((a, b) => (b.queued ?? -1) - (a.queued ?? -1))
     : ordered.sort((a, b) => String(a.engineId).localeCompare(String(b.engineId)));
 });
+
+/* --- THE REGISTER SIDE OF THE MATRIX -----------------------------------------
+ *
+ * The live snapshot is the ENGINE's view: it knows rates and queues but nothing
+ * about carriers or configured ceilings, which live in the SMSC register. One
+ * read of `/smscs` on mount supplies both, keyed by engine id.
+ *
+ * Read once rather than on every poll: a carrier assignment and a throughput
+ * ceiling are configuration, and re-fetching them every five seconds alongside
+ * a live snapshot would triple this screen's request rate to watch values that
+ * change when somebody edits them.
+ */
+const register = ref<SmscOption[]>([]);
+
+async function loadRegister() {
+  try {
+    const page = await apiRequest<{ items?: Record<string, unknown>[] }>('/smscs?limit=500&offset=0');
+    register.value = smscOptionsFrom(Array.isArray(page?.items) ? page.items : []);
+  } catch {
+    // The matrix degrades to engine-only columns; the rates are the point of
+    // the screen and must not be lost to a failed lookup.
+    register.value = [];
+  }
+}
+
+const registerByEngineId = computed(() => {
+  const map = new Map<string, SmscOption>();
+  for (const option of register.value) if (option.engineId) map.set(option.engineId, option);
+  return map;
+});
+
+/** Carrier name for a reported bind, from `/smscs` — never from the engine. */
+function carrierFor(engineId: string): string {
+  const option = registerByEngineId.value.get(engineId);
+  if (!option) return 'not in the register';
+  return option.carrierName ?? 'unassigned';
+}
+
+/**
+ * Observed MT against the ceiling the engine will enforce.
+ *
+ * Null — rendered "unknown" — when the connection declares no ceiling or has
+ * reported no rate. A percentage of an unknown denominator is not 0%, and 0%
+ * on this column would read as an idle bind.
+ */
+function utilisationFor(bind: LiveBind): number | null {
+  const option = registerByEngineId.value.get(String(bind.engineId));
+  const ceiling = option?.tps;
+  if (ceiling === null || ceiling === undefined || ceiling <= 0) return null;
+  const observed = rateAt(bind.outboundRate, 0);
+  if (observed === null || observed === undefined) return null;
+  return observed / (ceiling * (option?.connections ?? 1));
+}
+
+/* --- THE RECORDED SERIES -----------------------------------------------------
+ *
+ * The live snapshot is one instant, and until now the only history this screen
+ * had was peaks tracked in the browser since it opened — lost on reload and
+ * different for every operator watching. The poller has been recording per-poll
+ * rates all along; `/performance/throughput` reads them, and the Performance
+ * screen draws the same series, so two screens cannot show different histories
+ * of the same gateway.
+ */
+const TREND_WINDOW_MINUTES = 360;
+
+const trendPoints = ref<{ at: string; outbound: number; inbound: number }[]>([]);
+const trendState = ref<State>('loading');
+
+const trendSeries = computed(() => [
+  { label: 'MT out (/s)', values: trendPoints.value.map((point) => point.outbound) },
+  { label: 'MO in (/s)', values: trendPoints.value.map((point) => point.inbound) },
+]);
+
+const trendLabels = computed(() =>
+  trendPoints.value.map((point) => {
+    const at = new Date(point.at);
+    return Number.isNaN(at.getTime())
+      ? point.at
+      : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }),
+);
+
+async function loadTrend() {
+  trendState.value = 'loading';
+  try {
+    const result = await apiRequest<{ points?: { at: string; outbound: number; inbound: number }[] }>(
+      `/performance/throughput?minutes=${TREND_WINDOW_MINUTES}`,
+    );
+    trendPoints.value = Array.isArray(result?.points) ? result.points : [];
+    trendState.value = trendPoints.value.length ? 'live' : 'empty';
+  } catch {
+    trendPoints.value = [];
+    trendState.value = 'error';
+  }
+}
+
+/**
+ * Age of the oldest message still spooled for a bind.
+ *
+ * From SQLBox, not from the engine: bearerbox reports a queue depth per bind
+ * and no ages at all, while `send_sms` carries a timestamp on every waiting
+ * message. That distinction matters on this row — the Queued column is the
+ * engine's number and this one is the spool's, and they can legitimately
+ * disagree while a message is in flight between them.
+ *
+ * "nothing waiting" and "unknown" are held apart: no spool group means the
+ * queue is empty, while a group with no readable timestamp means we cannot say
+ * how old its oldest message is.
+ */
+function oldestFor(bind: LiveBind): string {
+  const groups = snapshot.value?.spool?.bySmsc;
+  if (!Array.isArray(groups)) return 'unknown';
+  const entry = groups.find((group) => group.smscId === String(bind.engineId));
+  if (!entry || !entry.count) return 'nothing waiting';
+  if (!entry.oldestEpoch || entry.oldestEpoch <= 0) return 'unknown';
+  return formatDuration(Math.max(0, Math.round(Date.now() / 1000 - entry.oldestEpoch)));
+}
 
 /** Sum of a rate window across every bind, or null when nothing reported one. */
 function totalRate(field: 'outboundRate' | 'inboundRate', index: number): number | null {
@@ -147,7 +267,14 @@ const { autoRefresh, intervalSeconds, refreshing, lastRefreshedAt, refreshNow } 
   { intervalSeconds: 5, immediate: false },
 );
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  // Configuration, so it is read once rather than on every live poll.
+  void loadRegister();
+  // Six hours of recorded samples; refreshing this every five seconds alongside
+  // the live snapshot would re-read the same history to move one bucket.
+  void loadTrend();
+});
 </script>
 
 <template>
@@ -286,6 +413,63 @@ onMounted(load);
       <p v-if="error" class="form-error" role="alert" data-testid="live-traffic-error">
         {{ error }}
       </p>
+    </section>
+
+    <!-- THROUGHPUT OVER TIME --------------------------------------------------
+      The live figures above are one instant. This is the shape they have been
+      making, from the poller's recorded samples rather than from anything this
+      browser has watched — so it survives a page reload and is the same series
+      the Performance screen draws.
+
+      DLR is deliberately not a third line here, unlike the kit's mock. The
+      engine reports no receipt rate at all, only a queue depth, so a DLR line
+      would have to be invented. The note under the matrix already says so.
+    -->
+    <section class="panel" data-testid="traffic-trend" aria-labelledby="traffic-trend-heading">
+      <header class="panel-header">
+        <div>
+          <h2 id="traffic-trend-heading">Throughput over time</h2>
+          <p>
+            Gateway-wide MT and MO, from the status poller's recorded samples over the last
+            {{ Math.round(TREND_WINDOW_MINUTES / 60) }} hours.
+          </p>
+        </div>
+      </header>
+      <MiniChart
+        v-if="trendPoints.length"
+        type="area"
+        :series="trendSeries"
+        :labels="trendLabels"
+        title="Gateway throughput"
+        :height="200"
+        data-testid="traffic-trend-chart"
+      />
+      <p v-else class="chart-empty" data-testid="traffic-trend-empty">
+        {{
+          trendState === 'error'
+            ? 'The recorded throughput series could not be read.'
+            : 'The poller has recorded no sample in this window, so there is no shape to draw yet.'
+        }}
+      </p>
+    </section>
+
+    <!-- TRAFFIC MATRIX --------------------------------------------------------
+      Its own panel because it answers a different question from the totals
+      above. The totals say how much the gateway is carrying; this says WHERE,
+      and puts throughput beside queue and utilisation so that the dangerous
+      combination — a healthy rate with a growing queue — is visible in one row
+      rather than assembled across three screens.
+    -->
+    <section class="panel" data-testid="traffic-matrix" aria-labelledby="traffic-matrix-heading">
+      <header class="panel-header">
+        <div>
+          <h2 id="traffic-matrix-heading">Traffic matrix</h2>
+          <p>
+            Throughput beside queue and capacity, per bind, so a healthy rate with a growing queue
+            is visible.
+          </p>
+        </div>
+      </header>
 
       <DataState
         :state="state"
@@ -311,13 +495,16 @@ onMounted(load);
             <thead>
               <tr>
                 <th scope="col">Bind</th>
+                <th scope="col">Carrier</th>
                 <th scope="col">State</th>
                 <th v-for="window in RATE_WINDOWS" :key="window.short" scope="col">
                   MT {{ window.short }}
                 </th>
                 <th scope="col">MT peak</th>
                 <th scope="col">MO 1m</th>
+                <th scope="col">Utilisation</th>
                 <th scope="col">Queued</th>
+                <th scope="col">Oldest</th>
                 <th scope="col">Failed</th>
                 <th scope="col">Sent</th>
                 <th scope="col">Received</th>
@@ -343,6 +530,15 @@ onMounted(load);
                     >not configured in this console</small
                   >
                 </td>
+                <!--
+                  Resolved from the SMSC register by engine id. A bind the
+                  engine reports but the console has no record of reads "not in
+                  the register" rather than blank — that is a configuration gap
+                  worth seeing, not a missing value.
+                -->
+                <td :data-testid="`live-traffic-carrier-${bind.engineId}`">
+                  {{ carrierFor(String(bind.engineId)) }}
+                </td>
                 <td>
                   <span
                     class="status-badge"
@@ -365,8 +561,19 @@ onMounted(load);
                 <td class="mono" :data-testid="`live-traffic-mo-${bind.engineId}`">
                   {{ formatRate(rateAt(bind.inboundRate, 0), state) }}
                 </td>
+                <!--
+                  Against the ceiling the engine will actually enforce: the
+                  per-bind tps multiplied by its instances. "unknown" where no
+                  ceiling is declared, because a percentage of nothing is not 0%.
+                -->
+                <td class="mono" :data-testid="`live-traffic-utilisation-${bind.engineId}`">
+                  {{ formatUtilisation(utilisationFor(bind), state) }}
+                </td>
                 <td class="mono" :data-testid="`live-traffic-queued-${bind.engineId}`">
                   {{ displayValue(bind.queued, state) }}
+                </td>
+                <td class="mono" :data-testid="`live-traffic-oldest-${bind.engineId}`">
+                  {{ oldestFor(bind) }}
                 </td>
                 <td class="mono">{{ displayValue(bind.failed, state) }}</td>
                 <td class="mono">{{ displayValue(bind.sent, state) }}</td>
