@@ -631,6 +631,8 @@ async function runPreview() {
 const messages = ref<RecordValue[]>([]);
 const messageState = ref<LoadState>('loading');
 const messageError = ref('');
+/** Result of a re-dispatch — a success that still matched nothing is news. */
+const messageNotice = ref('');
 const messageTotal = ref(0);
 const messageLimit = ref(25);
 const messageOffset = ref(0);
@@ -668,6 +670,60 @@ async function loadMessages() {
     messageState.value = 'error';
   }
 }
+/* --- ONE INBOUND MESSAGE ------------------------------------------------------
+ *
+ * `GET /mo/messages/:id` reads one message with its own privacy grant — scoped
+ * to that message, so investigating one complaint does not silently unmask the
+ * whole grid.
+ *
+ * `POST /mo/messages/:id/redispatch` re-runs matching and fan-out. It is the
+ * remedy for the commonest MO support case: a message sitting in `no_match`
+ * because the rule that should have caught it did not exist yet. Without it the
+ * only fix was asking the subscriber to text again.
+ */
+const openMessageId = ref('');
+const openMessage_ = ref<RecordValue | null>(null);
+const redispatchBusy = ref('');
+
+async function openMessage(id: string) {
+  if (openMessageId.value === id) {
+    openMessageId.value = '';
+    openMessage_.value = null;
+    return;
+  }
+  openMessageId.value = id;
+  openMessage_.value = null;
+  try {
+    openMessage_.value = await apiRequest<RecordValue>(`/mo/messages/${id}`);
+  } catch (reason) {
+    messageError.value = messageFrom(reason, 'That message could not be read.');
+  }
+}
+
+async function redispatchMessage(id: string) {
+  redispatchBusy.value = id;
+  messageError.value = '';
+  try {
+    const result = await apiRequest<RecordValue>(`/mo/messages/${id}/redispatch`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    // The fan-out count is the answer. "Matched 0 rules" means the rule that
+    // should catch this still does not exist — which is a result, not a
+    // failure, and sends the operator back to the rule list rather than to a
+    // retry.
+    const fanout = Number(result?.fanoutCount ?? result?.fanout_count ?? 0);
+    messageNotice.value = fanout
+      ? `Re-run complete: matched and fanned out to ${fanout} destination(s).`
+      : 'Re-run complete, but no rule matched this message. The rule that should catch it still does not exist or is disabled.';
+    await loadMessages();
+  } catch (reason) {
+    messageError.value = messageFrom(reason, 'The message could not be re-dispatched.');
+  } finally {
+    redispatchBusy.value = '';
+  }
+}
+
 function applyMessageFilters() {
   messageOffset.value = 0;
   void loadMessages();
@@ -1648,6 +1704,9 @@ onMounted(() => {
           </select>
         </label>
       </div>
+      <p v-if="messageNotice" class="notice" role="status" data-testid="mo-message-notice">
+        {{ messageNotice }}
+      </p>
       <p
         v-if="messageState === 'error'"
         class="chart-empty"
@@ -1667,34 +1726,71 @@ onMounted(() => {
               <th scope="col">Arrived by</th>
               <th scope="col">Status</th>
               <th scope="col">Fan-out</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="message in messages"
-              :key="text(message.id)"
-              :data-testid="`mo-message-${text(message.id)}`"
-            >
-              <td>{{ text(message.received_at) }}</td>
-              <td class="mono">{{ text(message.sender) }}</td>
-              <td class="mono">{{ text(message.receiver) }}</td>
-              <td>{{ text(message.body) }}</td>
-              <td class="mono">{{ text(message.source) }}</td>
-              <td>
-                <span class="status-badge" :class="badgeTone(message.status)">{{
-                  text(message.status)
-                }}</span>
-              </td>
-              <td class="mono">{{ text(message.fanout_count, '0') }}</td>
-            </tr>
+            <template v-for="message in messages" :key="text(message.id)">
+              <tr :data-testid="`mo-message-${text(message.id)}`">
+                <td>{{ text(message.received_at) }}</td>
+                <td class="mono">{{ text(message.sender) }}</td>
+                <td class="mono">{{ text(message.receiver) }}</td>
+                <td>{{ text(message.body) }}</td>
+                <td class="mono">{{ text(message.source) }}</td>
+                <td>
+                  <span class="status-badge" :class="badgeTone(message.status)">{{
+                    text(message.status)
+                  }}</span>
+                </td>
+                <td class="mono">{{ text(message.fanout_count, '0') }}</td>
+                <td class="row-actions">
+                  <button
+                    class="secondary-button"
+                    type="button"
+                    :data-testid="`mo-message-open-${text(message.id)}`"
+                    @click="openMessage(text(message.id, ''))"
+                  >
+                    {{ openMessageId === text(message.id) ? 'Hide' : 'Expand' }}
+                  </button>
+                  <!--
+                    Re-runs matching and fan-out for a message already received.
+                    The commonest MO support case is a message sitting in
+                    no_match because the rule that should have caught it did not
+                    exist yet — before this the only remedy was asking the
+                    subscriber to text again.
+                  -->
+                  <button
+                    v-if="canManage"
+                    class="secondary-button"
+                    type="button"
+                    :disabled="Boolean(redispatchBusy)"
+                    :data-testid="`mo-message-redispatch-${text(message.id)}`"
+                    @click="redispatchMessage(text(message.id, ''))"
+                  >
+                    Re-run matching
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="openMessageId === text(message.id)">
+                <td colspan="8">
+                  <pre
+                    v-if="openMessage_"
+                    class="json-block"
+                    :data-testid="`mo-message-detail-${text(message.id)}`"
+                    >{{ JSON.stringify(openMessage_, null, 2) }}</pre
+                  >
+                  <p v-else class="source-note">Reading the message…</p>
+                </td>
+              </tr>
+            </template>
             <tr v-if="messageState === 'ok' && !messages.length">
-              <td colspan="7" class="empty-cell" data-testid="mo-message-empty">
+              <td colspan="8" class="empty-cell" data-testid="mo-message-empty">
                 No inbound messages recorded. On the shipped Kannel configuration this is the
                 expected state until the engine sweep finds MO rows in the message store.
               </td>
             </tr>
             <tr v-if="messageState === 'loading'">
-              <td colspan="7" class="empty-cell">Loading inbound messages…</td>
+              <td colspan="8" class="empty-cell">Loading inbound messages…</td>
             </tr>
           </tbody>
         </table>

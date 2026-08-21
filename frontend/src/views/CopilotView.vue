@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import { canAccess, session } from '../stores/session';
 
 interface CopilotTool {
   name: string;
@@ -95,6 +96,121 @@ async function send() {
   }
 }
 
+/* --- ADVISORY ASSISTANCE -------------------------------------------------------
+ *
+ * A different thing from the chat above, and the difference matters.
+ *
+ * The copilot ANSWERS: it reads telemetry and tells you what it found, and
+ * nothing follows from it. Assistance ANALYSES a described situation and may
+ * return a RECOMMENDATION, which a human then approves or rejects — and that
+ * decision is recorded against the record with a reason.
+ *
+ * So the two are separated on the screen rather than merged into one box. A
+ * recommendation that arrived in a chat log would be acted on without anybody
+ * deciding to; here approving is a deliberate act with its own permission
+ * (`system.manage`, where asking needs only `monitoring.view`).
+ *
+ * `allowRecommendation` is opt-in per request. Asked without it, the service
+ * analyses and stops — which is the right default for a question somebody is
+ * exploring rather than acting on.
+ */
+interface AssistanceRecord {
+  id: string;
+  question: string;
+  observedBehaviour: string;
+  reasoning: string[];
+  recommendation: string | null;
+  confidence: number;
+  risk: 'none' | 'low' | 'medium' | 'high';
+  status: string;
+  approvedBy?: string;
+  createdAt: string;
+}
+
+const situation = ref('');
+const evidenceText = ref('');
+const allowRecommendation = ref(false);
+const assistance = ref<AssistanceRecord | null>(null);
+const assistanceBusy = ref(false);
+const assistanceError = ref('');
+const decisionReason = ref('');
+
+const canDecide = computed(() => canAccess(session.value, 'system.manage'));
+
+async function askAssistance() {
+  const question = situation.value.trim();
+  if (!question) {
+    assistanceError.value = 'Describe the situation you want analysed.';
+    return;
+  }
+  assistanceBusy.value = true;
+  assistanceError.value = '';
+  assistance.value = null;
+  try {
+    assistance.value = await apiRequest<AssistanceRecord>('/ai/assistance', {
+      method: 'POST',
+      // The service only produces a recommendation when the caller opts in,
+      // per request. Sending the header unconditionally would make every
+      // exploratory question capable of producing one.
+      headers: { 'x-jkannel-ai-opt-in': allowRecommendation.value ? 'true' : 'false' },
+      body: JSON.stringify({
+        question,
+        evidence: evidenceText.value.trim()
+          ? evidenceText.value
+              .split('\n')
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .map((line) => ({ kind: 'note', detail: line }))
+          : [],
+        allowRecommendation: allowRecommendation.value,
+      }),
+    });
+  } catch (reason) {
+    assistanceError.value =
+      reason instanceof Error ? reason.message : 'The analysis could not be produced.';
+  } finally {
+    assistanceBusy.value = false;
+  }
+}
+
+async function decide(decision: 'approve' | 'reject') {
+  const record = assistance.value;
+  if (!record) return;
+  if (!decisionReason.value.trim()) {
+    assistanceError.value = 'Give a reason. It is recorded against the decision.';
+    return;
+  }
+  assistanceBusy.value = true;
+  assistanceError.value = '';
+  try {
+    assistance.value = await apiRequest<AssistanceRecord>(
+      `/ai/assistance/${record.id}/decisions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision, reason: decisionReason.value.trim() }),
+      },
+    );
+    decisionReason.value = '';
+  } catch (reason) {
+    assistanceError.value =
+      reason instanceof Error ? reason.message : 'The decision could not be recorded.';
+  } finally {
+    assistanceBusy.value = false;
+  }
+}
+
+/** Re-reads one record, so a decision made elsewhere is visible here. */
+async function refreshAssistance() {
+  const record = assistance.value;
+  if (!record) return;
+  try {
+    assistance.value = await apiRequest<AssistanceRecord>(`/ai/assistance/${record.id}`);
+  } catch {
+    // Keep what is on screen: the last successful read is still the truest
+    // thing available, and blanking it would lose the recommendation.
+  }
+}
+
 onMounted(() => void loadTools());
 </script>
 
@@ -124,6 +240,166 @@ onMounted(() => void loadTools());
         The copilot is not enabled for this environment. Ask your administrator to enable AI
         Operations to use the assistant.
       </p>
+    </section>
+
+    <!-- ADVISORY ASSISTANCE --------------------------------------------------
+      Kept apart from the chat below, because they end differently. The chat
+      answers a question and nothing follows. This analyses a situation, may
+      return a recommendation, and that recommendation is approved or rejected
+      by a person — with a reason, recorded against the record.
+    -->
+    <section
+      v-if="!disabled"
+      class="panel"
+      data-testid="assistance-panel"
+      aria-labelledby="assistance-heading"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="assistance-heading">Advisory analysis</h2>
+          <p>
+            Describe a situation and the platform analyses it. A recommendation is produced only if
+            you ask for one, and it does nothing until a person approves it.
+          </p>
+        </div>
+      </header>
+
+      <label class="analyzer-field">
+        <span>What is happening</span>
+        <textarea
+          v-model="situation"
+          rows="3"
+          data-testid="assistance-question"
+          placeholder="MTN queue has been growing for twenty minutes while throughput looks normal."
+        ></textarea>
+      </label>
+      <label class="analyzer-field">
+        <span>Evidence — one observation per line (optional)</span>
+        <textarea
+          v-model="evidenceText"
+          rows="3"
+          data-testid="assistance-evidence"
+          placeholder="queue depth 4,200 and rising&#10;bind state bound since 09:12&#10;no DLRs received since 09:30"
+        ></textarea>
+      </label>
+
+      <label class="toggle">
+        <input
+          v-model="allowRecommendation"
+          type="checkbox"
+          data-testid="assistance-allow-recommendation"
+        />
+        <span>
+          Also recommend an action. Left off, the analysis stops at what it observed — which is the
+          right default for a question you are exploring rather than acting on.
+        </span>
+      </label>
+
+      <footer class="detail-actions">
+        <button
+          class="primary-button"
+          type="button"
+          :disabled="assistanceBusy"
+          data-testid="assistance-submit"
+          @click="askAssistance"
+        >
+          {{ assistanceBusy ? 'Analysing…' : 'Analyse' }}
+        </button>
+      </footer>
+
+      <p v-if="assistanceError" class="form-error" role="alert" data-testid="assistance-error">
+        {{ assistanceError }}
+      </p>
+
+      <template v-if="assistance">
+        <dl class="detail-grid" data-testid="assistance-result">
+          <dt>Observed</dt>
+          <dd>{{ assistance.observedBehaviour }}</dd>
+          <dt>Reasoning</dt>
+          <dd>
+            <ul class="reasoning-list">
+              <li v-for="(step, index) in assistance.reasoning" :key="index">{{ step }}</li>
+            </ul>
+          </dd>
+          <dt>Confidence</dt>
+          <!--
+            A number and a risk band together. Confidence alone reads as
+            authority; risk is what says how much a wrong answer would cost.
+          -->
+          <dd class="mono">
+            {{ Math.round((assistance.confidence ?? 0) * 100) }}% · {{ assistance.risk }} risk
+          </dd>
+          <dt>Status</dt>
+          <dd>
+            <span class="status-badge" :class="assistance.status === 'approved' ? 'good' : 'warn'">{{
+              assistance.status
+            }}</span>
+          </dd>
+        </dl>
+
+        <p
+          v-if="assistance.recommendation"
+          class="warn-notice"
+          role="note"
+          data-testid="assistance-recommendation"
+        >
+          <strong>Recommended:</strong> {{ assistance.recommendation }}
+          <br />
+          Nothing has been done. This is a suggestion recorded for a person to accept or refuse.
+        </p>
+        <p v-else class="source-note" data-testid="assistance-no-recommendation">
+          No recommendation was produced — either none was asked for, or the analysis did not reach
+          one. The observation above stands on its own.
+        </p>
+
+        <template v-if="assistance.recommendation && canDecide">
+          <label class="analyzer-field">
+            <span>Reason for your decision</span>
+            <input v-model="decisionReason" type="text" data-testid="assistance-reason" />
+          </label>
+          <footer class="detail-actions">
+            <button
+              class="primary-button"
+              type="button"
+              :disabled="assistanceBusy"
+              data-testid="assistance-approve"
+              @click="decide('approve')"
+            >
+              Approve
+            </button>
+            <button
+              class="secondary-button danger-button"
+              type="button"
+              :disabled="assistanceBusy"
+              data-testid="assistance-reject"
+              @click="decide('reject')"
+            >
+              Reject
+            </button>
+            <button
+              class="secondary-button"
+              type="button"
+              data-testid="assistance-refresh"
+              @click="refreshAssistance"
+            >
+              Re-read
+            </button>
+          </footer>
+          <p class="source-note">
+            Approving records the decision and who made it. It does not execute anything — this
+            platform has no path by which an analysis acts on its own.
+          </p>
+        </template>
+        <p
+          v-else-if="assistance.recommendation"
+          class="source-note"
+          data-testid="assistance-cannot-decide"
+        >
+          Accepting or refusing a recommendation needs the
+          <span class="mono">system.manage</span> permission. Asking for one needs only
+          <span class="mono">monitoring.view</span>.
+        </p>
+      </template>
     </section>
 
     <section class="panel copilot-log" aria-live="polite">
@@ -227,3 +503,31 @@ onMounted(() => void loadTools());
     </p>
   </section>
 </template>
+
+<style scoped>
+.analyzer-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 13.5px;
+}
+.analyzer-field textarea,
+.analyzer-field input {
+  width: 100%;
+}
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.reasoning-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+</style>
+<style src="./workspace-extras.css"></style>

@@ -1475,6 +1475,60 @@ const isDlr = computed(() => key.value === 'delivery-reports');
 const isCursor = computed(() => isQueue.value || isDlr.value);
 const isDocker = computed(() => key.value === 'docker');
 const isSystem = computed(() => key.value === 'system');
+
+/* --- PLATFORM MAINTENANCE -----------------------------------------------------
+ *
+ * `GET /engine/capabilities` and `POST /messages/indexes`: two operations that
+ * belong to the platform rather than to any workspace, and neither had a
+ * surface.
+ *
+ * Capabilities are how the console decides what to offer, so they are rendered
+ * verbatim rather than summarised — a paraphrase here could disagree with the
+ * screens that act on them.
+ */
+const capabilities = ref<Record<string, unknown> | null>(null);
+const maintenanceBusy = ref('');
+const maintenanceNotice = ref('');
+const maintenanceError = ref('');
+
+async function loadCapabilities() {
+  maintenanceBusy.value = 'capabilities';
+  maintenanceError.value = '';
+  maintenanceNotice.value = '';
+  try {
+    capabilities.value = await apiRequest<Record<string, unknown>>('/engine/capabilities');
+  } catch (reason) {
+    capabilities.value = null;
+    maintenanceError.value =
+      reason instanceof Error ? reason.message : 'Engine capabilities could not be read.';
+  } finally {
+    maintenanceBusy.value = '';
+  }
+}
+
+async function ensureIndexes() {
+  maintenanceBusy.value = 'indexes';
+  maintenanceError.value = '';
+  maintenanceNotice.value = '';
+  try {
+    const result = await apiRequest<Record<string, unknown>>('/messages/indexes', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    // The route answers with a `source.status` of unavailable rather than
+    // throwing when SQLBox is not reachable, so a bare "done" would be wrong.
+    const source = (result?.source as Record<string, unknown> | undefined)?.status;
+    maintenanceNotice.value =
+      source === 'unavailable'
+        ? 'The engine message store could not be reached, so no index was created or checked.'
+        : `Indexes ensured. ${Array.isArray(result?.indexes) ? (result.indexes as unknown[]).length : 0} index(es) reported.`;
+  } catch (reason) {
+    maintenanceError.value =
+      reason instanceof Error ? reason.message : 'The indexes could not be ensured.';
+  } finally {
+    maintenanceBusy.value = '';
+  }
+}
 const customRender = computed(() => isCursor.value || isDocker.value || isSystem.value);
 
 /**
@@ -2231,6 +2285,31 @@ function closeMessageTrace() {
   opResult.value = null;
   opError.value = '';
   showCloneForm.value = false;
+}
+
+/**
+ * What a replay, clone or requeue would resubmit — read before acting.
+ *
+ * The trace above says what happened TO the original. This says what would go
+ * out if one of the buttons below is pressed, which is a different thing: the
+ * body and addressing are resolved from the stored message, and clone can
+ * override them. Somebody about to re-send should see it first.
+ */
+const messageSource = ref<RecordValue | null>(null);
+const messageSourceError = ref('');
+
+async function loadMessageSource() {
+  if (!traceId.value) return;
+  messageSourceError.value = '';
+  try {
+    messageSource.value = await apiRequest<RecordValue>(
+      `/message-ops/${encodeURIComponent(traceId.value)}`,
+    );
+  } catch (reason) {
+    messageSource.value = null;
+    messageSourceError.value =
+      reason instanceof Error ? reason.message : 'The message source could not be read.';
+  }
 }
 
 /** Replay / requeue the traced message via the message-ops endpoints. */
@@ -4889,6 +4968,31 @@ onUnmounted(() => {
             Re-submit this message through the engine. Each action creates a new, independently
             traceable message.
           </p>
+
+          <!--
+            What a replay would actually put on the wire, before it does.
+            Clone lets fields be overridden and requeue does not, so an operator
+            about to press either needs to see the body and the addressing they
+            are re-sending — not the trace of what happened to the original.
+          -->
+          <div class="detail-actions">
+            <button
+              class="secondary-button"
+              type="button"
+              data-testid="message-source"
+              :disabled="opBusy"
+              @click="loadMessageSource"
+            >
+              {{ messageSource ? 'Refresh what would be sent' : 'Show what would be sent' }}
+            </button>
+          </div>
+          <pre v-if="messageSource" class="json-block" data-testid="message-source-json">{{
+            JSON.stringify(messageSource, null, 2)
+          }}</pre>
+          <p v-if="messageSourceError" class="form-error" role="alert">
+            {{ messageSourceError }}
+          </p>
+
           <div class="detail-actions" data-testid="message-ops">
             <button
               class="secondary-button"
@@ -6680,6 +6784,64 @@ onUnmounted(() => {
           >
         </p>
       </div>
+    </section>
+
+    <!-- MAINTENANCE -------------------------------------------------------------
+      Two operations that belong to the platform rather than to any workspace:
+      what the engine says it can do, and the message-store indexes the message
+      grid's own queries depend on.
+    -->
+    <section v-if="isSystem && !error" class="panel" data-testid="system-maintenance">
+      <header class="panel-header">
+        <div>
+          <h2>Maintenance</h2>
+          <p>What the engine reports it supports, and the message-store indexes.</p>
+        </div>
+      </header>
+
+      <div class="detail-actions">
+        <button
+          class="secondary-button"
+          type="button"
+          :disabled="Boolean(maintenanceBusy)"
+          data-testid="engine-capabilities"
+          @click="loadCapabilities"
+        >
+          {{ maintenanceBusy === 'capabilities' ? 'Asking…' : 'Read engine capabilities' }}
+        </button>
+        <button
+          v-if="canManageSystem"
+          class="secondary-button"
+          type="button"
+          :disabled="Boolean(maintenanceBusy)"
+          data-testid="ensure-indexes"
+          @click="ensureIndexes"
+        >
+          {{ maintenanceBusy === 'indexes' ? 'Creating…' : 'Ensure message indexes' }}
+        </button>
+      </div>
+
+      <p v-if="maintenanceNotice" class="notice" role="status" data-testid="maintenance-notice">
+        {{ maintenanceNotice }}
+      </p>
+      <p v-if="maintenanceError" class="form-error" role="alert" data-testid="maintenance-error">
+        {{ maintenanceError }}
+      </p>
+
+      <!--
+        Rendered verbatim. Capabilities are how the console decides what to
+        offer, and paraphrasing them here would let this panel disagree with the
+        screens that act on them.
+      -->
+      <pre v-if="capabilities" class="json-block" data-testid="capabilities-json">{{
+        JSON.stringify(capabilities, null, 2)
+      }}</pre>
+
+      <p class="source-note">
+        Ensuring indexes is safe to run repeatedly — it creates what is missing and leaves what is
+        there. It is worth running after a restore, when the message store has data but not
+        necessarily the indexes the message grid's queries rely on.
+      </p>
     </section>
 
     <section v-if="isSystem && !error" class="panel" data-testid="system-panel">
