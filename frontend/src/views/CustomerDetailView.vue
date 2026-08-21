@@ -927,8 +927,9 @@ watch(customerId, reload);
 </template>
 
 <style scoped>
+/* Not a panel, so it needs the gap explicitly; the token keeps it in step. */
 .customer-tabs {
-  margin-bottom: 16px;
+  margin-bottom: var(--gap-panel);
 }
 .field-grid {
   display: grid;

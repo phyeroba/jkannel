@@ -1101,8 +1101,9 @@ onMounted(() => {
 .scope-note {
   border-left: 3px solid var(--brand);
 }
+/* Not a panel, so it needs the gap explicitly; the token keeps it in step. */
 .tools-tabs {
-  margin-bottom: 16px;
+  margin-bottom: var(--gap-panel);
 }
 .trace-heading {
   margin: 20px 0 8px;

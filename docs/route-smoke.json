@@ -85,7 +85,7 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2481,
+    "chars": 2482,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -109,8 +109,8 @@
   },
   {
     "route": "/dlr-performance",
-    "chars": 1515,
-    "panels": 1,
+    "chars": 4162,
+    "panels": 6,
     "errorState": false,
     "partial": false,
     "denied": false,
@@ -121,7 +121,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4393,
+    "chars": 4394,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -409,7 +409,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1992,
+    "chars": 1989,
     "panels": 4,
     "errorState": false,
     "partial": true,
@@ -433,7 +433,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3456,
+    "chars": 3457,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -445,7 +445,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8936,
+    "chars": 8908,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -481,7 +481,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 15425,
+    "chars": 15583,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -565,7 +565,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 7847,
+    "chars": 8820,
     "panels": 2,
     "errorState": false,
     "partial": false,
