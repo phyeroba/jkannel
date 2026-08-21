@@ -34,14 +34,19 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
+import TabStrip from '../components/TabStrip.vue';
+import EventTimeline from '../components/EventTimeline.vue';
+import ConfirmAction from '../components/ConfirmAction.vue';
 import { canAccess, session } from '../stores/session';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
+import { formatStageMoment, type MessageTrace } from '../utils/diagnostics';
 import { describeComposerText } from '../utils/message-segments';
 import {
   smscOptionsFrom,
   verificationTone,
   verificationWord,
+  type ActionImpact,
   type ConnectivityTestResult,
   type NumberLookup,
   type SmscOption,
@@ -51,6 +56,27 @@ import {
 const canLookup = computed(() => canAccess(session.value, 'routes.view'));
 const canReadSends = computed(() => canAccess(session.value, 'messages.view'));
 const canTest = computed(() => canAccess(session.value, 'smsc.manage'));
+/** `POST /messages` declares configuration.manage, so the button follows it. */
+const canSend = computed(() => canAccess(session.value, 'configuration.manage'));
+
+/**
+ * The six tools, as tabs.
+ *
+ * They were previously stacked down one page, which made the transmitting tool
+ * and the read-only ones look equally consequential — you scrolled past Test
+ * SMS on the way to the encoding analyser. Tabs put one tool in front of the
+ * operator at a time, and the scope note above the strip still says which of
+ * them touch a carrier.
+ */
+const TOOL_TABS = [
+  { id: 'connectivity', label: 'SMPP connectivity' },
+  { id: 'test-sms', label: 'Test SMS' },
+  { id: 'dlr', label: 'DLR lookup' },
+  { id: 'encoding', label: 'Encoding analyser' },
+  { id: 'number', label: 'Number lookup' },
+];
+
+const tab = ref('connectivity');
 
 function messageFrom(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
@@ -166,6 +192,210 @@ async function loadSends() {
   }
 }
 
+/* --- 5. TEST SMS -------------------------------------------------------------
+ *
+ * Goes through the ordinary send path — `POST /messages`, the same route Bulk
+ * Send and the API use — rather than a dedicated test endpoint. A test that
+ * takes a different path proves nothing about the path production uses, which
+ * is the whole reason for running one.
+ *
+ * The reference the send returns is then tagged through
+ * `POST /diagnostics/test-sends`, so the message can be told apart in traces,
+ * events and the message log. Tagging is a SECOND call and is allowed to fail
+ * on its own: the message has already gone, and reporting the send as failed
+ * because the tag did not stick would have an operator send it again.
+ */
+const sendTo = ref('');
+const sendFrom = ref('JKANNEL');
+const sendBody = ref('JKANNEL operational test — please ignore.');
+const sendSmscId = ref('');
+const sendBusy = ref(false);
+const testSendError = ref('');
+const confirmingSend = ref(false);
+const sentReference = ref('');
+
+/** Matches EventTimeline's item shape, so the states stay a closed set. */
+type TraceStep = {
+  at: string;
+  label: string;
+  detail?: string;
+  state: 'ok' | 'warn' | 'error' | 'missing' | 'info';
+};
+
+const sentTrace = ref<TraceStep[]>([]);
+
+const sendSegments = computed(() => describeComposerText(sendBody.value));
+
+const canSubmitTest = computed(
+  () => Boolean(sendTo.value.trim() && sendFrom.value.trim() && sendBody.value.trim()),
+);
+
+/**
+ * What the operator is about to do, from measured facts only.
+ *
+ * Every consequence here is read from something real: the segment count from
+ * the same analyser the encoding tab runs, the connection from the register.
+ * Nothing is a composed warning — ConfirmAction's contract is that a supplied
+ * impact states what the system measured.
+ */
+const sendImpact = computed<ActionImpact>(() => {
+  const pinned = smscs.value.find((option) => option.id === sendSmscId.value);
+  const segments = sendSegments.value;
+  return {
+    operation: 'test-send',
+    subject: sendTo.value.trim() || 'no destination',
+    summary: `Transmits one real message of ${segments.segments} segment(s) to ${
+      sendTo.value.trim() || 'no destination'
+    }.`,
+    consequences: [
+      `The message is billable: ${segments.segments} segment(s) at ${segments.alphabet}.`,
+      pinned
+        ? `It is pinned to ${pinned.label} and will not be re-routed.`
+        : 'No connection is pinned, so the router chooses as it would in production.',
+      'It is tagged as operational test traffic and appears in the audit trail.',
+      'It reaches a real handset. Confirm the destination is one you control.',
+    ],
+    // No queue depth: this is a submission, not an operation on a connection
+    // that has messages waiting behind it. Null rather than 0 — there is no
+    // queue to report, as opposed to a queue that is empty.
+    queuedMessages: null,
+    reasonRequired: false,
+    blockedReason: null,
+  };
+});
+
+async function runTestSend(reason: string) {
+  sendBusy.value = true;
+  testSendError.value = '';
+  confirmingSend.value = false;
+  const at = () => new Date().toLocaleTimeString([], { hour12: false });
+  try {
+    const result = await apiRequest<Record<string, unknown>>('/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        sender: sendFrom.value.trim(),
+        receiver: sendTo.value.trim(),
+        text: sendBody.value,
+        ...(sendSmscId.value ? { smscId: sendSmscId.value } : {}),
+      }),
+    });
+    const reference = String(
+      result?.externalRef ?? result?.foreignId ?? result?.id ?? result?.messageId ?? '',
+    );
+    sentReference.value = reference;
+
+    const stages: TraceStep[] = [
+      {
+        at: at(),
+        label: 'accepted',
+        detail: `JKANNEL accepted the submission${reference ? ` as ${reference}` : ''}.`,
+        state: 'ok',
+      },
+    ];
+
+    if (reference) {
+      try {
+        await apiRequest('/diagnostics/test-sends', {
+          method: 'POST',
+          body: JSON.stringify({
+            foreignId: reference,
+            smscId: sendSmscId.value || null,
+            destination: sendTo.value.trim(),
+            reason: reason || 'Operational test from Test Tools',
+          }),
+        });
+        stages.push({
+          at: at(),
+          label: 'tagged as test traffic',
+          detail: 'Recorded so this message can be told apart from production.',
+          state: 'ok',
+        });
+      } catch {
+        // The message is already sent. Saying so is more useful than an error
+        // that would read as "the send failed" and provoke a second send.
+        stages.push({
+          at: at(),
+          label: 'tagging failed',
+          detail:
+            'The message WAS sent. Only the test-traffic tag could not be recorded, so it will look like production traffic in traces.',
+          state: 'warn',
+        });
+      }
+    }
+
+    // Drawn hollow rather than omitted: a receipt that has not arrived and a
+    // step that was never rendered look identical once the step is gone.
+    stages.push({
+      at: 'not yet',
+      label: 'delivery receipt',
+      detail:
+        'No receipt has arrived yet. Some carriers never send one; the full trace has the engine rows.',
+      state: 'missing',
+    });
+
+    sentTrace.value = stages;
+    void loadSends();
+  } catch (cause) {
+    sentTrace.value = [];
+    testSendError.value = messageFrom(cause, 'The test message could not be sent.');
+  } finally {
+    sendBusy.value = false;
+  }
+}
+
+/* --- 6. DLR LOOKUP -----------------------------------------------------------
+ *
+ * The lifecycle endpoint Message Trace uses, asked the narrower question: what
+ * receipts exist for this message. Same endpoint on purpose — a second way of
+ * reading a receipt is a second thing that can disagree about one.
+ */
+const dlrQuery = ref('');
+const dlrTrace = ref<MessageTrace | null>(null);
+const dlrState = ref<State>('empty');
+const dlrError = ref('');
+
+const dlrStages = computed<TraceStep[]>(() =>
+  (dlrTrace.value?.lifecycle?.stages ?? []).map((stage) => ({
+    at: formatStageMoment(stage.at, stage.status),
+    label: stage.label,
+    detail: stage.detail,
+    // `pending` becomes `missing`, which is the hollow dashed dot: a receipt
+    // that has not arrived is a step that is expected and absent, not a step
+    // that went wrong.
+    state:
+      stage.status === 'ok'
+        ? 'ok'
+        : stage.status === 'failed'
+          ? 'error'
+          : stage.status === 'warning'
+            ? 'warn'
+            : 'missing',
+  })),
+);
+
+async function lookupDlr() {
+  const value = dlrQuery.value.trim();
+  if (!value) {
+    dlrError.value = 'Enter a message id or carrier reference.';
+    dlrState.value = 'error';
+    return;
+  }
+  dlrState.value = 'loading';
+  dlrError.value = '';
+  try {
+    const result = await apiRequest<MessageTrace>(
+      `/diagnostics/messages/${encodeURIComponent(value)}/lifecycle`,
+    );
+    const found = Boolean(result?.lifecycle?.stages?.length || result?.events?.length);
+    dlrTrace.value = found ? result : null;
+    dlrState.value = found ? 'live' : 'empty';
+  } catch (cause) {
+    dlrTrace.value = null;
+    dlrError.value = messageFrom(cause, 'The receipt lifecycle could not be read.');
+    dlrState.value = stateFor(cause);
+  }
+}
+
 onMounted(() => {
   void loadSmscs();
   void loadSends();
@@ -181,16 +411,32 @@ onMounted(() => {
     >
       <h2 id="tools-scope-heading">What on this screen touches a carrier</h2>
       <p>
-        The number lookup and the encoding analyzer are <strong>non-transmitting</strong>: they read
-        configuration and count characters. The connectivity test
-        <strong>opens a connection to the carrier</strong> and may attempt an SMPP bind — it still
-        sends no message. Nothing here submits an SMS; to do that, use
-        <router-link class="text-link" to="/bulk-send">Bulk Send</router-link>.
+        The number lookup, the DLR lookup and the encoding analyser are
+        <strong>non-transmitting</strong>: they read what is already recorded and count characters.
+        The connectivity test <strong>opens a connection to the carrier</strong> and may attempt an
+        SMPP bind — it still sends no message. <strong>Test SMS transmits a real message</strong>,
+        which costs money and reaches a real handset; it is tagged as operational test traffic so it
+        can be told apart in traces and events.
       </p>
     </section>
 
+    <TabStrip
+      v-model="tab"
+      :tabs="TOOL_TABS"
+      label="Diagnostic tools"
+      testid="tools-tab"
+      class="tools-tabs"
+    />
+
     <!-- 1. NUMBER AND PREFIX LOOKUP -------------------------------------------- -->
-    <section class="panel" data-testid="tools-number" aria-labelledby="tools-number-heading">
+    <section
+      v-show="tab === 'number'"
+      id="tools-tab-panel-number"
+      role="tabpanel"
+      aria-labelledby="tools-tab-number"
+      class="panel"
+      data-testid="tools-number"
+    >
       <header class="panel-header">
         <div>
           <h2 id="tools-number-heading">Number and prefix lookup</h2>
@@ -321,10 +567,17 @@ onMounted(() => {
     </section>
 
     <!-- 2. ENCODING AND SEGMENT ANALYZER --------------------------------------- -->
-    <section class="panel" data-testid="tools-encoding" aria-labelledby="tools-encoding-heading">
+    <section
+      v-show="tab === 'encoding'"
+      id="tools-tab-panel-encoding"
+      role="tabpanel"
+      aria-labelledby="tools-tab-encoding"
+      class="panel"
+      data-testid="tools-encoding"
+    >
       <header class="panel-header">
         <div>
-          <h2 id="tools-encoding-heading">Encoding and segment analyzer</h2>
+          <h2 id="tools-encoding-heading">Encoding and segment analyser</h2>
           <p>What a body costs on the wire, recomputed as you type. Nothing is sent.</p>
         </div>
       </header>
@@ -365,9 +618,12 @@ onMounted(() => {
 
     <!-- 3. CONNECTIVITY TEST ---------------------------------------------------- -->
     <section
+      v-show="tab === 'connectivity'"
+      id="tools-tab-panel-connectivity"
+      role="tabpanel"
+      aria-labelledby="tools-tab-connectivity"
       class="panel"
       data-testid="tools-connectivity"
-      aria-labelledby="tools-connectivity-heading"
     >
       <header class="panel-header">
         <div>
@@ -488,8 +744,188 @@ onMounted(() => {
       </DataState>
     </section>
 
-    <!-- 4. TAGGED TEST SENDS ---------------------------------------------------- -->
-    <section class="panel" data-testid="tools-test-sends" aria-labelledby="tools-sends-heading">
+    <!-- 4. TEST SMS -------------------------------------------------------------
+      The only control on this screen that transmits. It goes through the normal
+      send path (POST /messages) rather than a special test route, because a
+      test that takes a different path proves nothing about the path production
+      uses — then tags the resulting reference so the message can be told apart
+      downstream.
+    -->
+    <section
+      v-show="tab === 'test-sms'"
+      id="tools-tab-panel-test-sms"
+      role="tabpanel"
+      aria-labelledby="tools-tab-test-sms"
+      class="panel"
+      data-testid="tools-test-sms"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="tools-test-sms-heading">Test SMS</h2>
+          <p>
+            Transmits a real message on the connection you pin. It costs money, it reaches a real
+            handset, and it is recorded as operational test traffic.
+          </p>
+        </div>
+      </header>
+
+      <p v-if="!canSend" class="warn-notice" role="note" data-testid="test-sms-denied">
+        Sending needs the <span class="mono">configuration.manage</span> permission, which your role
+        does not hold. The rest of this screen is read-only and remains available.
+      </p>
+
+      <template v-else>
+        <div class="field-grid">
+          <label class="filter-select">
+            <span>Destination</span>
+            <input
+              v-model="sendTo"
+              type="text"
+              data-testid="test-sms-to"
+              placeholder="+256772000118"
+            />
+          </label>
+          <label class="filter-select">
+            <span>Sender</span>
+            <input v-model="sendFrom" type="text" data-testid="test-sms-from" placeholder="JKANNEL" />
+          </label>
+          <label class="filter-select">
+            <span>Pin to connection</span>
+            <select v-model="sendSmscId" data-testid="test-sms-smsc">
+              <option value="">let the router choose</option>
+              <option v-for="option in smscs" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <label class="analyzer-field">
+          <span>Message body</span>
+          <textarea
+            v-model="sendBody"
+            rows="3"
+            data-testid="test-sms-body"
+            placeholder="JKANNEL operational test — please ignore."
+          ></textarea>
+        </label>
+
+        <!--
+          The same segment computation the analyser tab runs, shown here because
+          what a test costs is part of deciding to send it — and because a test
+          that silently becomes three segments teaches the wrong thing about the
+          body an operator was checking.
+        -->
+        <p class="source-note" data-testid="test-sms-cost">
+          {{ sendSegments.segments }} segment(s), {{ sendSegments.alphabet }},
+          {{ sendSegments.length }} characters.
+        </p>
+
+        <footer class="detail-actions">
+          <button
+            class="primary-button"
+            type="button"
+            data-testid="test-sms-submit"
+            :disabled="!canSubmitTest || sendBusy"
+            @click="confirmingSend = true"
+          >
+            {{ sendBusy ? 'Sending…' : 'Send operational test SMS' }}
+          </button>
+        </footer>
+        <p v-if="!canSubmitTest" class="source-note" data-testid="test-sms-blocked">
+          A destination, a sender and a body are all required before this can be sent.
+        </p>
+
+        <p v-if="testSendError" class="form-error" role="alert" data-testid="test-sms-error">
+          {{ testSendError }}
+        </p>
+      </template>
+
+      <!-- What actually happened, as the design's Timeline. -->
+      <template v-if="sentTrace.length">
+        <h3 class="trace-heading">Trace — {{ sentReference }}</h3>
+        <EventTimeline dense :items="sentTrace" data-testid="test-sms-trace" />
+        <p class="source-note">
+          These are the stages JKANNEL recorded, not a carrier's account of the message. The
+          receipt step stays hollow until a DLR arrives, and some carriers never send one —
+          <RouterLink class="text-link" :to="`/message-trace?id=${encodeURIComponent(sentReference)}`"
+            >open the full trace</RouterLink
+          >
+          for the engine's own rows.
+        </p>
+      </template>
+    </section>
+
+    <!-- 5. DLR LOOKUP ------------------------------------------------------------ -->
+    <section
+      v-show="tab === 'dlr'"
+      id="tools-tab-panel-dlr"
+      role="tabpanel"
+      aria-labelledby="tools-tab-dlr"
+      class="panel"
+      data-testid="tools-dlr"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="tools-dlr-heading">DLR lookup</h2>
+          <p>
+            Find a receipt by the id JKANNEL issued or the reference the carrier returned. Reads the
+            engine store; sends nothing.
+          </p>
+        </div>
+      </header>
+
+      <div class="grid-toolbar">
+        <label class="filter-select filter-search">
+          <span>Message or carrier reference</span>
+          <input
+            v-model="dlrQuery"
+            type="search"
+            data-testid="dlr-lookup-input"
+            placeholder="91021 or 448210-mtn"
+            @keyup.enter="lookupDlr"
+          />
+        </label>
+        <button
+          class="primary-button"
+          type="button"
+          data-testid="dlr-lookup-submit"
+          :disabled="dlrState === 'loading'"
+          @click="lookupDlr"
+        >
+          {{ dlrState === 'loading' ? 'Reading…' : 'Look up' }}
+        </button>
+      </div>
+
+      <p v-if="dlrError" class="form-error" role="alert" data-testid="dlr-lookup-error">
+        {{ dlrError }}
+      </p>
+
+      <template v-if="dlrTrace">
+        <h3 class="trace-heading">Receipt lifecycle</h3>
+        <p class="source-note">
+          Every state recorded for this message, in order. A step that has not happened is drawn
+          hollow rather than omitted — a missing receipt and an absent row look identical once the
+          row is gone.
+        </p>
+        <EventTimeline :items="dlrStages" data-testid="dlr-lifecycle" />
+        <p v-if="dlrTrace.available === false" class="warn-notice" role="note">
+          The engine message store could not be read, so only JKANNEL's own record is above.
+        </p>
+      </template>
+      <p v-else-if="dlrState === 'empty'" class="chart-empty" data-testid="dlr-lookup-empty">
+        Nothing is recorded under that identifier. Retention prunes older messages, so this is not
+        proof the message never existed.
+      </p>
+    </section>
+
+    <!-- 6. TAGGED TEST SENDS ---------------------------------------------------- -->
+    <section
+      v-show="tab === 'test-sms'"
+      class="panel"
+      data-testid="tools-test-sends"
+      aria-labelledby="tools-sends-heading"
+    >
       <header class="panel-header">
         <div>
           <h2 id="tools-sends-heading">Tagged test sends</h2>
@@ -516,7 +952,7 @@ onMounted(() => {
         :skeleton-rows="4"
         :detail="
           sendState === 'empty'
-            ? 'Nothing has been tagged as test traffic. This build has no console control that tags a send — the tag is applied by the API, so an empty list means no caller has used it, not that no test has ever been run.'
+            ? 'Nothing has been tagged as test traffic. The Test SMS control above tags every message it sends, so an empty list means no test has been sent from here — and an API caller that submits without tagging will not appear either.'
             : sendState === 'error'
               ? sendError
               : undefined
@@ -551,12 +987,45 @@ onMounted(() => {
         </div>
       </DataState>
     </section>
+
+    <!--
+      The only confirmation on this screen, because Test SMS is the only control
+      that costs anything. Its impact is supplied rather than fetched: there is
+      no impact endpoint for a send, and every consequence listed is read from a
+      real computation — the segment analysis and the pinned connection.
+    -->
+    <ConfirmAction
+      v-if="confirmingSend"
+      :open="true"
+      operation="test-send"
+      :impact="sendImpact"
+      title="Send operational test SMS"
+      verb="Send it"
+      :busy="sendBusy"
+      danger
+      testid="test-sms-confirm"
+      @close="confirmingSend = false"
+      @confirm="runTestSend"
+    />
   </div>
 </template>
 
 <style scoped>
 .scope-note {
   border-left: 3px solid var(--brand);
+}
+.tools-tabs {
+  margin-bottom: 16px;
+}
+.trace-heading {
+  margin: 20px 0 8px;
+  font-size: 14px;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
 }
 .scope-note h2 {
   margin: 0 0 8px;

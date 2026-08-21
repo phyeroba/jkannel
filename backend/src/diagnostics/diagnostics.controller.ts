@@ -1,4 +1,14 @@
-import { BadRequestException, Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { MessageTraceService } from './message-trace.service';
@@ -13,6 +23,9 @@ const actor = (request: Request) => ({
   tenantId: request.principal!.tenantId,
   userId: request.principal!.userId,
 });
+
+/** The same shape every other controller validates a UUID against. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Diagnostics: message lifecycle and SMPP status decoding (spec §10, §11).
@@ -48,6 +61,37 @@ export class DiagnosticsController {
   @RequirePermissions('messages.view')
   testSends(@Req() r: Request, @Query('limit') limit?: string) {
     return this.tools.listTestSends(actor(r), limit ? Number(limit) : undefined);
+  }
+
+  /**
+   * Marks a message reference as operator test traffic (UC-TST-01).
+   *
+   * `TestToolsService.tagTestSend` has existed since the table did, and nothing
+   * exposed it — so the tag could only ever be applied by something reaching
+   * into the service directly, and the console's own tagged-sends panel could
+   * never be non-empty. This is the route the Test Tools screen calls straight
+   * after a send.
+   *
+   * Gated on `messages.send` rather than `messages.view`: tagging asserts that a
+   * message WAS a test, which changes how anyone reading a trace interprets it.
+   * That is a claim about traffic, and it belongs with the permission to create
+   * traffic rather than with the permission to look at it.
+   */
+  @Post('test-sends')
+  @RequirePermissions('messages.send')
+  tagTestSend(@Req() r: Request, @Body() body: any = {}) {
+    const foreignId = String(body?.foreignId ?? '').trim();
+    if (!foreignId) throw new BadRequestException('foreignId is required');
+    const destination = String(body?.destination ?? '').trim();
+    if (!destination) throw new BadRequestException('destination is required');
+    const smscId = body?.smscId === undefined || body?.smscId === null || body?.smscId === ''
+      ? null
+      : String(body.smscId).trim();
+    if (smscId && !UUID.test(smscId)) throw new BadRequestException('smscId must be a UUID');
+    const reason = body?.reason === undefined || body?.reason === null
+      ? undefined
+      : String(body.reason).slice(0, 500);
+    return this.tools.tagTestSend(actor(r), { foreignId, smscId, destination, reason });
   }
 
   /**
