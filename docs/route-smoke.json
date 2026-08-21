@@ -361,7 +361,7 @@
   },
   {
     "route": "/services",
-    "chars": 3385,
+    "chars": 3386,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -373,7 +373,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1989,
+    "chars": 1992,
     "panels": 4,
     "errorState": false,
     "partial": true,
@@ -385,7 +385,7 @@
   },
   {
     "route": "/performance",
-    "chars": 2135,
+    "chars": 2134,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -409,7 +409,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8694,
+    "chars": 8817,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -421,7 +421,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 15510,
+    "chars": 15368,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -505,7 +505,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 10066,
+    "chars": 9702,
     "panels": 2,
     "errorState": false,
     "partial": false,
