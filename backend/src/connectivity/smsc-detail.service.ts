@@ -78,7 +78,30 @@ export interface SmscDetail {
   inboundRate: number | null;
   capacity: CapacityView;
   transitions: BindTransition[];
+  /**
+   * The last error the engine reported on this connection, verbatim.
+   *
+   * Null means no error has been recorded — which on a connection that has
+   * never bound is itself informative, and different from an error we failed
+   * to capture. It is shown as the "top error" the design asks for, with the
+   * caveat that it is the LATEST rather than the most frequent: the engine
+   * keeps one error string per connection and no history of them.
+   */
+  lastError: string | null;
+  /** Routing rules whose primary or fallback target is this connection. */
+  routes: RouteUsage[];
   limits: ObservabilityLimits;
+}
+
+/** A routing rule that depends on this connection staying up. */
+export interface RouteUsage {
+  id: string;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  /** `primary` when this is the rule's target, `fallback` when its fallback. */
+  role: 'primary' | 'fallback';
+  destinationPrefix: string | null;
 }
 
 /**
@@ -143,7 +166,7 @@ export class SmscDetailService {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const { rows } = await client.query<Record<string, unknown>>(
         `SELECT s.id::text, s.engine_id, s.name, s.type, s.host, s.port, s.enabled,
-                s.lifecycle_state, s.tps, s.connection_count,
+                s.lifecycle_state, s.tps, s.connection_count, s.last_error,
                 s.traffic_suspended_at, s.traffic_suspended_by, s.traffic_suspended_reason,
                 s.carrier_id::text, c.name AS carrier_name,
                 b.state, b.entered_at, b.observed_at, b.queued_count, b.failed_count,
@@ -171,6 +194,24 @@ export class SmscDetailService {
            FROM smsc_bind_transitions
           WHERE smsc_id = $1::uuid
           ORDER BY observed_at DESC LIMIT 100`,
+        [row.id],
+      );
+
+      /*
+       * What breaks if this connection goes down (§4.2's "Queue and routing").
+       *
+       * Both roles in one query with a `role` label rather than two queries or
+       * a join per role: a rule can name the same connection as target AND
+       * fallback, and the UNION keeps that visible as two rows instead of
+       * silently collapsing to whichever query ran second.
+       */
+      const routes = await client.query<Record<string, unknown>>(
+        `SELECT id::text, name, priority, enabled, destination_prefix, 'primary' AS role
+           FROM routing_rules WHERE target_smsc_id = $1::uuid
+          UNION ALL
+         SELECT id::text, name, priority, enabled, destination_prefix, 'fallback' AS role
+           FROM routing_rules WHERE fallback_smsc_id = $1::uuid
+          ORDER BY priority, name`,
         [row.id],
       );
 
@@ -210,6 +251,15 @@ export class SmscDetailService {
           toState: (entry.to_state as string) ?? null,
           detail: (entry.detail as Record<string, unknown>) ?? null,
           observedAt: String(entry.observed_at),
+        })),
+        lastError: (row.last_error as string) ?? null,
+        routes: routes.rows.map((entry) => ({
+          id: String(entry.id),
+          name: String(entry.name),
+          priority: Number(entry.priority ?? 0),
+          enabled: Boolean(entry.enabled),
+          role: entry.role === 'fallback' ? ('fallback' as const) : ('primary' as const),
+          destinationPrefix: (entry.destination_prefix as string) ?? null,
         })),
         limits: observabilityLimits(connectionCount ?? 1),
       };

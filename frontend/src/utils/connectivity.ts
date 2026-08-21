@@ -102,6 +102,16 @@ export interface BindTransition {
 }
 
 /** `GET /smscs/:engineId/detail`. */
+/** A routing rule that sends traffic to a connection, and in what role. */
+export interface RouteUsage {
+  id: string;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  role: 'primary' | 'fallback';
+  destinationPrefix: string | null;
+}
+
 export interface SmscDetail {
   id: string;
   engineId: string;
@@ -116,6 +126,17 @@ export interface SmscDetail {
   bindState: string | null;
   bindStateSince: string | null;
   bindObservedAt: string | null;
+  /**
+   * Set when an operator stopped traffic on this connection.
+   *
+   * A suspended connection and a broken one can look identical in `bindState`,
+   * and conflating them sends somebody to argue with a carrier about traffic
+   * their own colleague stopped — so the three suspension fields are read
+   * together and rendered as a decision, not a fault.
+   */
+  trafficSuspendedAt?: string | null;
+  trafficSuspendedBy?: string | null;
+  trafficSuspendedReason?: string | null;
   queued: number | null;
   failed: number | null;
   sent: number | null;
@@ -124,6 +145,10 @@ export interface SmscDetail {
   inboundRate: number | null;
   capacity: CapacityView;
   transitions: BindTransition[];
+  /** The latest error string the engine recorded, or null if none has been. */
+  lastError?: string | null;
+  /** Routing rules naming this connection as target or fallback. */
+  routes?: RouteUsage[];
   limits: ObservabilityLimits;
 }
 
