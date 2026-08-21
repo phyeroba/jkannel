@@ -34,8 +34,29 @@ export interface DlrPerformanceReport {
    * to have been summarised on.
    */
   byBind: CarrierQuality[];
+  /**
+   * The same window rolled up per CARRIER rather than per bind.
+   *
+   * Computed in SQL, grouped by carrier, rather than by folding `byBind`
+   * together in TypeScript. Counts would sum correctly, but percentiles cannot
+   * be averaged: the mean of two binds' P95s describes no bind and no message.
+   * A carrier's P95 has to be taken over that carrier's own receipts, which
+   * means grouping before the percentile, not after.
+   */
+  byCarrier: CarrierQuality[];
+  /** MT submitted and receipts received per time bucket, for the trend chart. */
+  volume: VolumePoint[];
+  /** Seconds per bucket in `volume`, so the console can label the axis. */
+  bucketSeconds: number;
   available: boolean;
   detail: string;
+}
+
+export interface VolumePoint {
+  at: string;
+  submitted: number;
+  receipts: number;
+  delivered: number;
 }
 
 /**
@@ -64,6 +85,17 @@ const numberOrNull = (value: unknown): number | null =>
 @Injectable()
 export class DlrPerformanceService {
   constructor(private readonly database: DatabaseService) {}
+
+  /**
+   * Bucket width for the volume trend, chosen so the chart holds roughly fifty
+   * points whatever range was asked for. Rounded up to a whole minute: sub-
+   * minute buckets over a day produce a chart nobody can read and a query that
+   * sorts far more rows than the picture needs.
+   */
+  static bucketFor(fromMs: number, toMs: number): number {
+    const seconds = Math.max(60, Math.round((toMs - fromMs) / 1000));
+    return Math.max(60, Math.ceil(seconds / 50 / 60) * 60);
+  }
 
   async report(
     actor: Actor,
@@ -151,6 +183,96 @@ export class DlrPerformanceService {
           ],
         );
 
+        const bucketSeconds = DlrPerformanceService.bucketFor(fromMs, toMs);
+
+        /*
+         * The same window and the same correlation, grouped by carrier.
+         *
+         * Run as its own query rather than folded up from `byBind` because
+         * percentiles do not roll up: a carrier's P95 has to be taken over that
+         * carrier's own receipts, which means grouping BEFORE the percentile.
+         * The counts would have summed correctly, and that is exactly the trap
+         * — the numbers beside the latency would look right while the latency
+         * described no message that was ever sent.
+         */
+        const carriers = await client.query<Record<string, unknown>>(
+          `WITH mt AS (
+             SELECT smsc_id, foreign_id, time AS submitted_at
+               FROM sent_sms
+              WHERE momt = 'MT' AND time BETWEEN $1 AND $2 AND foreign_id IS NOT NULL
+           ), dlr AS (
+             SELECT DISTINCT ON (d.foreign_id) d.foreign_id, d.dlr_mask, d.time AS receipt_at
+               FROM sent_sms d
+              WHERE d.momt = 'DLR' AND d.foreign_id IS NOT NULL
+                AND d.time BETWEEN $1 AND $2 + $8
+              ORDER BY d.foreign_id, d.time DESC
+           )
+           SELECT c.id::text AS carrier_id,
+                  c.name AS carrier_name,
+                  count(DISTINCT mt.foreign_id)                         AS submitted,
+                  count(dlr.foreign_id)                                 AS receipts,
+                  count(*) FILTER (WHERE dlr.dlr_mask = $3)             AS delivered,
+                  count(*) FILTER (WHERE dlr.dlr_mask = $4)             AS failed,
+                  count(*) FILTER (WHERE dlr.dlr_mask = $5)             AS rejected,
+                  count(*) FILTER (WHERE dlr.dlr_mask IN ($6, $7))      AS in_flight,
+                  count(*) FILTER (WHERE dlr.foreign_id IS NULL)        AS pending,
+                  percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p50,
+                  percentile_cont(0.95) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p95,
+                  percentile_cont(0.99) WITHIN GROUP (
+                    ORDER BY dlr.receipt_at - mt.submitted_at)
+                    FILTER (WHERE dlr.dlr_mask = $3)                    AS latency_p99
+             FROM mt
+             LEFT JOIN dlr ON dlr.foreign_id = mt.foreign_id
+             LEFT JOIN smsc_definitions s
+                    ON s.engine_id = mt.smsc_id AND s.deleted_at IS NULL
+             LEFT JOIN carriers c ON c.id = s.carrier_id AND c.deleted_at IS NULL
+            GROUP BY c.id, c.name`,
+          [
+            fromEpoch,
+            toEpoch,
+            DLR_DELIVERED,
+            DLR_FAILED,
+            DLR_REJECTED,
+            DLR_BUFFERED,
+            DLR_ACCEPTED,
+            RECEIPT_SETTLING_SECONDS,
+          ],
+        );
+
+        /*
+         * Volume over time. §8's point is that quality must be trended
+         * SEPARATELY from raw traffic, so a busy hour is not mistaken for a
+         * better one — which needs both lines on the same axis over the same
+         * buckets. Bucketed on the MT's own submission time, so a receipt that
+         * arrives late is still counted against the minute the message was sent.
+         */
+        const volumeRows = await client.query<Record<string, unknown>>(
+          `WITH mt AS (
+             SELECT smsc_id, foreign_id, time AS submitted_at
+               FROM sent_sms
+              WHERE momt = 'MT' AND time BETWEEN $1 AND $2 AND foreign_id IS NOT NULL
+           ), dlr AS (
+             SELECT DISTINCT ON (d.foreign_id) d.foreign_id, d.dlr_mask
+               FROM sent_sms d
+              WHERE d.momt = 'DLR' AND d.foreign_id IS NOT NULL
+                AND d.time BETWEEN $1 AND $2 + $5
+              ORDER BY d.foreign_id, d.time DESC
+           )
+           SELECT to_timestamp(floor(mt.submitted_at::numeric / $4) * $4) AS bucket_at,
+                  count(DISTINCT mt.foreign_id)             AS submitted,
+                  count(dlr.foreign_id)                     AS receipts,
+                  count(*) FILTER (WHERE dlr.dlr_mask = $3) AS delivered
+             FROM mt
+             LEFT JOIN dlr ON dlr.foreign_id = mt.foreign_id
+            GROUP BY 1
+            ORDER BY 1`,
+          [fromEpoch, toEpoch, DLR_DELIVERED, bucketSeconds, RECEIPT_SETTLING_SECONDS],
+        );
+
         const names = await client.query<Record<string, unknown>>(
           `SELECT s.engine_id, s.name, s.carrier_id::text, c.name AS carrier_name
              FROM smsc_definitions s
@@ -198,11 +320,51 @@ export class DlrPerformanceService {
           };
         });
 
+        /*
+         * A carrier row with a null id is real traffic on a connection that
+         * belongs to no carrier record. It is kept and labelled rather than
+         * dropped: hiding it would make the carrier table's totals quietly
+         * disagree with the funnel above it.
+         */
+        const byCarrier = carriers.rows.map((row) => ({
+          engineId: '',
+          smscName: null,
+          carrierId: (row.carrier_id as string) ?? null,
+          carrierName: (row.carrier_name as string) ?? null,
+          quality: buildDeliveryQuality({
+            funnel: toFunnel(row),
+            ...window,
+            latency: {
+              p50: numberOrNull(row.latency_p50),
+              p95: numberOrNull(row.latency_p95),
+              p99: numberOrNull(row.latency_p99),
+            },
+          }),
+        }));
+
         return {
           from: new Date(fromMs).toISOString(),
           to: new Date(toMs).toISOString(),
           overall: buildDeliveryQuality({ funnel: total, ...window }),
           byBind: byBind.sort((a, b) => b.quality.funnel.submitted - a.quality.funnel.submitted),
+          // Worst delivery first, as the design orders it — the row an operator
+          // is looking for is never the healthy one. A carrier with no measured
+          // rate sorts last rather than first: "unknown" is not "worst".
+          byCarrier: byCarrier.sort((a, b) => {
+            const left = a.quality.deliveryRate;
+            const right = b.quality.deliveryRate;
+            if (left === null && right === null) return 0;
+            if (left === null) return 1;
+            if (right === null) return -1;
+            return left - right;
+          }),
+          volume: volumeRows.rows.map((row) => ({
+            at: new Date(String(row.bucket_at)).toISOString(),
+            submitted: Number(row.submitted ?? 0),
+            receipts: Number(row.receipts ?? 0),
+            delivered: Number(row.delivered ?? 0),
+          })),
+          bucketSeconds,
           available: true,
           // Says the thing the `expired` field cannot say for itself. The
           // comment on toFunnel() used to claim this text carried the caveat
@@ -226,6 +388,9 @@ export class DlrPerformanceService {
           nowMs,
         }),
         byBind: [],
+        byCarrier: [],
+        volume: [],
+        bucketSeconds: DlrPerformanceService.bucketFor(fromMs, toMs),
         available: false,
         detail: `Delivery data unavailable: ${(error as Error).message}`,
       };

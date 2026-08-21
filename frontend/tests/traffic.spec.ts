@@ -10,7 +10,48 @@ import {
   formatSignedRate,
   growthTone,
   rateAt,
+  readDeliveryAs,
 } from '../src/utils/traffic';
+
+/**
+ * The verdict column exists to keep two conditions apart that a single delivery
+ * percentage cannot distinguish, and that get different escalations: receipts
+ * going missing (a carrier reporting problem) versus messages genuinely not
+ * arriving (a delivery problem).
+ */
+describe('readDeliveryAs', () => {
+  const quality = (over: Record<string, unknown> = {}) =>
+    ({
+      deliveryRate: 0.99,
+      noReceiptRate: 0,
+      ...over,
+    }) as never;
+
+  it('calls a healthy carrier healthy', () => {
+    expect(readDeliveryAs(quality()).word).toBe('healthy');
+  });
+
+  it('blames the receipts, not the handsets, when receipts are missing', () => {
+    // Tested BEFORE the delivery rate, because a window where most messages
+    // have no receipt makes the delivery rate meaningless — calling that a
+    // delivery failure sends someone to the wrong argument with the carrier.
+    const verdict = readDeliveryAs(quality({ deliveryRate: 0.4, noReceiptRate: 0.6 }));
+    expect(verdict.word).toBe('receipts delayed or lost');
+    expect(verdict.tone).toBe('warn');
+  });
+
+  it('calls a genuine delivery failure what it is', () => {
+    const verdict = readDeliveryAs(quality({ deliveryRate: 0.8, noReceiptRate: 0 }));
+    expect(verdict.word).toBe('true delivery failure');
+    expect(verdict.tone).toBe('bad');
+  });
+
+  it('says "no data" rather than reporting an unmeasured carrier as failing', () => {
+    const verdict = readDeliveryAs(quality({ deliveryRate: null, noReceiptRate: null }));
+    expect(verdict.word).toBe('no data');
+    expect(verdict.tone).toBe('muted');
+  });
+});
 
 const destination = (over: Record<string, unknown> = {}) => ({
   depth: 100,
