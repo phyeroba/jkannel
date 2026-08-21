@@ -145,11 +145,13 @@ describe('Alert lifecycle view', () => {
     );
     // notification_state=undeliverable means the alert reached nobody; say so.
     expect(wrapper.find('[data-testid="lifecycle-undeliverable-banner"]').exists()).toBe(true);
-    // A transition entry is rendered as history, not as somebody's comment.
-    expect(wrapper.get('[data-testid="lifecycle-thread-transition-0"]').text()).toContain(
-      'history',
-    );
-    expect(wrapper.get('[data-testid="lifecycle-thread-comment-1"]').text()).toContain('amina');
+    // The thread is now the design's Timeline. A transition is still rendered
+    // as platform history rather than as somebody's note, and a comment still
+    // names its author — the distinction the flat list used to make with a
+    // badge is now made by the step label.
+    const thread = wrapper.get('[data-testid="lifecycle-thread"]').text();
+    expect(thread).toContain('State change');
+    expect(thread).toContain('Comment by amina');
     wrapper.unmount();
   });
 
