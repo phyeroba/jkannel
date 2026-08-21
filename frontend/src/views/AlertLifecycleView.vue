@@ -4,6 +4,15 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import EventTimeline from '../components/EventTimeline.vue';
+import {
+  alertAcknowledgement,
+  alertCategory,
+  alertDuration,
+  alertObject,
+  alertOccurrences,
+  alertStarted,
+} from '../utils/alerts';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'idle' | 'loading' | 'ok' | 'error';
@@ -363,6 +372,108 @@ const transitionEntries = computed(() =>
   comments.value.filter((entry) => entry.kind === 'transition'),
 );
 
+/**
+ * The incident as a Timeline (§13's "correlated evidence", the kit's Timeline).
+ *
+ * Assembled from four recorded sources — the alert's own open/escalate/resolve/
+ * close stamps and the comment thread — rather than from a single table, because
+ * no single table holds the whole incident. Everything here was written by the
+ * platform or by an operator; nothing is inferred.
+ *
+ * The last step is the one that matters most and is the reason this is a
+ * Timeline and not a list: an open, unacknowledged alert gets a `missing` step
+ * for the acknowledgement. A hollow dashed dot says "this was expected and has
+ * not happened". Omitting the step entirely would leave the timeline looking
+ * complete, which is exactly the alert that gets missed.
+ */
+const incidentTimeline = computed(() => {
+  const clock = (value: unknown): string => {
+    const parsed = Date.parse(String(value ?? ''));
+    return Number.isFinite(parsed)
+      ? new Date(parsed).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '—';
+  };
+  const at = (value: unknown): number =>
+    Number.isFinite(Date.parse(String(value ?? ''))) ? Date.parse(String(value)) : 0;
+
+  const items: Array<{
+    order: number;
+    at: string;
+    label: string;
+    detail?: string;
+    state: 'ok' | 'warn' | 'error' | 'missing' | 'info';
+  }> = [];
+  const alert = record.value;
+  if (!alert) return [];
+
+  if (alert.openedAt)
+    items.push({
+      order: at(alert.openedAt),
+      at: clock(alert.openedAt),
+      label: 'Alert opened',
+      detail: alert.summary,
+      state: String(alert.severity).toLowerCase() === 'critical' ? 'error' : 'warn',
+    });
+
+  for (const entry of comments.value)
+    items.push({
+      order: at(entry.createdAt),
+      at: clock(entry.createdAt),
+      label:
+        entry.kind === 'transition'
+          ? 'State change'
+          : `Comment by ${entry.authorUsername ?? 'an operator'}`,
+      detail: entry.body,
+      state: entry.kind === 'transition' ? 'info' : 'ok',
+    });
+
+  if (alert.escalatedAt)
+    items.push({
+      order: at(alert.escalatedAt),
+      at: clock(alert.escalatedAt),
+      label: 'Escalated',
+      detail: alert.previousSeverity
+        ? `Severity raised from ${alert.previousSeverity} to ${alert.severity}.`
+        : undefined,
+      state: 'error',
+    });
+
+  if (alert.resolvedAt)
+    items.push({
+      order: at(alert.resolvedAt),
+      at: clock(alert.resolvedAt),
+      label: 'Recovered',
+      detail: 'The recovery condition was met and the platform closed the condition itself.',
+      state: 'ok',
+    });
+
+  if (alert.closedAt)
+    items.push({
+      order: at(alert.closedAt),
+      at: clock(alert.closedAt),
+      label: 'Closed',
+      detail: 'An operator ended this incident. Recovery detection no longer reopens it.',
+      state: 'ok',
+    });
+
+  items.sort((a, b) => a.order - b.order);
+
+  const open = ['open', 'suppressed'].includes(status.value);
+  const acknowledged = comments.value.some(
+    (entry) => entry.kind === 'transition' && /acknowledg/i.test(String(entry.body ?? '')),
+  );
+  if (open && !acknowledged)
+    items.push({
+      order: Number.MAX_SAFE_INTEGER,
+      at: 'not yet',
+      label: 'Acknowledgement',
+      detail: 'Nobody has taken this incident. It is open and unclaimed.',
+      state: 'missing',
+    });
+
+  return items.map(({ order: _order, ...item }) => item);
+});
+
 // --- Auto refresh --------------------------------------------------------------
 // The index only. The open detail is deliberately not polled: an operator
 // typing a note must not have the record swapped underneath them.
@@ -480,11 +591,16 @@ onMounted(() => {
             <tr>
               <th scope="col">Severity</th>
               <th scope="col">Condition</th>
+              <th scope="col">Category</th>
+              <th scope="col">Object</th>
               <th scope="col">Status</th>
+              <th scope="col">Started</th>
+              <th scope="col">Duration</th>
+              <th scope="col">Occurrences</th>
+              <th scope="col">Acknowledgement</th>
               <th scope="col">Assigned to</th>
               <th scope="col">Suppressed until</th>
               <th scope="col">Notification</th>
-              <th scope="col">Opened</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
@@ -504,11 +620,30 @@ onMounted(() => {
                 <strong>{{ text(row.summary ?? row.rule_name) }}</strong>
                 <small class="row-id mono">{{ rowId(row) }}</small>
               </td>
+              <td :data-testid="`lifecycle-category-${rowId(row)}`">{{ alertCategory(row) }}</td>
+              <td class="mono" :data-testid="`lifecycle-object-${rowId(row)}`">
+                {{ alertObject(row) }}
+              </td>
               <td>
                 <span class="status-badge" :class="statusTone(row.status)">
                   {{ text(row.status) }}
                 </span>
               </td>
+              <td class="mono" :data-testid="`lifecycle-started-${rowId(row)}`">
+                {{ text(alertStarted(row)) }}
+              </td>
+              <!--
+                Measured to now while the alert is open, so the column ages with
+                the incident; measured to resolution once it closes, so a settled
+                incident stops growing.
+              -->
+              <td class="mono" :data-testid="`lifecycle-duration-${rowId(row)}`">
+                {{ alertDuration(row) }}
+              </td>
+              <td class="figures" :data-testid="`lifecycle-occurrences-${rowId(row)}`">
+                {{ alertOccurrences(row) }}
+              </td>
+              <td :data-testid="`lifecycle-ack-${rowId(row)}`">{{ alertAcknowledgement(row) }}</td>
               <td class="mono" :data-testid="`lifecycle-assignee-${rowId(row)}`">
                 {{ rowAssignee(row) || 'unassigned' }}
               </td>
@@ -520,7 +655,6 @@ onMounted(() => {
                   {{ rowNotificationState(row) }}
                 </span>
               </td>
-              <td>{{ text(row.opened_at ?? row.openedAt) }}</td>
               <td class="row-actions">
                 <button
                   class="secondary-button"
@@ -532,12 +666,12 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="listState === 'ok' && !alerts.length">
-              <td colspan="8" class="empty-cell" data-testid="lifecycle-empty">
+              <td colspan="13" class="empty-cell" data-testid="lifecycle-empty">
                 No alerts match this filter.
               </td>
             </tr>
             <tr v-if="listState === 'loading'">
-              <td colspan="8" class="empty-cell">Loading alerts…</td>
+              <td colspan="13" class="empty-cell">Loading alerts…</td>
             </tr>
           </tbody>
         </table>
@@ -789,27 +923,22 @@ onMounted(() => {
         >
           {{ commentsError }}
         </p>
-        <ul v-else class="sample-list" data-testid="lifecycle-thread">
-          <li
-            v-for="(entry, index) in comments"
-            :key="entry.id ?? index"
-            :data-testid="`lifecycle-thread-${entry.kind === 'transition' ? 'transition' : 'comment'}-${index}`"
-          >
-            <span class="status-badge" :class="entry.kind === 'transition' ? '' : 'good'">
-              {{ entry.kind === 'transition' ? 'history' : 'comment' }}
-            </span>
-            <span class="mono">{{ text(entry.authorUsername, 'system') }}</span>
-            <span>{{ text(entry.body) }}</span>
-            <small>{{ text(entry.createdAt) }}</small>
-          </li>
-          <li
+        <template v-else>
+          <EventTimeline
+            v-if="incidentTimeline.length"
+            :items="incidentTimeline"
+            dense
+            data-testid="lifecycle-thread"
+          />
+          <p
             v-if="commentsState === 'ok' && !comments.length"
+            class="source-note"
             data-testid="lifecycle-thread-empty"
           >
             Nothing has happened to this alert yet beyond it opening.
-          </li>
-          <li v-if="commentsState === 'loading'">Loading the thread…</li>
-        </ul>
+          </p>
+          <p v-if="commentsState === 'loading'" class="source-note">Loading the thread…</p>
+        </template>
 
         <div v-if="canAct" class="grid-toolbar" data-testid="lifecycle-comment-row">
           <label class="filter-select filter-search">
