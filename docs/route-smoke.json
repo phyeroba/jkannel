@@ -1,7 +1,7 @@
 [
   {
     "route": "/dashboard/operations",
-    "chars": 1068,
+    "chars": 1615,
     "panels": 5,
     "errorState": false,
     "denied": false,
@@ -12,7 +12,7 @@
   },
   {
     "route": "/monitoring",
-    "chars": 268,
+    "chars": 360,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -56,7 +56,7 @@
   },
   {
     "route": "/notifications",
-    "chars": 3664,
+    "chars": 3874,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -78,9 +78,9 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 1879,
+    "chars": 2263,
     "panels": 2,
-    "errorState": false,
+    "errorState": true,
     "denied": false,
     "empty": false,
     "pageErrors": [],
@@ -111,7 +111,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4294,
+    "chars": 4296,
     "panels": 6,
     "errorState": false,
     "denied": false,
@@ -221,8 +221,8 @@
   },
   {
     "route": "/failover",
-    "chars": 763,
-    "panels": 2,
+    "chars": 1018,
+    "panels": 3,
     "errorState": false,
     "denied": false,
     "empty": false,
@@ -276,7 +276,7 @@
   },
   {
     "route": "/reports",
-    "chars": 5384,
+    "chars": 5334,
     "panels": 12,
     "errorState": false,
     "denied": false,
@@ -342,7 +342,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1603,
+    "chars": 1602,
     "panels": 3,
     "errorState": true,
     "denied": false,
@@ -353,7 +353,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3461,
+    "chars": 3462,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -364,7 +364,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 7431,
+    "chars": 7392,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -375,7 +375,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 13060,
+    "chars": 13251,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -397,8 +397,8 @@
   },
   {
     "route": "/configuration",
-    "chars": 2329,
-    "panels": 6,
+    "chars": 3052,
+    "panels": 7,
     "errorState": false,
     "denied": false,
     "empty": false,
