@@ -1015,6 +1015,31 @@ const definitions: Record<string, Workspace> = {
         badge: (raw) => badgeTone(raw.status),
       },
       { header: 'Roles', value: (raw) => list(raw.roles) },
+      /*
+       * What the account can actually do, from the roles it holds. A user with
+       * no role reads "no privileges" rather than blank: that account can sign
+       * in and see nothing, which is a real and confusing state worth naming in
+       * the register instead of leaving as an empty cell.
+       */
+      {
+        header: 'Privileges',
+        value: (raw) => {
+          const roles = Array.isArray(raw.roles) ? (raw.roles as unknown[]) : [];
+          if (!roles.length) return 'no privileges — signs in and sees nothing';
+          return `via ${roles.map((role) => String(role)).join(', ')}`;
+        },
+      },
+      /*
+       * Derived from the audit trail's last `login.succeeded`, not from a
+       * column on `users`. "never seen" is a distinct answer from a date and
+       * from a blank — an account that has never been used is exactly the one
+       * worth noticing in an access review.
+       */
+      {
+        header: 'Last seen',
+        value: (raw) => text(raw.last_seen_at ?? raw.lastSeenAt, 'never seen'),
+        mono: true,
+      },
       { header: 'Created', value: (raw) => text(raw.created_at ?? raw.createdAt) },
       { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
     ],

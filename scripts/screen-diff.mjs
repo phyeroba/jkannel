@@ -105,7 +105,12 @@ const VUE_PRIMITIVES = {
   BarChart: /class="chart"|BarChart/,
   Timeline: /timeline|Timeline/,
   ConfirmAction: /ConfirmAction/,
-  Tabs: /role="tablist"|class="tabs"|Tabs/,
+  // `TabStrip` is this console's port of the kit's Tabs; `role="tablist"`
+  // catches a hand-rolled one. The bare word `Tabs` used to be in this
+  // alternation and matched PROSE — a comment saying "Tabs put one tool in
+  // front of the operator" was enough to report the primitive as present on a
+  // screen that had none.
+  Tabs: /<TabStrip\b|role="tablist"|class="tabs"/,
   DataTable: /<table/,
   'chip-scope': /class="chip|'chip'/,
   'stale-banner': /stale-banner/,

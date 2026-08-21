@@ -1089,8 +1089,21 @@ export class ConsoleRepository {
     return this.grid(
       actor,
       {
+        // `last_seen_at` comes from the audit trail rather than a column on
+        // `users`, and that is deliberate. A `last_login_at` column has to be
+        // written on every successful sign-in — a write on the hottest path in
+        // the system, purely to display a timestamp — and it can drift from the
+        // audit trail, which is the record anyone would actually be believed
+        // over. Reading the trail means there is one answer and it is the
+        // auditable one.
+        //
+        // NULL when the user has never signed in since auditing began, which
+        // the console renders as "never seen" rather than as a date.
         select:
-          "SELECT u.id,u.username,u.status,u.created_at,u.updated_at,(SELECT COALESCE(array_agg(r.name),'{}') FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id) roles",
+          "SELECT u.id,u.username,u.status,u.created_at,u.updated_at," +
+          "(SELECT COALESCE(array_agg(r.name),'{}') FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id) roles," +
+          "(SELECT max(a.created_at) FROM audit_log a " +
+          "  WHERE a.actor_id = u.id::text AND a.action = 'login.succeeded') AS last_seen_at",
         from: 'FROM users u',
       },
       CONSOLE_GRIDS.users,
