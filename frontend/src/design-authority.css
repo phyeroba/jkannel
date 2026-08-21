@@ -1323,23 +1323,23 @@ th {
    remembered.
    =========================================================================== */
 
-/* Consecutive panels always breathe. Applies wherever panels are plain
-   siblings, which is how most views are written. */
-.panel + .panel,
-.panel + .split-grid,
-.split-grid + .panel,
-.panel + .metrics-grid,
-.metrics-grid + .panel {
-  margin-top: 16px;
-}
+/* THE MARGIN RULES THAT USED TO LIVE HERE HAVE MOVED, and the move is the
+   point rather than a tidy-up.
 
-/* ...except inside a container that already provides the gap, where a margin
-   would double the spacing instead of creating it. */
-.workspace-stack > .panel + .panel,
-.split-grid > .panel + .panel,
-.metrics-grid > .panel + .panel {
-  margin-top: 0;
-}
+   `.panel + .panel { margin-top: 16px }` plus a list of exceptions for
+   containers that already provide a gap is a mechanism that has to be told
+   about every container, and it was not: `.dashboard-grid + .panel` was absent,
+   so the dashboard's grid sat flush against the carrier panel below it, and six
+   view roots that declare their own grid gap were never in the exception list,
+   so those screens ran at 32px while the rest ran at 16.
+
+   Margins have to be subtracted from each other; gaps do not accumulate at all.
+   So the rhythm is now one `gap` on the view root, in
+   `design-system/index.css`, and `scripts/spacing-audit.mjs` measures the
+   rendered result on every route so a regression is a number rather than
+   something somebody has to spot.
+
+   Adding a margin back here will double the gap on every screen. */
 
 /* A vertical page: header, then panels, evenly spaced. Used by the §14 screens
    and available to any new view that wants the default rhythm. */

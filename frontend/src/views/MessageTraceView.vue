@@ -706,9 +706,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* The margin is the shared `.panel` rule's — this only adds the accent. */
 .problem-panel {
   border-left: 3px solid var(--bad);
-  margin-bottom: 14px;
 }
 .problem-panel h2 {
   color: var(--bad);

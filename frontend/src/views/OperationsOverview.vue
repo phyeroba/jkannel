@@ -460,12 +460,22 @@ function statusTone(status: string) {
 </script>
 <template>
   <!--
-    Stale telemetry is announced ABOVE the content, never in place of it. An
-    operator has to be able to read everything on the screen while being told
-    which part of it is not current — replacing the dashboard with a warning
-    hides exactly the numbers they came to look at.
+    A single root, like every other view.
+
+    This template used to return a fragment, so its banner, action bar, metric
+    row, two grids and the carrier panel landed as direct children of <main>.
+    Every other screen wraps its content, and the console's spacing rhythm is
+    applied to that wrapper — so the dashboard, alone, had no rhythm and its
+    grids sat flush against the panel below them.
   -->
-  <p v-if="unobservedCarriers" class="stale-banner" data-testid="dashboard-stale-banner">
+  <div data-testid="operations-view">
+    <!--
+      Stale telemetry is announced ABOVE the content, never in place of it. An
+      operator has to be able to read everything on the screen while being told
+      which part of it is not current — replacing the dashboard with a warning
+      hides exactly the numbers they came to look at.
+    -->
+    <p v-if="unobservedCarriers" class="stale-banner" data-testid="dashboard-stale-banner">
     Telemetry for {{ unobservedCarriers }}
     {{ unobservedCarriers === 1 ? 'carrier is' : 'carriers are' }} not being observed, so
     {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than healthy.
@@ -782,9 +792,10 @@ function statusTone(status: string) {
             </td>
           </tr>
         </tbody>
-      </table>
-    </div>
-  </article>
+        </table>
+      </div>
+    </article>
+  </div>
 </template>
 
 <style scoped>

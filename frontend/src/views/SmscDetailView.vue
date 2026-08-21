@@ -940,7 +940,10 @@ watch(engineId, reload);
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-  margin: 0 0 14px;
+  /* Not a panel, so the gap is set here — from the same token the panels use,
+     so the action bar sits the same distance above the first panel as the
+     panels sit from each other. */
+  margin: 0 0 var(--gap-panel);
 }
 .route-heading {
   margin: 20px 0 8px;

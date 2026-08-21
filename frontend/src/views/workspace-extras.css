@@ -51,9 +51,11 @@ tr.clickable-row:hover td {
   font-size: 11px;
 }
 
-/* Detail drawer/panel shared across users, smsc, and audit modules. */
+/* Detail drawer/panel shared across users, smsc, and audit modules.
+   The gap comes from the shared `.panel` rule where this is used as one; kept
+   here for the cases where it is not, at the same token so they agree. */
 .detail-panel {
-  margin-bottom: 14px;
+  margin-bottom: var(--gap-panel);
   border-left: 3px solid var(--brand);
 }
 .detail-panel header {
@@ -137,7 +139,7 @@ tr.clickable-row:hover td {
 
 /* Help / information box for operators. */
 .help-box {
-  margin-bottom: 14px;
+  margin-bottom: var(--gap-panel);
   border-left: 3px solid var(--info);
 }
 .help-box h2 {
@@ -165,7 +167,7 @@ tr.clickable-row:hover td {
 
 /* One-time secret reveal box. */
 .secret-box {
-  margin-bottom: 14px;
+  margin-bottom: var(--gap-panel);
   border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
   background: color-mix(in srgb, var(--warn) 8%, var(--surface));
 }

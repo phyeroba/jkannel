@@ -296,7 +296,7 @@ describe('DLR Performance — window and honesty', () => {
     expect(wrapper.find('[data-testid="dlr-funnel-panel"]').exists()).toBe(false);
   });
 
-  it('explains an empty window instead of showing a funnel of zeros', async () => {
+  it('keeps its panels on an empty window, and says why every figure reads as it does', async () => {
     const { wrapper } = await mountView(
       report({
         overall: quality({
@@ -316,9 +316,25 @@ describe('DLR Performance — window and honesty', () => {
         byBind: [],
       }),
     );
-    const block = wrapper.get('[data-testid="dlr-state"]');
-    expect(block.attributes('data-state')).toBe('empty');
-    expect(block.text()).toContain('No message was submitted in this window');
+    /*
+     * An empty window used to collapse the whole screen into one sentence,
+     * taking five panels of structure with it — which is what made a working
+     * screen read as a dead menu item.
+     *
+     * The notice still explains it. The panels stay, because they can show an
+     * empty window honestly: a count of zero really is zero messages, and
+     * `empty` is not an untrustworthy state so nothing is invented by leaving
+     * them up.
+     */
+    const notice = wrapper.get('[data-testid="dlr-empty-notice"]');
+    expect(notice.text()).toContain('No message was submitted in this window');
+    expect(wrapper.find('[data-testid="dlr-funnel-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dlr-carrier-panel"]').exists()).toBe(true);
+    // And the rate in them is not a confident 0%. A delivery rate over zero
+    // messages has no value, and 0% would read as a total delivery failure.
+    const settled = wrapper.get('[data-testid="dlr-rate-settled"]').text();
+    expect(settled).not.toContain('0%');
+    expect(['—', 'unknown']).toContain(settled);
   });
 
   it('reports a permission failure as such', async () => {

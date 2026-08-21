@@ -451,9 +451,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* The margin is the shared `.panel` rule's — this only adds the accent. */
 .scope-note {
   border-left: 3px solid var(--warn);
-  margin-bottom: 14px;
 }
 .scope-note h2 {
   margin: 0 0 8px;

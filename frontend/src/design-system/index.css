@@ -204,3 +204,88 @@
   border-left: 0;
   padding-left: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   PANEL SPACING — owned by the view root, not by the panel
+   ---------------------------------------------------------------------------
+   `components.css` gives `.panel` its padding and gives `.metrics-grid` a
+   bottom margin, but never gives `.panel` one. The kit does not need that rule
+   because every panel in it carries `style={{ marginBottom: 16 }}` inline; the
+   port dropped those, so stacked panels touched and views patched around it one
+   at a time — 14px here, 16px there, nothing at all on the rest. That is why
+   the spacing differed from screen to screen.
+
+   The obvious fix is `.panel { margin-bottom }`, and it is wrong. Measuring it
+   showed why: six view roots are already grid containers with their own gap, so
+   the margin ADDED to it and those screens went to 32px while the rest sat at
+   16. Two panels in a grid track got the gap; a grid followed by a panel got
+   nothing at all, because the margin was on the panels inside the grid rather
+   than on the grid.
+
+   So the rhythm belongs to the container. `main` holds a breadcrumb bar, a page
+   heading and exactly one view root on every screen (the dashboard was the one
+   exception and now has a root too), and that root owns the gap between every
+   top-level block inside it — panels, grids and banners alike.
+
+   Gap does not accumulate the way margins do, which is the property that makes
+   this hold: a view root that already declared its own grid gap is simply
+   overridden to the same token rather than adding to it. There is one number
+   and it is `--gap-panel`.
+
+   `scripts/spacing-audit.mjs` measures the rendered result on every route, so a
+   view that reintroduces a margin shows up as a wrong gap rather than as
+   something somebody has to notice. */
+main > [data-testid$='-view'],
+main > [data-testid='module-workspace'] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-panel);
+}
+
+/* A `v-show`-hidden tab panel is still a flex child and would otherwise
+   contribute a gap, leaving a mysterious band of space on tabbed screens. */
+main > [data-testid$='-view'] > [style*='display: none'],
+main > [data-testid='module-workspace'] > [style*='display: none'] {
+  display: none !important;
+}
+
+/* THE CONTAINER OWNS THE RHYTHM, so no top-level block contributes its own.
+
+   Several blocks carry a bottom margin from when they sat in normal flow — the
+   kit's `.toolbar` has 14px, `.help-box` and `.secret-box` have 16 — and inside
+   a gapped container each of those ADDS to the gap. Measured, that put filter
+   bars 30px above their register and help boxes 32px above theirs while
+   everything else sat at 16.
+
+   Zeroing them one selector at a time is the mechanism that already failed once
+   in `design-authority.css`: it has to be told about every offender, and it was
+   not told about several. One rule instead, so a block added later cannot
+   reintroduce the problem.
+
+   This only removes the distance to the NEXT top-level block, which is exactly
+   what the gap now provides. Margins inside those blocks are untouched.
+   (`components.css` is a byte-for-byte copy of the design system and is never
+   edited; this adaptation layer is where JKANNEL's changes to it belong.)
+
+   Both block margins, not just the bottom: a `.source-note` used as a
+   top-level block carries a `margin-top` and contributed the same way. */
+main > [data-testid$='-view'] > *,
+main > [data-testid='module-workspace'] > * {
+  margin-block: 0;
+}
+
+/* Inside a panel, a notice or banner is content rather than a sibling block:
+   the panel's own padding is the boundary, so it uses the tighter rhythm. */
+.panel > .notice,
+.panel > .warn-notice,
+.panel > .form-error,
+.panel > .stale-banner,
+.panel > .source-note + .source-note {
+  margin-bottom: var(--sp-4);
+}
+.panel > .notice:last-child,
+.panel > .warn-notice:last-child,
+.panel > .form-error:last-child,
+.panel > .stale-banner:last-child {
+  margin-bottom: 0;
+}

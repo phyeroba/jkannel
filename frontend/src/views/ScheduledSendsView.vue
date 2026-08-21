@@ -346,9 +346,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* The margin is the shared `.panel` rule's — this only adds the accent. */
 .scope-note {
   border-left: 3px solid var(--brand);
-  margin-bottom: 14px;
 }
 .field-grid {
   display: grid;

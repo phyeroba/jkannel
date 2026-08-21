@@ -57,6 +57,21 @@ const state = ref<State>('loading');
 const error = ref('');
 const sortBy = ref<'submitted' | 'worst'>('submitted');
 
+/**
+ * The state the CONTENT is rendered under, as opposed to the state of the read.
+ *
+ * They differ in exactly one case: `empty`. A window with no traffic is a real
+ * answer, and the panels can show it honestly — zero counts, `unknown` rates —
+ * so the content renders and a notice above says why every figure is what it
+ * is. Blocking on empty collapsed five panels into one sentence and made a
+ * working screen look like a dead menu item.
+ *
+ * Every other state is passed through unchanged: `error` and
+ * `permission-denied` mean the screen cannot answer, and `loading` must show
+ * skeletons rather than a page of zeros.
+ */
+const contentState = computed<State>(() => (state.value === 'empty' ? 'live' : state.value));
+
 const overall = computed<DeliveryQuality | null>(() => report.value?.overall ?? null);
 const funnel = computed(() => overall.value?.funnel ?? null);
 const maturity = computed(() => overall.value?.maturity ?? null);
@@ -329,18 +344,38 @@ onMounted(load);
       <p v-if="error" class="form-error" role="alert" data-testid="dlr-error">{{ error }}</p>
     </section>
 
+    <!--
+      A QUIET WINDOW IS NOT A BROKEN SCREEN.
+
+      Every panel below used to sit inside the state block, so a window with no
+      traffic collapsed the whole screen to the header and one sentence — five
+      panels' worth of structure gone. It read as a menu item that does nothing,
+      which is exactly what it was reported as.
+
+      Empty now keeps the shape and says so here. That is safe as well as
+      legible: `empty` is not an untrustworthy state, so a count of zero really
+      is zero messages submitted, and every rate below it reads `unknown`
+      because a rate over no messages has no value. Nothing is invented by
+      leaving the panels up.
+
+      `error` and `permission-denied` still replace the content, because those
+      mean the screen cannot answer at all.
+    -->
+    <p v-if="state === 'empty'" class="notice" role="status" data-testid="dlr-empty-notice">
+      <strong>No message was submitted in this window.</strong>
+      The panels below keep their shape so you can see what this screen reports; their counts are
+      a real zero and their rates read <span class="mono">unknown</span>, because a delivery rate
+      over no messages has no value. Widen the range in the top bar, or check
+      <RouterLink class="text-link" to="/live-traffic">Live Traffic</RouterLink> to confirm traffic
+      is flowing.
+    </p>
+
     <DataState
-      :state="state"
+      :state="contentState"
       subject="delivery receipts"
       skeleton="cards"
       :skeleton-rows="4"
-      :detail="
-        state === 'empty'
-          ? 'No message was submitted in this window, so there is no delivery rate to report. Widen the time range in the top bar, or check Live Traffic to confirm traffic is flowing.'
-          : state === 'error'
-            ? error
-            : undefined
-      "
+      :detail="state === 'error' ? error : undefined"
       permission="reports.view"
       testid="dlr-state"
       :on-retry="load"
@@ -668,7 +703,10 @@ onMounted(load);
 .maturity-alert {
   display: grid;
   gap: 6px;
-  margin: 0 0 14px;
+  /* The bottom gap comes from the shared `.stale-banner` rule, which this
+     element also carries — restating it here at a different value is what made
+     the spacing on this screen disagree with every other one. */
+  margin: 0;
   padding: 14px 16px;
   border: 1px solid var(--warn);
   border-left-width: 4px;
