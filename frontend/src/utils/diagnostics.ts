@@ -385,6 +385,137 @@ export function subjectLabel(event: Pick<OperationalEvent, 'subject_type' | 'sub
  */
 export const CORRELATION_ID_PATTERN = /^[0-9a-f-]{36}$/i;
 
+// --- GET /messages — finding the message before tracing it -------------------
+
+/**
+ * One row of the message search grid.
+ *
+ * This is the SQLBox projection `KamexSqlboxRepository.normalize()` returns,
+ * narrowed to the fields the grid renders. It is deliberately NOT
+ * {@link MessageTrace}: searching answers *which message did you mean*, tracing
+ * answers *what happened to it*. Only the second assembles per-stage evidence,
+ * so only the second is expensive — collapsing them would make every search pay
+ * a lifecycle assembly for rows the operator is about to scroll past.
+ *
+ * Every field is nullable because the engine writes them at different points in
+ * a message's life. `dlrAt` in particular is null for every message whose
+ * receipt has not arrived, which is the ordinary state of a recent send rather
+ * than a hole in the data — hence `formatFinal` below rather than a bare dash.
+ */
+export interface TraceSearchRow {
+  id: string;
+  externalRef: string | null;
+  sender: string | null;
+  receiver: string | null;
+  smscId: string | null;
+  deliveryStatus: string | null;
+  timestamp: string | null;
+  dlrAt: string | null;
+  direction?: string | null;
+  text?: string | null;
+}
+
+/**
+ * The statuses the grid filter offers.
+ *
+ * These are the values `DELIVERY_STATUS_SQL` can actually produce, not a
+ * superset: offering a filter that can never match anything teaches an operator
+ * that the search is broken. `delivery_report` is excluded because a receipt row
+ * is not a message an operator traces — it is evidence attached to one.
+ */
+export const TRACE_STATUS_FILTERS = [
+  'delivered',
+  'failed',
+  'pending',
+  'buffered',
+  'accepted',
+  'rejected',
+] as const;
+
+/**
+ * Tone for a derived delivery status.
+ *
+ * `pending` is muted for the same reason it is muted on a stage: no receipt yet
+ * is not a failure, and on a grid of forty rows the colour is the only thing
+ * most people read.
+ */
+export function deliveryTone(status: string | null | undefined): Tone {
+  switch ((status ?? '').toLowerCase()) {
+    case 'delivered':
+      return 'good';
+    case 'failed':
+    case 'rejected':
+      return 'bad';
+    case 'buffered':
+      return 'warn';
+    case 'accepted':
+      return 'good';
+    default:
+      return 'muted';
+  }
+}
+
+/**
+ * The "Final" column: when the message reached a terminal outcome.
+ *
+ * Null means no receipt has been correlated. That is reported as *awaiting
+ * receipt* rather than as an em dash, because the dash on this screen means "we
+ * looked and there is nothing", and here we looked and found a message that is
+ * simply not finished yet.
+ */
+export function formatFinal(dlrAt: string | null | undefined): string {
+  if (!dlrAt) return 'awaiting receipt';
+  const parsed = new Date(dlrAt);
+  return Number.isNaN(parsed.getTime()) ? String(dlrAt) : parsed.toLocaleString();
+}
+
+/**
+ * The kit's "Diagnostic summary" — the trace as text an operator can paste into
+ * a carrier ticket.
+ *
+ * A line is emitted only for a fact that was actually recorded. The kit's mock
+ * prints an em dash for everything it does not have; doing that here would put
+ * "Carrier message ID: —" into a ticket, and the carrier reading it cannot tell
+ * that from a message we failed to submit. Absent means absent.
+ */
+export function buildDiagnosticSummary(
+  trace: MessageTrace,
+  row: TraceSearchRow | null = null,
+  carrier: string | null = null,
+): string {
+  const lines: string[] = [`Message ${trace.id}`];
+  const push = (label: string, value: string | null | undefined) => {
+    if (value !== null && value !== undefined && String(value).trim()) lines.push(`${label}: ${value}`);
+  };
+
+  push('Carrier message ID', row?.externalRef);
+  push('Destination', row?.receiver ? `${row.receiver}${carrier ? ` (${carrier})` : ''}` : null);
+  push('Sender', row?.sender);
+  push('SMSC', row?.smscId);
+  push('Submitted', row?.timestamp ? new Date(row.timestamp).toLocaleString() : null);
+  push('Final', row?.dlrAt ? new Date(row.dlrAt).toLocaleString() : null);
+  push('Outcome', row?.deliveryStatus);
+
+  const total = trace.lifecycle?.totalMs;
+  push('Elapsed across recorded stages', typeof total === 'number' ? formatMilliseconds(total) : null);
+  push('Stages recorded', String(trace.lifecycle?.stages?.length ?? 0));
+
+  const problem = trace.lifecycle?.firstProblem;
+  lines.push(
+    problem
+      ? `First abnormal stage: ${problem.label} — ${problem.detail}`
+      : 'All recorded stages completed normally.',
+  );
+
+  // Without this line a summary assembled while SQLBox was down looks identical
+  // to one assembled from a complete read, and it is the half-read that gets
+  // pasted into a ticket and argued over.
+  if (trace.available === false)
+    lines.push(`NOTE: the engine message store could not be read — ${trace.detail}`);
+
+  return lines.join('\n');
+}
+
 export function isCorrelationId(value: string | null | undefined): boolean {
   return CORRELATION_ID_PATTERN.test(String(value ?? '').trim());
 }

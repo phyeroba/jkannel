@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({ displayName: 'Amina Operator', permissions: new Set(['messages.view']) }),
@@ -255,10 +255,14 @@ describe('Message Trace — evidence and absence', () => {
     expect(empty.text()).toContain('not proof the message never existed');
   });
 
-  it('asks nothing of the API until an id is supplied', async () => {
+  it('asks nothing of the API until something is supplied', async () => {
     const { wrapper, calls } = await mountView(trace(), '/message-trace');
+    // Neither the lifecycle read nor the message search fires on an empty box.
     expect(calls).toHaveLength(0);
-    expect(wrapper.get('[data-testid="trace-state"]').text()).toContain('Enter a message id');
+    expect(wrapper.get('[data-testid="trace-state"]').text()).toContain('Search above by message id');
+    // And the results grid is not rendered at all before a search has run, so
+    // an empty table never implies "no message matches".
+    expect(wrapper.find('[data-testid="trace-matches"]').exists()).toBe(false);
   });
 
   it('links a bind fact to that connection and traces the id typed into the box', async () => {
@@ -276,5 +280,138 @@ describe('Message Trace — evidence and absence', () => {
         true,
       ),
     );
+  });
+});
+
+/*
+ * Finding the message. An operator arrives with an MSISDN from a complaint, not
+ * with the id the lifecycle endpoint needs, so the same box runs `GET /messages`
+ * and a row click drills through. These mount against a URL-aware mock because
+ * the screen now reads three different endpoints.
+ */
+const emptyTrace = {
+  id: '',
+  available: true,
+  detail: 'Read from the engine message store.',
+  events: [],
+  lifecycle: { stages: [], totalMs: null, firstProblem: null, inFlight: false },
+};
+
+const messageRow = (overrides: Record<string, unknown> = {}) => ({
+  id: '91021',
+  externalRef: '448210-mtn',
+  sender: 'JKANNEL',
+  receiver: '+256772000118',
+  smscId: 'mtn-p1',
+  deliveryStatus: 'delivered',
+  timestamp: '2026-08-17T09:00:00.000Z',
+  dlrAt: '2026-08-17T09:00:04.000Z',
+  ...overrides,
+});
+
+const mountSearch = async (
+  responses: { messages?: unknown; smscs?: unknown; lifecycle?: unknown } = {},
+  path = '/message-trace?id=%2B256772000118',
+) => {
+  const calls: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/diagnostics/messages/'))
+        return envelope(responses.lifecycle ?? emptyTrace);
+      if (url.includes('/smscs'))
+        return envelope(responses.smscs ?? { items: [{ engine_id: 'mtn-p1', carrier_name: 'MTN Uganda' }] });
+      return envelope(
+        responses.messages ?? { items: [messageRow()], total: 1, source: { status: 'available' } },
+      );
+    }),
+  );
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/message-trace', component: { template: '<p/>' } },
+      { path: '/smsc/:engineId', component: { template: '<p/>' } },
+    ],
+  });
+  await router.push(path);
+  await router.isReady();
+  const wrapper = mount(MessageTraceView, { global: { plugins: [router] } });
+  await flushPromises();
+  return { wrapper, calls };
+};
+
+describe('Message Trace — finding the message before tracing it', () => {
+  beforeEach(() => {
+    // DetailDrawer teleports into <body>; without this a test inherits the
+    // previous test's open drawer and asserts against the wrong DOM.
+    document.body.innerHTML = '';
+  });
+
+  it('lists what matched, resolves the carrier, and traces a row on click', async () => {
+    const { wrapper, calls } = await mountSearch();
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="trace-match-91021"]').exists()).toBe(true));
+
+    const row = wrapper.get('[data-testid="trace-match-91021"]');
+    const cells = row.findAll('td').map((cell) => cell.text());
+    expect(cells[0]).toBe('91021');
+    expect(cells[1]).toBe('448210-mtn');
+    expect(cells[2]).toBe('+256772000118');
+    // Resolved from GET /smscs, not carried on the message row itself.
+    expect(cells[4]).toBe('MTN Uganda');
+    expect(cells[5]).toBe('mtn-p1');
+
+    await row.trigger('click');
+    await vi.waitFor(() =>
+      expect(calls.some((url) => url.includes('/diagnostics/messages/91021/lifecycle'))).toBe(true),
+    );
+  });
+
+  it('says "awaiting receipt" rather than a dash when no receipt has arrived', async () => {
+    const { wrapper } = await mountSearch({
+      messages: {
+        items: [messageRow({ dlrAt: null, deliveryStatus: 'pending' })],
+        total: 1,
+        source: { status: 'available' },
+      },
+    });
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="trace-match-91021"]').exists()).toBe(true));
+    const cells = wrapper.get('[data-testid="trace-match-91021"]').findAll('td');
+    expect(cells[cells.length - 1].text()).toBe('awaiting receipt');
+  });
+
+  it('reports an unreadable engine store as an error, never as "nothing matched"', async () => {
+    const { wrapper } = await mountSearch({
+      messages: {
+        items: [],
+        source: { status: 'unavailable', message: 'SQLBox is not reachable.' },
+      },
+    });
+    const banner = await vi.waitFor(() => wrapper.get('[data-testid="trace-match-state"]'));
+    expect(banner.attributes('data-state')).toBe('error');
+    expect(banner.text()).toContain('SQLBox is not reachable.');
+  });
+
+  it('builds a diagnostic summary from the selected row, not from placeholders', async () => {
+    const { wrapper } = await mountSearch({
+      lifecycle: {
+        ...emptyTrace,
+        id: '91021',
+        lifecycle: { stages: [routed], totalMs: 420, firstProblem: null, inFlight: false },
+      },
+    });
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="trace-match-91021"]').exists()).toBe(true));
+    await wrapper.get('[data-testid="trace-match-91021"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-testid="trace-summary-open"]').trigger('click');
+    await flushPromises();
+
+    const summary = document.body.querySelector('[data-testid="trace-summary-text"]');
+    expect(summary?.textContent).toContain('Carrier message ID: 448210-mtn');
+    expect(summary?.textContent).toContain('Destination: +256772000118 (MTN Uganda)');
+    expect(summary?.textContent).toContain('All recorded stages completed normally.');
+    // No em dashes for facts that were never captured.
+    expect(summary?.textContent).not.toContain('—');
   });
 });

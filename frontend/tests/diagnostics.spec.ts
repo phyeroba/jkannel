@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   bindFactTarget,
+  buildDiagnosticSummary,
+  deliveryTone,
   factLabel,
+  formatFinal,
   formatLatency,
   formatMilliseconds,
   formatSmppCode,
@@ -19,8 +22,88 @@ import {
   stageTone,
   stageWord,
   subjectLabel,
+  type MessageTrace,
   type SmppStatus,
 } from '../src/utils/diagnostics';
+
+const traceOf = (overrides: Partial<MessageTrace> = {}): MessageTrace => ({
+  id: '91021',
+  available: true,
+  detail: 'Read from the engine message store.',
+  events: [],
+  lifecycle: { stages: [], totalMs: null, firstProblem: null, inFlight: false },
+  ...overrides,
+});
+
+describe('the message search grid', () => {
+  it('calls an absent receipt "awaiting receipt", not a dash', () => {
+    // A dash on this screen means "we looked and there is nothing". A message
+    // with no receipt yet is not that — it is unfinished.
+    expect(formatFinal(null)).toBe('awaiting receipt');
+    expect(formatFinal(undefined)).toBe('awaiting receipt');
+    expect(formatFinal('not a date')).toBe('not a date');
+  });
+
+  it('refuses to paint a pending message as a warning', () => {
+    expect(deliveryTone('pending')).toBe('muted');
+    expect(deliveryTone('delivered')).toBe('good');
+    expect(deliveryTone('failed')).toBe('bad');
+    expect(deliveryTone('rejected')).toBe('bad');
+    expect(deliveryTone(null)).toBe('muted');
+  });
+});
+
+describe('the diagnostic summary', () => {
+  it('omits every fact that was not recorded rather than printing a placeholder', () => {
+    const text = buildDiagnosticSummary(traceOf());
+    expect(text).toContain('Message 91021');
+    expect(text).toContain('All recorded stages completed normally.');
+    // Nothing was selected, so there is no destination, sender or reference to
+    // quote — and inventing dashes for them would put "Destination: —" into a
+    // carrier ticket.
+    expect(text).not.toContain('Destination');
+    expect(text).not.toContain('Carrier message ID');
+    expect(text).not.toContain('—');
+  });
+
+  it('quotes the selected row and names the first abnormal stage', () => {
+    const text = buildDiagnosticSummary(
+      traceOf({
+        lifecycle: {
+          stages: [],
+          totalMs: 420,
+          firstProblem: { kind: 'receipt', label: 'Delivery receipt', detail: 'Carrier reported failed.' },
+          inFlight: false,
+        },
+      }),
+      {
+        id: '91021',
+        externalRef: '448210-mtn',
+        sender: 'JKANNEL',
+        receiver: '+256772000118',
+        smscId: 'mtn-p1',
+        deliveryStatus: 'failed',
+        timestamp: '2026-08-17T09:00:00.000Z',
+        dlrAt: null,
+      },
+      'MTN Uganda',
+    );
+    expect(text).toContain('Carrier message ID: 448210-mtn');
+    expect(text).toContain('Destination: +256772000118 (MTN Uganda)');
+    expect(text).toContain('SMSC: mtn-p1');
+    expect(text).toContain('Outcome: failed');
+    expect(text).toContain('First abnormal stage: Delivery receipt — Carrier reported failed.');
+    // No receipt arrived, so there is no "Final" line at all.
+    expect(text).not.toMatch(/^Final:/m);
+  });
+
+  it('marks a summary assembled while the engine store was unreadable', () => {
+    const text = buildDiagnosticSummary(
+      traceOf({ available: false, detail: 'SQLBox is not reachable.' }),
+    );
+    expect(text).toContain('NOTE: the engine message store could not be read');
+  });
+});
 
 describe('latency is never a zero nobody measured', () => {
   it('renders a missing latency as the em dash, not 0ms', () => {
