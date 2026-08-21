@@ -263,6 +263,15 @@ export const navigation: NavigationItem[] = [
     permission: 'messages.view',
     group: 'Traffic',
   },
+  // Beside DLR Performance because it answers the next question: that screen
+  // says what failed, this says what was done about it.
+  {
+    label: 'Delivery Retries',
+    to: '/delivery-retries',
+    icon: 'check',
+    permission: 'messages.view',
+    group: 'Traffic',
+  },
   {
     label: 'Delivery Reports',
     to: '/delivery-reports',

@@ -53,9 +53,10 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    // 45 since System > Performance was added. The count is asserted so a
-    // route cannot appear in the sidebar without someone deciding it should.
-    expect(navigation).toHaveLength(45);
+    // 46 since Traffic > Delivery Retries was added (45 before it, 44 before
+    // System > Performance). The count is asserted so a route cannot appear in
+    // the sidebar without someone deciding it should.
+    expect(navigation).toHaveLength(46);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
@@ -87,7 +88,15 @@ describe('primary navigation contract', () => {
     const traffic = navigation.filter((item) => item.group === 'Traffic').map((item) => item.to);
     // §2's three observational screens first; Live Queue is JKANNEL's own
     // recovery workflow and sits after them.
-    expect(traffic).toEqual(['/live-traffic', '/queues', '/dlr-performance', '/live-queue']);
+    // Delivery Retries sits last: it answers what was DONE about the failures
+    // the three observational screens and Live Queue surface.
+    expect(traffic).toEqual([
+      '/live-traffic',
+      '/queues',
+      '/dlr-performance',
+      '/live-queue',
+      '/delivery-retries',
+    ]);
     // The funnel is served by the reporting controller, which requires
     // reports.view — not messages.view like the rest of the group.
     expect(navigation.find((item) => item.to === '/dlr-performance')?.permission).toBe(

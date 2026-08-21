@@ -1,7 +1,7 @@
 [
   {
     "route": "/dashboard/operations",
-    "chars": 1730,
+    "chars": 1728,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -37,7 +37,7 @@
   },
   {
     "route": "/alert-lifecycle",
-    "chars": 1612,
+    "chars": 1610,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -85,7 +85,7 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2481,
+    "chars": 2474,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -97,7 +97,7 @@
   },
   {
     "route": "/queues",
-    "chars": 2229,
+    "chars": 2227,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -121,8 +121,20 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4299,
+    "chars": 4298,
     "panels": 6,
+    "errorState": false,
+    "partial": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
+    "route": "/delivery-retries",
+    "chars": 1001,
+    "panels": 5,
     "errorState": false,
     "partial": false,
     "denied": false,
@@ -277,7 +289,7 @@
   },
   {
     "route": "/smpp-errors",
-    "chars": 5401,
+    "chars": 5395,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -361,7 +373,7 @@
   },
   {
     "route": "/services",
-    "chars": 3386,
+    "chars": 3384,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -385,7 +397,7 @@
   },
   {
     "route": "/performance",
-    "chars": 2134,
+    "chars": 2129,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -397,7 +409,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3456,
+    "chars": 3457,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -409,7 +421,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8817,
+    "chars": 8713,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -421,7 +433,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 15368,
+    "chars": 15336,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -505,7 +517,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 9702,
+    "chars": 9499,
     "panels": 2,
     "errorState": false,
     "partial": false,
