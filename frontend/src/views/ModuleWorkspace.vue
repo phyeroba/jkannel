@@ -1409,6 +1409,41 @@ const canGenerateReports = computed(() => canAccess(session.value, 'system.manag
 const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
 const canManageSystem = computed(() => canAccess(session.value, 'system.manage'));
 const canManageConfig = computed(() => canAccess(session.value, 'configuration.manage'));
+
+/* --- GENERATED CONFIGURATION --------------------------------------------------
+ *
+ * The file the engine would be handed right now, from `POST
+ * /configurations/generate?source=database` — the same generator the deploy
+ * path runs, reading the same live objects. Not a preview of a draft: what is
+ * rendered here is what a deploy would write.
+ *
+ * On demand, not on load. Rendering resolves secret references, which makes it
+ * the one read on this screen with a real cost, and an operator who came to
+ * look at the version list should not pay it.
+ */
+const generatedConfig = ref<{ content?: string; checksum?: string; engine?: string } | null>(null);
+const generatedBusy = ref(false);
+const generatedError = ref('');
+
+async function loadGeneratedConfig() {
+  generatedBusy.value = true;
+  generatedError.value = '';
+  try {
+    generatedConfig.value = await apiRequest('/configurations/generate?source=database', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } catch (reason) {
+    generatedConfig.value = null;
+    // The generator's own message names the offending value or the missing
+    // secret reference, so it is surfaced verbatim rather than replaced with
+    // "generation failed" — the detail is the whole point of the error.
+    generatedError.value =
+      reason instanceof Error ? reason.message : 'The configuration could not be rendered.';
+  } finally {
+    generatedBusy.value = false;
+  }
+}
 const canAcknowledgeAlerts = computed(() => canAccess(session.value, 'alerts.acknowledge'));
 const canReveal = computed(() => canAccess(session.value, 'messages.reveal'));
 
@@ -5679,6 +5714,80 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+    </section>
+
+    <!-- GENERATED CONFIGURATION -------------------------------------------------
+      The file the engine would actually be given, rendered from THIS tenant's
+      SMSC definitions by the same generator the deploy path uses. Not a preview
+      of a draft the composer is holding: `?source=database` reads the live
+      objects, so what is on screen is what a deploy would write.
+
+      Fetched on demand rather than on page load. It resolves secret references
+      as it renders, so it is the one read on this screen with a cost, and an
+      operator who came to look at the version list should not pay it.
+    -->
+    <section
+      v-if="key === 'configuration' && !error"
+      class="panel"
+      data-testid="generated-configuration"
+      aria-label="Generated configuration"
+    >
+      <header class="panel-header">
+        <div>
+          <h2>Generated configuration</h2>
+          <p>
+            What the engine would be given right now, rendered from this tenant's own connections.
+            Read-only — the objects are the source, and the panel above says which one owns each
+            directive.
+          </p>
+        </div>
+        <button
+          v-if="canManageConfig"
+          class="secondary-button"
+          type="button"
+          data-testid="generated-config-load"
+          :disabled="generatedBusy"
+          @click="loadGeneratedConfig"
+        >
+          {{ generatedBusy ? 'Rendering…' : generatedConfig ? 'Re-render' : 'Render it' }}
+        </button>
+      </header>
+
+      <p v-if="!canManageConfig" class="source-note" data-testid="generated-config-denied">
+        Rendering the configuration needs the <span class="mono">configuration.manage</span>
+        permission. It resolves secret references while it renders, which is why reading it is
+        gated with the permission that deploys it rather than the one that lists versions.
+      </p>
+
+      <p
+        v-else-if="generatedError"
+        class="form-error"
+        role="alert"
+        data-testid="generated-config-error"
+      >
+        {{ generatedError }}
+      </p>
+
+      <template v-else-if="generatedConfig">
+        <p class="source-note" data-testid="generated-config-meta">
+          {{ generatedConfig.engine ?? 'kamex' }} ·
+          {{ generatedConfig.content?.split('\n').length ?? 0 }} lines · checksum
+          <span class="mono">{{ generatedConfig.checksum ?? 'not reported' }}</span>
+        </p>
+        <pre class="json-block" data-testid="generated-config-content">{{
+          generatedConfig.content
+        }}</pre>
+        <p class="source-note">
+          Secret references are resolved to render this, but the values are never returned — a
+          reference that cannot be resolved fails the render and names the environment variable it
+          needed, rather than emitting a file with a blank password in it.
+        </p>
+      </template>
+
+      <p v-else class="chart-empty" data-testid="generated-config-idle">
+        Not rendered yet. This is the only read on this screen that resolves secrets, so it is
+        asked for rather than fetched on arrival.
+      </p>
     </section>
 
     <section
