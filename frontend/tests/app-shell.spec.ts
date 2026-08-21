@@ -74,9 +74,10 @@ describe('application shell', () => {
     // 36 before Phase 4.2–4.4 added Message Trace, SMPP Errors and Events to
     // Diagnostics; 39 before Phase 5.2–5.5 added Failover and Route Simulator to
     // Routing and Test Tools to Diagnostics; 42 before Phase 7.1–7.2 added
-    // Services and Nodes to System; 44 before Performance joined System.
-    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(45);
-    expect(wrapper.findAll('.nav-items .nav-icon svg')).toHaveLength(45);
+    // Services and Nodes to System; 44 before Performance joined System; 45
+    // before Delivery Retries joined Traffic.
+    expect(wrapper.get('aside[aria-label="Primary navigation"] nav').findAll('a')).toHaveLength(46);
+    expect(wrapper.findAll('.nav-items .nav-icon svg')).toHaveLength(46);
     // Six specification sections plus the three JKANNEL adds (PLAN.md §1).
     expect(wrapper.findAll('.nav-group')).toHaveLength(9);
     // Every section header carries its own glyph. The design system lays a

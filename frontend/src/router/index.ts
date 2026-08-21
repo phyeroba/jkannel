@@ -301,6 +301,22 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Nine delivery-retry operations with no surface: retrying could be switched
+    // on, tuned and swept only by calling the API, so nobody using the console
+    // could see whether it was on or what it had done. Retrying spends a
+    // customer's credit, which makes that a poor thing to leave invisible.
+    path: '/delivery-retries',
+    name: 'delivery-retries',
+    component: () => import('../views/DeliveryRetriesView.vue'),
+    meta: {
+      title: 'Delivery Retries',
+      description:
+        'Which failed messages were re-sent, each attempt and the bind it used, and the policy that decides whether a failure is retried at all.',
+      breadcrumb: ['Traffic', 'Delivery Retries'],
+      permission: 'messages.view',
+    },
+  },
+  {
     // The fifteen customer-account operations — quota, credit ledger, sender-id
     // approval and route bindings — had no console surface at all before this.
     // A detail route rather than more panels on the register: they are things
