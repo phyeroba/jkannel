@@ -58,6 +58,16 @@ export interface ServiceReading {
   /** An unhealthy dependency, when one explains this component's state. */
   rootCause: string | null;
   observedAt: string | null;
+  /**
+   * How long this component has been running, where it can say.
+   *
+   * bearerbox publishes its own; `engine-poller` and `job-worker` run inside
+   * the API process and share its uptime. Everything else is a separate process
+   * this container can reach but cannot interrogate — there is no Docker socket
+   * here, deliberately — so it is null, and null means "not reported", never
+   * "just started".
+   */
+  uptimeSeconds?: number | null;
 }
 
 /**

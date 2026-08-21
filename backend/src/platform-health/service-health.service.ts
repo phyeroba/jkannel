@@ -72,6 +72,24 @@ export class ServiceHealthService {
       Object.entries(raw).map(([name, value]) => [name, value.state]),
     );
 
+    /*
+     * Uptime, only where a component actually reports one.
+     *
+     * bearerbox publishes its own uptime in the engine snapshot. `engine-poller`
+     * and `job-worker` run INSIDE this API process, so process.uptime() is
+     * genuinely how long they have been running. Everything else — the database,
+     * the cache, sqlbox, smsbox — is a separate process this container can reach
+     * but cannot ask how long it has been up, and there is no Docker socket here
+     * to ask on its behalf. Those stay null and the console prints "not
+     * reported", never an invented figure or a zero.
+     */
+    const processUptime = Math.round(process.uptime());
+    const uptimes: Record<string, number | null> = {
+      bearerbox: await this.engineUptimeSeconds(),
+      'engine-poller': processUptime,
+      'job-worker': processUptime,
+    };
+
     const services: ServiceReading[] = SERVICE_CATALOGUE.map((entry) => {
       const reading = raw[entry.name] ?? {
         state: 'unknown' as ServiceState,
@@ -88,6 +106,7 @@ export class ServiceHealthService {
         affects: dependentsOf(entry.name),
         rootCause: attributeRootCause(reading.state, entry.dependsOn, states),
         observedAt: reading.observation === 'unobserved' ? null : observedAt,
+        uptimeSeconds: uptimes[entry.name] ?? null,
       };
     });
 
@@ -104,6 +123,27 @@ export class ServiceHealthService {
       dependents: board.services.filter((entry) => found.affects.includes(entry.name)),
       observedAt: board.observedAt,
     };
+  }
+
+  /**
+   * bearerbox's own uptime, as the engine reports it.
+   *
+   * Null on any failure rather than 0: "the engine did not tell us" and "the
+   * engine just started" are opposite readings, and the second one would have
+   * an operator hunting a restart that never happened.
+   */
+  private async engineUptimeSeconds(): Promise<number | null> {
+    try {
+      if (!this.engines) return null;
+      const adapter = this.engines.forImplementation(
+        process.env.ENGINE_IMPLEMENTATION ?? 'kamex',
+      );
+      const snapshot = await (adapter as any)?.queueSnapshot?.();
+      const value = snapshot?.engine?.uptimeSeconds;
+      return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
+    } catch {
+      return null;
+    }
   }
 
   // --- probes ---------------------------------------------------------------

@@ -26,9 +26,11 @@
  *   GET /services         board + summary + root-cause attribution
  *   GET /services/:name   one component, with its dependencies resolved
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import EventTimeline from '../components/EventTimeline.vue';
+import { severityTone, type OperationalEvent } from '../utils/diagnostics';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { useRoute } from 'vue-router';
 import type { DataState as State } from '../utils/data-state';
@@ -41,6 +43,7 @@ import {
   type ServiceReading,
 } from '../utils/platform-health';
 import { formatMoment } from '../utils/connectivity';
+import { formatDuration } from '../utils/traffic';
 
 const route = useRoute();
 const board = ref<ServiceBoard | null>(null);
@@ -48,6 +51,26 @@ const state = ref<State>('loading');
 const error = ref('');
 const selected = ref<string | null>(null);
 const filter = ref<'any' | 'attention' | 'unobserved'>('any');
+
+/**
+ * When the board stops being a reading and becomes a photograph.
+ *
+ * This page probes on open and does not poll. Three minutes is long enough that
+ * a page just loaded never shows the banner, and short enough that a tab left
+ * open on a wall display stops passing itself off as live.
+ */
+const BOARD_STALE_AFTER_SECONDS = 180;
+
+const boardAgeSeconds = computed<number | null>(() => {
+  const at = board.value?.observedAt;
+  if (!at) return null;
+  const parsed = Date.parse(at);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round((Date.now() - parsed) / 1000)) : null;
+});
+
+const boardStale = computed(
+  () => boardAgeSeconds.value !== null && boardAgeSeconds.value > BOARD_STALE_AFTER_SECONDS,
+);
 
 const rows = computed(() => {
   const all = [...(board.value?.services ?? [])].sort(byUrgency);
@@ -65,6 +88,62 @@ const dependencies = computed(() =>
 );
 const dependents = computed(() =>
   (board.value?.services ?? []).filter((s) => chosen.value?.affects.includes(s.name)),
+);
+
+/* --- ONE COMPONENT -----------------------------------------------------------
+ *
+ * Selecting a row reads `GET /services/:name`, which resolves that component's
+ * dependencies and dependents server-side. It had no console surface at all
+ * before this — the panel below was assembled from the board, which meant the
+ * console was re-deriving an answer the API already gives, and a deep link to a
+ * component that does not exist had nothing to say.
+ */
+const detail = ref<(ServiceReading & { dependencies?: ServiceReading[]; dependents?: ServiceReading[] }) | null>(null);
+const detailMissing = ref(false);
+const serviceEvents = ref<OperationalEvent[]>([]);
+
+async function loadService(name: string) {
+  detailMissing.value = false;
+  serviceEvents.value = [];
+  try {
+    detail.value = await apiRequest(`/services/${encodeURIComponent(name)}`);
+  } catch (reason) {
+    detail.value = null;
+    // 404 is a real answer — the name is not in the register — and gets its own
+    // panel rather than an error banner that reads as a broken screen.
+    detailMissing.value = reason instanceof ApiError && reason.status === 404;
+  }
+  try {
+    const page = await apiRequest<{ items?: OperationalEvent[] }>(
+      `/diagnostics/events?limit=20&subjectType=service&subjectId=${encodeURIComponent(name)}`,
+    );
+    serviceEvents.value = Array.isArray(page?.items) ? page.items : [];
+  } catch {
+    // Events need monitoring.view, which system.view does not imply. The panel
+    // says nothing was recorded only when it genuinely read nothing.
+    serviceEvents.value = [];
+  }
+}
+
+watch(
+  () => chosen.value?.name,
+  (name) => {
+    if (name) void loadService(name);
+  },
+  { immediate: true },
+);
+
+const serviceTimeline = computed(() =>
+  serviceEvents.value.map((event) => ({
+    at: formatMoment(event.observed_at),
+    label: event.kind,
+    detail: event.summary,
+    state: (severityTone(event.severity) === 'bad'
+      ? 'error'
+      : severityTone(event.severity) === 'warn'
+        ? 'warn'
+        : 'info') as 'ok' | 'warn' | 'error' | 'missing' | 'info',
+  })),
 );
 
 async function load() {
@@ -108,6 +187,17 @@ onMounted(() => {
     />
 
     <template v-if="board && state === 'live'">
+      <!--
+        This board is probed when the page is opened, not continuously. Left
+        open on a wall display it silently becomes a photograph, and every state
+        on it reads as current — so once the probe is older than a few minutes
+        the page says so before the operator reads a single row.
+      -->
+      <p v-if="boardStale" class="stale-banner" role="status" data-testid="services-stale">
+        <strong>These states were probed {{ formatDuration(boardAgeSeconds ?? 0) }} ago.</strong>
+        Nothing below is a live reading. Refresh before acting on it.
+      </p>
+
       <!--
         The board's verdict, in a sentence. Rendered verbatim from the API,
         which counted the states and did the root-cause attribution — a
@@ -153,6 +243,7 @@ onMounted(() => {
                 <th>Component</th>
                 <th>Responsibility</th>
                 <th>State</th>
+                <th>Uptime</th>
                 <th>Evidence</th>
                 <th>Explained by</th>
               </tr>
@@ -174,18 +265,65 @@ onMounted(() => {
                     {{ stateWord(row) }}
                   </span>
                 </td>
+                <!--
+                  Only where a component actually reports one. bearerbox
+                  publishes its own; the poller and the job worker run inside
+                  this API process and share its uptime. A separate process this
+                  container can reach but not interrogate reads "not reported" —
+                  never a zero, which would look like it had just restarted.
+                -->
+                <td class="mono" :data-testid="`service-uptime-${row.name}`">
+                  {{
+                    typeof row.uptimeSeconds === 'number'
+                      ? formatDuration(row.uptimeSeconds)
+                      : 'not reported'
+                  }}
+                </td>
                 <td class="muted-cell evidence">{{ row.detail }}</td>
                 <td class="mono">{{ row.rootCause ?? '—' }}</td>
               </tr>
               <tr v-if="!rows.length">
-                <td class="empty-cell" colspan="5">No component matches this filter.</td>
+                <td class="empty-cell" colspan="6">No component matches this filter.</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <!--
+          The design's table has CPU and Memory columns. They are not here and
+          this says why, because an operator who has seen them in the design
+          will otherwise assume the columns broke rather than that the figures
+          do not exist.
+        -->
+        <p class="source-note" data-testid="services-resource-note">
+          There are no CPU or memory columns. Per-component usage would need a Docker socket, and
+          this container deliberately has none — an API process that can inspect and control its
+          own siblings is a much larger blast radius than a console needs. What
+          <em>is</em> measured is this container's own accounting, read from its cgroup and shown
+          on <RouterLink class="text-link" to="/system">System</RouterLink>; attributing that one
+          figure to each of the components hosted inside it would be an invention.
+        </p>
       </section>
 
-      <section v-if="chosen" class="split-grid">
+      <!--
+        A name the register does not hold is a real answer, not a broken screen.
+        It happens from a stale bookmark or a component removed from the
+        catalogue, and an error banner would send someone looking for a fault in
+        the console instead of in their link.
+      -->
+      <section v-if="detailMissing" class="panel" data-testid="service-not-found">
+        <h2>Service not found</h2>
+        <p>
+          No component named <span class="mono">{{ selected }}</span> is in the register. The
+          register is a fixed catalogue of what JKANNEL can say anything about, so this is not a
+          component that is down — it is one that does not exist here.
+        </p>
+        <button class="secondary-button" type="button" @click="selected = null">
+          Back to the component list
+        </button>
+      </section>
+
+      <section v-if="chosen && !detailMissing" class="split-grid">
         <article class="panel" :data-testid="`service-detail-${chosen.name}`">
           <h2>{{ chosen.name }}</h2>
           <p class="lede">{{ chosen.role }}</p>
@@ -250,6 +388,34 @@ onMounted(() => {
           </ul>
           <p v-else class="source-note">No other component depends on it.</p>
         </article>
+      </section>
+
+      <!--
+        The component's own history. `service.restarted` and its siblings are
+        recorded as operational events, so a component that has bounced three
+        times this morning shows a rhythm here — which is the thing a single
+        current state cannot say, and the reason this is a timeline.
+      -->
+      <section
+        v-if="chosen && !detailMissing"
+        class="panel"
+        data-testid="service-events"
+        aria-labelledby="service-events-heading"
+      >
+        <div class="panel-head">
+          <h2 id="service-events-heading">Recent events for {{ chosen.name }}</h2>
+          <RouterLink class="text-button" to="/events">All events</RouterLink>
+        </div>
+        <EventTimeline
+          v-if="serviceTimeline.length"
+          dense
+          :items="serviceTimeline"
+          data-testid="service-event-timeline"
+        />
+        <p v-else class="source-note" data-testid="service-events-empty">
+          No operational event has been recorded against this component. Reading them needs the
+          monitoring.view permission, so an empty timeline can also mean this role cannot see them.
+        </p>
       </section>
 
       <!--
