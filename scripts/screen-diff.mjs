@@ -48,7 +48,9 @@ const MAP = [
   ['ServicesScreen', ['views/ServicesView.vue']],
   ['ServiceDetailScreen', ['views/ServicesView.vue']],
   ['NodesScreen', ['views/NodesView.vue']],
-  ['PerformanceScreen', ['views/AnalyticsView.vue']],
+  // Was mapped at AnalyticsView because nothing else existed; the kit puts
+  // Performance under System as its own screen, and now so do we.
+  ['PerformanceScreen', ['views/PerformanceView.vue']],
   ['AuditScreen', ['views/ModuleWorkspace.vue']],
   ['UsersScreen', ['views/ModuleWorkspace.vue', 'views/RolesView.vue']],
   ['LoginScreen', ['views/LoginView.vue']],

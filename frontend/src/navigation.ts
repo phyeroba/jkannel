@@ -432,6 +432,17 @@ export const navigation: NavigationItem[] = [
     permission: 'system.view',
     group: 'System',
   },
+  // Gated on smsc.view rather than system.view: every figure on it is an
+  // aggregate of per-connection throughput the holder can already read one bind
+  // at a time, and requiring system.view would hide the sum from the people who
+  // can see all its parts.
+  {
+    label: 'Performance',
+    to: '/performance',
+    icon: 'chart',
+    permission: 'smsc.view',
+    group: 'System',
+  },
   {
     label: 'Runtime Containers',
     to: '/docker',

@@ -10,6 +10,8 @@ import { QueueMetricsService } from './queue-metrics.service';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
 import { SafeControlController } from './safe-control.controller';
 import { SafeControlService } from './safe-control.service';
+import { GatewayPerformanceController } from './gateway-performance.controller';
+import { GatewayPerformanceService } from './gateway-performance.service';
 import { OperationalEventsService } from '../diagnostics/operational-events.service';
 
 /**
@@ -26,6 +28,7 @@ import { OperationalEventsService } from '../diagnostics/operational-events.serv
     SmscDetailController,
     QueueMetricsController,
     SafeControlController,
+    GatewayPerformanceController,
   ],
   providers: [
     DatabaseService,
@@ -34,8 +37,15 @@ import { OperationalEventsService } from '../diagnostics/operational-events.serv
     QueueMetricsService,
     KamexSqlboxRepository,
     SafeControlService,
+    GatewayPerformanceService,
     OperationalEventsService,
   ],
-  exports: [CarrierService, SmscDetailService, QueueMetricsService, SafeControlService],
+  exports: [
+    CarrierService,
+    SmscDetailService,
+    QueueMetricsService,
+    SafeControlService,
+    GatewayPerformanceService,
+  ],
 })
 export class ConnectivityModule {}

@@ -53,7 +53,9 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    expect(navigation).toHaveLength(44);
+    // 45 since System > Performance was added. The count is asserted so a
+    // route cannot appear in the sidebar without someone deciding it should.
+    expect(navigation).toHaveLength(45);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(
