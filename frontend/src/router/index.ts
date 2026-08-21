@@ -301,6 +301,22 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // The fifteen customer-account operations — quota, credit ledger, sender-id
+    // approval and route bindings — had no console surface at all before this.
+    // A detail route rather than more panels on the register: they are things
+    // you do TO one account, and the register is for finding it.
+    path: '/customers/:id',
+    name: 'customer-detail',
+    component: () => import('../views/CustomerDetailView.vue'),
+    meta: {
+      title: 'Customer',
+      description:
+        'One customer account: its message quota per period, its credit ledger, the sender IDs it may use, and the routes its traffic is bound to.',
+      breadcrumb: ['Customers', 'Customer'],
+      permission: 'system.view',
+    },
+  },
+  {
     path: '/smsc/:engineId',
     name: 'smsc-detail',
     component: () => import('../views/SmscDetailView.vue'),

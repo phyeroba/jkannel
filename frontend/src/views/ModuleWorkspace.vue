@@ -5215,17 +5215,36 @@ onUnmounted(() => {
               <dt>Created</dt>
               <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
             </dl>
-            <div v-if="canManageSystem && !editing" class="detail-actions">
-              <button class="secondary-button" data-testid="customer-edit" @click="editing = true">
-                Edit
-              </button>
-              <button
-                class="secondary-button danger-button"
-                data-testid="customer-archive"
-                @click="archiveCustomer"
+            <!--
+              The record above is what a customer IS. Quota, credit, sender IDs
+              and route bindings are what an operator DOES to one, and they have
+              their own screen — fifteen endpoints' worth, which is more than a
+              drawer should try to hold.
+            -->
+            <div class="detail-actions">
+              <RouterLink
+                class="primary-button"
+                data-testid="customer-open-account"
+                :to="`/customers/${text(detail.id, '')}`"
               >
-                Archive
-              </button>
+                Quota, credit and sender IDs
+              </RouterLink>
+              <template v-if="canManageSystem && !editing">
+                <button
+                  class="secondary-button"
+                  data-testid="customer-edit"
+                  @click="editing = true"
+                >
+                  Edit
+                </button>
+                <button
+                  class="secondary-button danger-button"
+                  data-testid="customer-archive"
+                  @click="archiveCustomer"
+                >
+                  Archive
+                </button>
+              </template>
             </div>
             <div
               v-if="canManageSystem && editing"
