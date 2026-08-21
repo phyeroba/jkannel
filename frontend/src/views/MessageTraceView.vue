@@ -33,20 +33,27 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import { canAccess, session } from '../stores/session';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { setBreadcrumbTrail } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
+import { formatMoment } from '../utils/connectivity';
 import {
   bindFactTarget,
+  buildDiagnosticSummary,
+  deliveryTone,
   factLabel,
+  formatFinal,
   formatLatency,
   formatMilliseconds,
   formatStageMoment,
   stageTone,
   stageWord,
+  TRACE_STATUS_FILTERS,
   type MessageTrace,
+  type TraceSearchRow,
 } from '../utils/diagnostics';
 
 const route = useRoute();
@@ -65,6 +72,10 @@ function onRevealChanged(value: boolean) {
   if (revealing.value === value) return;
   revealing.value = value;
   if (searched.value) void load(searched.value);
+  // The grid carries the same subscriber numbers, so it must honour the same
+  // grant — leaving it masked behind a revealed trace would look like a bug and
+  // send someone back to the Messages workspace to see the number.
+  if (matches.value.length) void loadMatches();
 }
 
 const query = ref(String(route.query.id ?? ''));
@@ -73,6 +84,143 @@ const trace = ref<MessageTrace | null>(null);
 const state = ref<State>('empty');
 const error = ref('');
 const copied = ref(false);
+
+/* --- FINDING THE MESSAGE -----------------------------------------------------
+ *
+ * The lifecycle endpoint needs an exact id. Every operator who arrives here
+ * from a complaint has an MSISDN or a carrier reference instead, and until now
+ * the only route from one to the other was to open the Messages workspace,
+ * search there, copy the id back. So the same box now also runs the message
+ * search — `GET /messages`, the same endpoint and the same filters the Messages
+ * grid uses — and a row click traces it.
+ *
+ * The two reads stay separate calls on purpose. Searching is a page of an
+ * indexed table; tracing assembles per-stage evidence for one message. Making
+ * the search return lifecycles would charge every scrolled-past row the price
+ * of the one the operator actually wanted.
+ */
+const statusFilter = ref('');
+const matches = ref<TraceSearchRow[]>([]);
+const matchState = ref<State>('empty');
+const matchError = ref('');
+const matchTotal = ref<number | null>(null);
+/** Engine SMSC id → carrier name, so a row can say "MTN" and not only `mtn-p1`. */
+const carrierBySmsc = ref<Record<string, string>>({});
+let carrierLookupTried = false;
+
+const MATCH_LIMIT = 25;
+
+/** The `/messages` envelope, coerced. A page shape must never crash the screen. */
+function asRows(payload: unknown): TraceSearchRow[] {
+  const items = (payload as { items?: unknown })?.items;
+  if (!Array.isArray(items)) return [];
+  return items.filter((item): item is TraceSearchRow => Boolean(item) && typeof item === 'object');
+}
+
+function carrierFor(smscId: string | null | undefined): string | null {
+  const id = (smscId ?? '').trim();
+  return id ? (carrierBySmsc.value[id] ?? null) : null;
+}
+
+/**
+ * Resolves carrier names once per visit, and never fails the search.
+ *
+ * The SMSC id is already in every row, so the carrier name is a convenience
+ * label on top of data the operator can read regardless. An error here is
+ * swallowed rather than surfaced: a failed lookup must not make it look as
+ * though the search itself went wrong.
+ */
+async function loadCarrierNames() {
+  if (carrierLookupTried) return;
+  carrierLookupTried = true;
+  try {
+    const page = await apiRequest<unknown>('/smscs?limit=200');
+    const items = (page as { items?: unknown })?.items;
+    const map: Record<string, string> = {};
+    for (const row of Array.isArray(items) ? items : []) {
+      const record = row as Record<string, unknown>;
+      const engineId = record.engine_id ?? record.engineId;
+      const carrier = record.carrier_name ?? record.carrierName;
+      if (typeof engineId === 'string' && typeof carrier === 'string' && carrier.trim())
+        map[engineId] = carrier;
+    }
+    carrierBySmsc.value = map;
+  } catch {
+    carrierBySmsc.value = {};
+  }
+}
+
+async function loadMatches() {
+  const clean = query.value.trim();
+  if (!clean && !statusFilter.value) {
+    matchState.value = 'empty';
+    matches.value = [];
+    matchTotal.value = null;
+    return;
+  }
+  matchState.value = 'loading';
+  const params = new URLSearchParams();
+  if (clean) params.set('query', clean);
+  if (statusFilter.value) params.set('deliveryStatus', statusFilter.value);
+  params.set('limit', String(MATCH_LIMIT));
+  if (revealing.value) params.set('reveal', 'true');
+  try {
+    const payload = await apiRequest<unknown>(`/messages?${params.toString()}`);
+    const rows = asRows(payload);
+    matches.value = rows;
+    matchTotal.value = (payload as { total?: number | null })?.total ?? null;
+    // An unreadable engine store is a different answer from "nothing matched",
+    // and showing it as an empty result would tell an operator their message
+    // does not exist when in fact nobody looked.
+    const source = (payload as { source?: { status?: string; message?: string } })?.source;
+    if (source?.status === 'unavailable') {
+      matchError.value =
+        source.message ??
+        'The engine message store could not be read, so nothing was searched. This is not evidence that no message matches.';
+      matchState.value = 'error';
+      return;
+    }
+    matchError.value = '';
+    matchState.value = rows.length ? 'live' : 'empty';
+    if (rows.length) void loadCarrierNames();
+  } catch (reason) {
+    matches.value = [];
+    matchTotal.value = null;
+    matchError.value = messageFrom(reason, 'The message search could not be run.');
+    matchState.value =
+      reason instanceof ApiError && reason.status === 403 ? 'permission-denied' : 'error';
+  }
+}
+
+/** The row currently being traced, so the summary can quote its facts. */
+const tracedRow = computed(
+  () => matches.value.find((row) => String(row.id) === searched.value) ?? null,
+);
+
+const summaryOpen = ref(false);
+const summaryCopied = ref(false);
+const summaryText = computed(() =>
+  trace.value
+    ? buildDiagnosticSummary(trace.value, tracedRow.value, carrierFor(tracedRow.value?.smscId))
+    : '',
+);
+
+async function copySummary() {
+  try {
+    await navigator.clipboard?.writeText(summaryText.value);
+    summaryCopied.value = true;
+  } catch {
+    summaryCopied.value = false;
+  }
+}
+
+/** A row click is a drill-down: it traces that message without retyping its id. */
+function traceRow(row: TraceSearchRow) {
+  const id = String(row.id ?? '').trim();
+  if (!id) return;
+  void router.replace({ path: route.path, query: { id } });
+  void load(id);
+}
 
 const lifecycle = computed(() => trace.value?.lifecycle ?? null);
 const stages = computed(() => lifecycle.value?.stages ?? []);
@@ -131,7 +279,11 @@ function search() {
   const clean = query.value.trim();
   // The id lives in the URL so a trace can be pasted into a ticket and reopened.
   void router.replace({ path: route.path, query: clean ? { id: clean } : {} });
+  // Lifecycle first, then the search. An exact id answers in one request and is
+  // what most searches are; the grid is the fallback for everyone who arrived
+  // with an MSISDN instead.
   void load(clean);
+  void loadMatches();
 }
 
 async function copyId() {
@@ -148,7 +300,9 @@ async function copyId() {
 }
 
 onMounted(() => {
-  if (query.value.trim()) void load(query.value);
+  if (!query.value.trim()) return;
+  void load(query.value);
+  void loadMatches();
 });
 </script>
 
@@ -161,20 +315,30 @@ onMounted(() => {
           <h2 id="trace-search-heading">Message Trace</h2>
           <p>
             One message, from the routing decision to the delivery receipt, with the time each stage
-            took. Search by the id JKANNEL issued or the id the engine recorded — the lookup matches
-            either.
+            took. Search by the id JKANNEL issued, the id the engine recorded, a sender, or a
+            destination number — an exact id traces straight through, anything else lists what
+            matched so you can pick the right one.
           </p>
         </div>
+        <label class="filter-select" data-testid="trace-status-filter">
+          <span>Status</span>
+          <select v-model="statusFilter" @change="loadMatches">
+            <option value="">any</option>
+            <option v-for="status in TRACE_STATUS_FILTERS" :key="status" :value="status">
+              {{ status }}
+            </option>
+          </select>
+        </label>
       </header>
 
       <div class="grid-toolbar">
         <label class="filter-select filter-search">
-          <span>Message id</span>
+          <span>Message id, reference or number</span>
           <input
             v-model="query"
             data-testid="trace-input"
             type="search"
-            placeholder="The message id from a ticket, an export or the Messages grid"
+            placeholder="A message id, a carrier reference, or the destination number"
             @keyup.enter="search"
           />
         </label>
@@ -191,16 +355,109 @@ onMounted(() => {
       </p>
     </section>
 
+    <!-- WHAT MATCHED ------------------------------------------------------- -->
+    <section
+      v-if="matchState !== 'empty' || matches.length"
+      class="panel"
+      data-testid="trace-matches"
+      aria-labelledby="trace-matches-heading"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="trace-matches-heading">Matching messages</h2>
+          <p>
+            From the engine message store, newest first. Select a row to trace it — the id does not
+            need to be copied anywhere.
+          </p>
+        </div>
+        <span v-if="matchState === 'live'" class="status-badge muted" data-testid="trace-match-count">
+          {{ matches.length }}{{ matchTotal !== null && matchTotal > matches.length ? ` of ${matchTotal}` : '' }}
+        </span>
+      </header>
+
+      <DataState
+        :state="matchState"
+        subject="matching messages"
+        skeleton="table"
+        :skeleton-rows="4"
+        :detail="
+          matchState === 'error'
+            ? matchError
+            : matchState === 'empty'
+              ? 'Nothing in the retained window matches that search. Retention prunes older messages, so an absence here is not proof the message never existed.'
+              : undefined
+        "
+        permission="messages.view"
+        testid="trace-match-state"
+        :on-retry="loadMatches"
+      >
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Message ID</th>
+                <th scope="col">Carrier ID</th>
+                <th scope="col">Destination</th>
+                <th scope="col">Sender</th>
+                <th scope="col">Carrier</th>
+                <th scope="col">SMSC</th>
+                <th scope="col">Status</th>
+                <th scope="col">Submitted</th>
+                <th scope="col">Final</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in matches"
+                :key="row.id"
+                class="selectable"
+                :class="{ 'is-traced': String(row.id) === searched }"
+                :data-testid="`trace-match-${row.id}`"
+                tabindex="0"
+                @click="traceRow(row)"
+                @keyup.enter="traceRow(row)"
+              >
+                <td class="mono">{{ row.id }}</td>
+                <!--
+                  A message the engine has not yet given a reference has no
+                  carrier id — not an unknown one. `not issued` says which.
+                -->
+                <td class="mono cell-tight">{{ row.externalRef || 'not issued' }}</td>
+                <td class="mono">{{ displayValue(row.receiver, matchState) }}</td>
+                <td>{{ displayValue(row.sender, matchState) }}</td>
+                <td>{{ carrierFor(row.smscId) ?? 'unassigned' }}</td>
+                <td class="mono cell-tight">{{ displayValue(row.smscId, matchState) }}</td>
+                <td>
+                  <span class="status-badge" :class="deliveryTone(row.deliveryStatus)">{{
+                    row.deliveryStatus ?? 'unknown'
+                  }}</span>
+                </td>
+                <td class="mono cell-tight">{{ formatMoment(row.timestamp) }}</td>
+                <td class="mono cell-tight">{{ formatFinal(row.dlrAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="source-note">
+          “Carrier” is resolved from the SMSC the message went out on. A connection that belongs to
+          no carrier record reads <span class="mono">unassigned</span> — the SMSC id beside it is
+          still the authoritative one.
+        </p>
+      </DataState>
+    </section>
+
     <DataState
       :state="state"
       subject="this message's lifecycle"
       skeleton="table"
       :skeleton-rows="5"
       :detail="
-        state === 'empty' && searched
-          ? 'Nothing is recorded under that identifier — no routing decision in JKANNEL and no row in the engine store. That is not proof the message never existed: retention prunes old messages, and an id from a different environment will not be found here either.'
+        state === 'empty' && searched && matches.length
+          ? 'What you typed is not itself a message id, but it matched the messages listed above. Select one to trace it.'
+          : state === 'empty' && searched
+            ? 'Nothing is recorded under that identifier — no routing decision in JKANNEL and no row in the engine store. That is not proof the message never existed: retention prunes old messages, and an id from a different environment will not be found here either.'
           : state === 'empty'
-            ? 'Enter a message id above. This screen reads one message at a time; the Messages workspace is where you find the id.'
+            ? 'Search above by message id, carrier reference, sender or destination number. An exact id traces straight through; anything else lists what matched.'
             : state === 'error'
               ? error
               : state === 'partial'
@@ -255,12 +512,25 @@ onMounted(() => {
             <h2 id="trace-summary-heading">Lifecycle</h2>
             <p>{{ stages.length }} recorded stage(s).</p>
           </div>
-          <span
-            class="status-badge"
-            :class="lifecycle?.inFlight ? 'warn' : 'good'"
-            data-testid="trace-inflight"
-            >{{ lifecycle?.inFlight ? 'in flight' : 'settled' }}</span
-          >
+          <div class="head-actions">
+            <span
+              class="status-badge"
+              :class="lifecycle?.inFlight ? 'warn' : 'good'"
+              data-testid="trace-inflight"
+              >{{ lifecycle?.inFlight ? 'in flight' : 'settled' }}</span
+            >
+            <button
+              class="secondary-button"
+              type="button"
+              data-testid="trace-summary-open"
+              @click="
+                summaryCopied = false;
+                summaryOpen = true;
+              "
+            >
+              Diagnostic summary
+            </button>
+          </div>
         </header>
 
         <div class="summary-strip">
@@ -404,6 +674,34 @@ onMounted(() => {
         </details>
       </section>
     </DataState>
+
+    <!-- DIAGNOSTIC SUMMARY -------------------------------------------------- -->
+    <DetailDrawer
+      :open="summaryOpen"
+      eyebrow="Message trace"
+      title="Diagnostic summary"
+      :subtitle="searched"
+      @close="summaryOpen = false"
+    >
+      <p>
+        The trace as text, for a carrier ticket. Only facts that were actually recorded appear — a
+        line that is missing means the value was never captured, which is itself worth saying to a
+        carrier who claims a message was never received.
+      </p>
+      <pre class="json-block" data-testid="trace-summary-text">{{ summaryText }}</pre>
+      <template v-if="tracedRow === null">
+        <p class="source-note" data-testid="trace-summary-partial">
+          This message was traced by id rather than selected from the search above, so the summary
+          carries the lifecycle only. Search for it to include the destination, sender and carrier
+          reference.
+        </p>
+      </template>
+      <template #footer>
+        <button class="primary-button" type="button" data-testid="trace-summary-copy" @click="copySummary">
+          {{ summaryCopied ? 'Copied' : 'Copy summary' }}
+        </button>
+      </template>
+    </DetailDrawer>
   </div>
 </template>
 
@@ -499,6 +797,30 @@ details summary {
   cursor: pointer;
   color: var(--brand);
   font-size: 13px;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Timestamps and engine identifiers, which are long and never read word by
+   word. One step down keeps the nine-column grid off a horizontal scrollbar. */
+.cell-tight {
+  font-size: 12.5px;
+}
+
+/* The row whose lifecycle is on screen below. Without it, clicking a row in a
+   long result set scrolls the trace into view and leaves no trace of which row
+   produced it. */
+tbody tr.is-traced {
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+tbody tr.selectable:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 </style>
 <style src="./workspace-extras.css"></style>
