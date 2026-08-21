@@ -251,6 +251,32 @@ function hasDetail(event: OperationalEvent): boolean {
   return Boolean(event.detail && Object.keys(event.detail).length);
 }
 
+/** Two minutes either side — wide enough to catch the cause, narrow enough to read. */
+const EVIDENCE_WINDOW_MS = 120_000;
+
+/**
+ * Where the Evidence button goes.
+ *
+ * A correlation id is the precise question and is used whenever the emitter set
+ * one. Most operational events carry none — they are written by the poller,
+ * outside any request — so the fallback is a time window around the event.
+ * That is looser, and the title attribute says so rather than letting an
+ * operator read a window of unrelated lines as "the evidence for this event".
+ */
+function evidenceLink(event: OperationalEvent) {
+  if (event.correlation_id)
+    return { path: '/log-explorer', query: { correlationId: event.correlation_id } };
+  const at = Date.parse(event.observed_at);
+  if (!Number.isFinite(at)) return { path: '/log-explorer' };
+  return {
+    path: '/log-explorer',
+    query: {
+      since: new Date(at - EVIDENCE_WINDOW_MS).toISOString(),
+      until: new Date(at + EVIDENCE_WINDOW_MS).toISOString(),
+    },
+  };
+}
+
 // One range, shared. Changing it anywhere re-asks this question.
 watch(selectedRange, () => void load());
 
@@ -429,6 +455,7 @@ onMounted(load);
                 <th scope="col">Subject</th>
                 <th scope="col">Summary</th>
                 <th scope="col">Correlation</th>
+                <th scope="col">Evidence</th>
                 <th scope="col">Detail</th>
               </tr>
             </thead>
@@ -470,6 +497,28 @@ onMounted(load);
                       >not correlated</span
                     >
                   </td>
+                  <!--
+                    §12's evidence: the log lines around the moment the event
+                    was recorded. Scoped by correlation id when the emitter set
+                    one, and otherwise by a window either side of the event —
+                    the log buffer has no notion of an event id, so a time
+                    window is the only honest way to ask "what else was
+                    happening then".
+                  -->
+                  <td class="row-actions">
+                    <RouterLink
+                      class="secondary-button"
+                      :data-testid="`event-evidence-${event.id}`"
+                      :to="evidenceLink(event)"
+                      :title="
+                        event.correlation_id
+                          ? 'Log lines recorded under this correlation id'
+                          : 'Log lines from the two minutes around this event'
+                      "
+                    >
+                      Logs
+                    </RouterLink>
+                  </td>
                   <td class="row-actions">
                     <button
                       v-if="hasDetail(event)"
@@ -483,7 +532,7 @@ onMounted(load);
                   </td>
                 </tr>
                 <tr v-if="expanded === event.id" :data-testid="`event-detail-${event.id}`">
-                  <td colspan="7">
+                  <td colspan="8">
                     <pre class="json-block">{{ detailText(event) }}</pre>
                   </td>
                 </tr>

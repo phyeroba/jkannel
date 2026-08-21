@@ -26,7 +26,13 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
-import { smscOptionsFrom, type ResolveResult, type SmscOption } from '../utils/safe-control';
+import {
+  smscHeadroom,
+  smscOptionsFrom,
+  type ResolveResult,
+  type SmscOption,
+} from '../utils/safe-control';
+import { bindTone, bindWord, formatRate } from '../utils/connectivity';
 
 const msisdn = ref('');
 const sender = ref('');
@@ -199,19 +205,62 @@ onMounted(loadSmscs);
             so you can ask what happens when a bind goes down.
           </span>
         </label>
-        <div v-if="constrain" class="availability-options" data-testid="simulator-availability">
-          <label v-for="option in smscs" :key="option.id" class="availability-option">
-            <input
-              v-model="assumedAvailable"
-              type="checkbox"
-              :value="option.id"
-              :data-testid="`simulator-available-${option.engineId}`"
-            />
-            <span>{{ option.label }}</span>
-          </label>
-          <p v-if="!smscs.length" class="row-id">
-            No SMSC connection could be listed, so there is nothing to constrain.
-          </p>
+        <!--
+          A table rather than a list of checkboxes, because the question being
+          asked is "which of these could carry the traffic" and that cannot be
+          answered from a name. Order is the configured priority the selector
+          walks; health and headroom are what the poller last observed, so an
+          operator ticking boxes can see they are about to assume a dead bind
+          is available.
+        -->
+        <div v-if="constrain" class="table-wrap" data-testid="simulator-availability">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Order</th>
+                <th scope="col">SMSC</th>
+                <th scope="col">Health</th>
+                <th scope="col">Headroom</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(option, index) in smscs" :key="option.id">
+                <td class="mono">
+                  <label class="availability-option">
+                    <input
+                      v-model="assumedAvailable"
+                      type="checkbox"
+                      :value="option.id"
+                      :data-testid="`simulator-available-${option.engineId}`"
+                    />
+                    <span>{{ index + 1 }}</span>
+                  </label>
+                </td>
+                <td>
+                  {{ option.name }}
+                  <small class="row-id mono">{{ option.engineId }}</small>
+                </td>
+                <td :data-testid="`simulator-health-${option.engineId}`">
+                  <span class="status-badge" :class="bindTone(option.bindState)">{{
+                    bindWord(option.bindState)
+                  }}</span>
+                </td>
+                <!--
+                  Unknown, not zero. Zero headroom means "this bind is full and
+                  will queue"; unknown means nobody has measured it, and the two
+                  lead to opposite decisions.
+                -->
+                <td class="mono" :data-testid="`simulator-headroom-${option.engineId}`">
+                  {{ formatRate(smscHeadroom(option), 'live') }}
+                </td>
+              </tr>
+              <tr v-if="!smscs.length">
+                <td colspan="4" class="empty-cell">
+                  No SMSC connection could be listed, so there is nothing to constrain.
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <p v-if="constrain && !assumedAvailable.length" class="warn-notice" role="note">
           Nothing is ticked, so this asks the selector what happens when

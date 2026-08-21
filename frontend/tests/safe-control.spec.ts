@@ -7,6 +7,7 @@ import {
   operationVerb,
   reasonIsRecorded,
   reasonProblem,
+  smscHeadroom,
   smscLabel,
   smscOptionsFrom,
   verificationTone,
@@ -137,7 +138,7 @@ describe('SMSC options', () => {
       { id: 's2', engine_id: 'mtn-p2', name: '' },
     ]);
     expect(options).toHaveLength(2);
-    expect(options[0]).toEqual({
+    expect(options[0]).toMatchObject({
       id: 's1',
       engineId: 'mtn-p1',
       name: 'MTN Primary',
@@ -148,6 +149,54 @@ describe('SMSC options', () => {
     expect(smscLabel('s1', options)).toBe('MTN Primary (mtn-p1)');
     expect(smscLabel('unknown', options)).toBe('unknown');
     expect(smscLabel(null, options)).toBe('none');
+  });
+
+  /**
+   * The operational fields are optional because most callers use this map only
+   * to turn a uuid into a name. When the register did not carry them the option
+   * must say "unmeasured" rather than default to a number, or a screen would
+   * render an invented health or headroom for every connection.
+   */
+  it('reports absent operational fields as unmeasured, not as zero', () => {
+    const [option] = smscOptionsFrom([{ id: 's1', engine_id: 'mtn-p1', name: 'MTN Primary' }]);
+    expect(option.bindState).toBeNull();
+    expect(option.tps).toBeNull();
+    expect(option.outboundRate).toBeNull();
+    // A connection count is 1 unless stated: zero would make every ceiling zero.
+    expect(option.connections).toBe(1);
+    expect(smscHeadroom(option)).toBeNull();
+  });
+
+  it('computes headroom per bind, because that is how the engine enforces it', () => {
+    const [option] = smscOptionsFrom([
+      {
+        id: 's1',
+        engine_id: 'mtn-p1',
+        name: 'MTN Primary',
+        tps: 50,
+        connection_count: 3,
+        outbound_rate: 20,
+      },
+    ]);
+    // 50/s on each of three binds is 150/s, less the 20/s observed.
+    expect(smscHeadroom(option)).toBe(130);
+  });
+
+  it('never reports negative headroom, and never invents it from half the facts', () => {
+    const over = smscOptionsFrom([
+      { id: 's1', engine_id: 'a', name: 'A', tps: 10, connection_count: 1, outbound_rate: 25 },
+    ])[0];
+    expect(smscHeadroom(over)).toBe(0);
+
+    // A ceiling with no observation, and an observation with no ceiling, are
+    // both unknown — returning 0 would read as "this connection is full" and
+    // divert traffic away from a bind that may be idle.
+    const noRate = smscOptionsFrom([{ id: 's2', engine_id: 'b', name: 'B', tps: 10 }])[0];
+    const noCeiling = smscOptionsFrom([
+      { id: 's3', engine_id: 'c', name: 'C', outbound_rate: 5 },
+    ])[0];
+    expect(smscHeadroom(noRate)).toBeNull();
+    expect(smscHeadroom(noCeiling)).toBeNull();
   });
 });
 

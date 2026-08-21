@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 
@@ -60,6 +61,18 @@ function levelTone(level: unknown) {
   if (value === 'info') return 'good';
   return '';
 }
+/**
+ * The thing a log line is about.
+ *
+ * A request line names a route; anything else names whoever it was acting for.
+ * Falling through to "not attributed" rather than an em dash keeps the two
+ * apart: the dash on this console means we looked and found nothing, whereas
+ * here the emitter simply did not record a subject.
+ */
+function logObject(entry: LogEntry): string {
+  return entry.route ?? entry.username ?? entry.userId ?? entry.tenantId ?? 'not attributed';
+}
+
 /** `datetime-local` (browser zone) -> the ISO instant the API expects. */
 function fromLocalInput(value: string): string {
   const parsed = Date.parse(value);
@@ -179,7 +192,53 @@ const { autoRefresh, intervalSeconds, refreshing, lastRefreshedAt, refreshNow } 
   { intervalSeconds: 10, enabled: false, immediate: false },
 );
 
+/**
+ * Deep links, so another screen can hand this one an incident.
+ *
+ * Events, Message Trace and Alerts all have a "show me the log lines behind
+ * this" affordance in the design, and without query support the best any of
+ * them could do was drop the operator on an unfiltered buffer and let them
+ * retype a correlation id from memory. Every parameter here is one the filter
+ * bar already exposes — this adds no new query power, only the ability to
+ * arrive with it already set.
+ *
+ * `since`/`until` are bound to `datetime-local` inputs, which will not accept
+ * an ISO instant with its zone suffix, so an incoming instant is converted to
+ * the browser's local wall-clock form. Passing it through raw silently leaves
+ * the field blank and quietly widens the search to everything.
+ */
+function toLocalInput(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return '';
+  const local = new Date(parsed - new Date(parsed).getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function applyDeepLink(query: Record<string, unknown>) {
+  const read = (key: string): string => {
+    const value = query[key];
+    return typeof value === 'string' ? value.trim() : '';
+  };
+  correlationId.value = read('correlationId') || correlationId.value;
+  requestId.value = read('requestId') || requestId.value;
+  contains.value = read('contains') || contains.value;
+  routeFilter.value = read('route') || routeFilter.value;
+  minLevel.value = read('minLevel') || minLevel.value;
+  level.value = read('level') || level.value;
+  const from = read('since');
+  const to = read('until');
+  if (from) since.value = toLocalInput(from) || from;
+  if (to) until.value = toLocalInput(to) || to;
+}
+
+// `useRoute()` is undefined when this view is mounted outside a router, which
+// is how several of its unit tests exercise it. Deep-linking is a convenience
+// laid over filters the operator can set by hand, so its absence must not stop
+// the screen loading.
+const route = useRoute();
+
 onMounted(() => {
+  applyDeepLink((route?.query ?? {}) as Record<string, unknown>);
   void search();
 });
 </script>
@@ -424,6 +483,8 @@ onMounted(() => {
               <tr>
                 <th scope="col">Time</th>
                 <th scope="col">Level</th>
+                <th scope="col">Component</th>
+                <th scope="col">Object</th>
                 <th scope="col">Message</th>
                 <th scope="col">Route</th>
                 <th scope="col">Status</th>
@@ -444,10 +505,25 @@ onMounted(() => {
                     {{ text(entry.level) }}
                   </span>
                 </td>
-                <td>
-                  {{ text(entry.message) }}
-                  <small v-if="entry.context" class="row-id mono">{{ entry.context }}</small>
+                <!--
+                  `context` is the logger context the emitter set — "HTTP",
+                  a service name — which is precisely the design's "Component".
+                  It was previously a subscript under the message; as its own
+                  column it becomes something you can scan a page by.
+                -->
+                <td class="mono cell-tight" :data-testid="`log-component-${index}`">
+                  {{ text(entry.context, 'unattributed') }}
                 </td>
+                <!--
+                  What the line is ABOUT. The route for a request line, the
+                  subject for anything else. "not attributed" rather than a dash:
+                  a line with no object is a line whose emitter did not say what
+                  it concerned, which is a fact about the log, not about us.
+                -->
+                <td class="mono cell-tight" :data-testid="`log-object-${index}`">
+                  {{ logObject(entry) }}
+                </td>
+                <td>{{ text(entry.message) }}</td>
                 <td class="mono">
                   {{ entry.method ? `${entry.method} ` : '' }}{{ text(entry.route) }}
                 </td>
@@ -469,14 +545,14 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="state === 'ok' && !entries.length">
-                <td colspan="7" class="empty-cell" data-testid="log-empty">
+                <td colspan="9" class="empty-cell" data-testid="log-empty">
                   No entry in this process's buffer matches. That is not proof the event did not
                   happen — the buffer holds only {{ num(result?.capacity) }} lines from this one
                   process, and {{ num(result?.dropped) }} have already been evicted.
                 </td>
               </tr>
               <tr v-if="state === 'loading'">
-                <td colspan="7" class="empty-cell">Loading log entries…</td>
+                <td colspan="9" class="empty-cell">Loading log entries…</td>
               </tr>
             </tbody>
           </table>
