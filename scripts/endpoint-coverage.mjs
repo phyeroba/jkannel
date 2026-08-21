@@ -69,6 +69,25 @@ const RESOURCE_ALIASES = [
  * Endpoints that are correctly invisible, and why. A machine-facing endpoint is
  * not a gap; an unexplained one is. Anything added here needs its reason.
  */
+/**
+ * Endpoints a NEWER route has replaced, and which the console correctly does
+ * not call.
+ *
+ * These are not gaps and they are not headless either — they are live,
+ * registered, reachable duplicates. `/backups/:id/restore` and
+ * `/backup-dr/:id/restore` both exist and do NOT do the same thing: the newer
+ * one restores into an isolated verify database, the legacy one calls the
+ * platform-console repository directly. A caller who finds the wrong one in the
+ * API document gets different behaviour than the console's own button.
+ *
+ * Reported separately rather than hidden, because "the console does not use
+ * this" is a reason to consider removing the route, not a reason to stop
+ * mentioning it.
+ */
+const SUPERSEDED = [
+  [/^\/backups(\/|$)/, 'superseded by /backup-dr, which is what the console calls'],
+];
+
 const EXPECTED_HEADLESS = [
   [/^\/auth\//, 'authentication plumbing — the login screen and the token refresh use it'],
   [/^\/health/, 'liveness and readiness probes, for Docker and the load balancer'],
@@ -213,6 +232,11 @@ function headlessReason(path) {
   return null;
 }
 
+function supersededReason(path) {
+  for (const [pattern, reason] of SUPERSEDED) if (pattern.test(path)) return reason;
+  return null;
+}
+
 /**
  * Segment-wise match, where `{}` on EITHER side matches anything.
  *
@@ -244,6 +268,7 @@ const surfaces = consolePaths();
 
 const covered = [];
 const headless = [];
+const superseded = [];
 const gaps = [];
 
 const surfaceKeys = [...surfaces.keys()];
@@ -254,8 +279,10 @@ for (const operation of operations) {
   const hit = surfaces.has(key)
     ? key
     : surfaceKeys.find((candidate) => segmentsMatch(candidate, key));
+  const replaced = supersededReason(operation.path);
   if (hit) covered.push({ ...operation, files: [...surfaces.get(hit)] });
   else if (reason) headless.push({ ...operation, reason });
+  else if (replaced) superseded.push({ ...operation, reason: replaced });
   else gaps.push({ ...operation, key });
 }
 
@@ -281,8 +308,15 @@ console.log('='.repeat(78));
 console.log('ENDPOINT COVERAGE — does every API operation have a console surface?');
 console.log('='.repeat(78));
 console.log(
-  `${operations.length} operations · ${covered.length} surfaced · ${headless.length} deliberately headless · ${gaps.length} with NO surface\n`,
+  `${operations.length} operations · ${covered.length} surfaced · ${headless.length} deliberately headless · ${superseded.length} superseded · ${gaps.length} with NO surface\n`,
 );
+
+if (superseded.length) {
+  console.log('### SUPERSEDED — live, reachable, and replaced by a newer route');
+  for (const item of superseded)
+    console.log(`    ${item.method.padEnd(6)} ${item.path}  — ${item.reason}`);
+  console.log('    These are candidates for removal, not for building a screen.\n');
+}
 
 for (const [segment, items] of group(gaps)) {
   console.log(`### /${segment}  (${items.length})`);
