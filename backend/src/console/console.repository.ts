@@ -587,7 +587,29 @@ export class ConsoleRepository {
     return this.grid(
       actor,
       {
-        select: 'SELECT r.*,s.name target_smsc_name,f.name fallback_smsc_name',
+        // The design's "Last transition" and "Used / capacity" columns.
+        //
+        // Both are about the route's TARGET rather than the route, and both are
+        // correlated subqueries for the same reason the SMSC register uses
+        // them: joining a per-poll history table to the register would
+        // multiply every route by its target's sample count.
+        //
+        // The rate is NULL, never 0, when the poller has never sampled the
+        // target — an unobserved connection is not an idle one, and the console
+        // renders the two differently.
+        select:
+          'SELECT r.*,s.name target_smsc_name,f.name fallback_smsc_name,' +
+          's.tps AS target_tps,' +
+          'GREATEST(COALESCE(s.connection_count,1),1) AS target_connections,' +
+          '(SELECT n.outbound_rate FROM smsc_bind_snapshots n ' +
+          '  WHERE n.smsc_id=s.id ORDER BY n.observed_at DESC LIMIT 1) AS target_outbound_rate,' +
+          // The most recent failover on this route, ENDED ones included: the
+          // question is "when did traffic last move", and a reverted move is
+          // still a move.
+          "(SELECT concat_ws(' ', CASE WHEN v.ended_at IS NULL THEN 'moved' ELSE 'reverted' END, " +
+          "  to_char(COALESCE(v.ended_at, v.started_at), 'YYYY-MM-DD HH24:MI')) " +
+          '   FROM route_failovers v WHERE v.route_id=r.id ' +
+          '  ORDER BY COALESCE(v.ended_at, v.started_at) DESC LIMIT 1) AS last_transition',
         from: 'FROM routing_rules r JOIN smsc_definitions s ON s.id=r.target_smsc_id LEFT JOIN smsc_definitions f ON f.id=r.fallback_smsc_id',
       },
       CONSOLE_GRIDS.routes,

@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import { canAccess, session } from '../stores/session';
+import { smscHeadroom, smscOptionsFrom, type SmscOption } from '../utils/safe-control';
+import { bindTone, bindWord } from '../utils/connectivity';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'loading' | 'ok' | 'error';
@@ -78,20 +80,82 @@ function smscLabel(id: unknown): string {
   return smscNames.value.get(key) ?? key;
 }
 
+/**
+ * The register rows keyed by id, so continuity can ask about a target's bind
+ * state and spare capacity without a second request per route.
+ */
+const smscRegister = ref(new Map<string, SmscOption>());
+
 async function loadSmscOptions() {
   smscOptionsError.value = '';
   try {
-    smscOptions.value = asItems(await apiRequest<unknown>('/smscs?limit=500&offset=0'))
+    const rows = asItems(await apiRequest<unknown>('/smscs?limit=500&offset=0'));
+    smscOptions.value = rows
       .map((row) => ({
         value: text(row.id, ''),
         label: `${text(row.name)} (${text(row.engine_id ?? row.engineId)})`,
       }))
       .filter((option) => option.value && option.value !== '—');
+    smscRegister.value = new Map(
+      smscOptionsFrom(rows as Record<string, unknown>[]).map((option) => [option.id, option]),
+    );
   } catch (reason) {
     smscOptions.value = [];
+    smscRegister.value = new Map();
     smscOptionsError.value = messageFrom(reason, 'SMSC connections could not be loaded.');
   }
 }
+
+/* --- Continuity ---------------------------------------------------------------
+ *
+ * The register says a route HAS a fallback. This says whether that fallback
+ * could carry the traffic — a different question, and the only one worth asking
+ * during an incident. A configured-but-unbound alternative is not continuity.
+ */
+const continuityRouteId = ref('');
+
+const continuityRoute = computed<RecordValue | null>(
+  () => routes.value.find((route) => text(route.id) === continuityRouteId.value) ?? null,
+);
+
+interface ContinuityStep {
+  id: string;
+  name: string;
+  role: string;
+  verdict: string;
+}
+
+const continuityChain = computed<ContinuityStep[]>(() => {
+  const route = continuityRoute.value;
+  if (!route) return [];
+
+  const steps: { id: string; role: string }[] = [];
+  const target = text(route.targetSmscId, '');
+  if (target && target !== '—') steps.push({ id: target, role: 'configured target' });
+  const fallback = text(route.fallbackSmscId, '');
+  if (fallback && fallback !== '—') steps.push({ id: fallback, role: 'fallback' });
+  const weighted = Array.isArray(route.targets) ? (route.targets as RecordValue[]) : [];
+  for (const entry of weighted) {
+    const id = text(entry.smscId ?? entry.smsc_id, '');
+    if (id && id !== '—' && !steps.some((step) => step.id === id))
+      steps.push({ id, role: `weighted target${entry.weight ? ` (weight ${entry.weight})` : ''}` });
+  }
+
+  return steps.map((step) => {
+    const option = smscRegister.value.get(step.id);
+    const headroom = option ? smscHeadroom(option) : null;
+    let verdict: string;
+    if (!option) verdict = 'Not in the register — nothing is known about this connection.';
+    else if (bindTone(option.bindState) !== 'good')
+      // A ceiling on a connection that is not bound is not capacity. Reporting
+      // headroom here would offer somewhere to move traffic that cannot take it.
+      verdict = `Unavailable: ${bindWord(option.bindState)}.`;
+    else if (headroom === null)
+      verdict = 'Bound, but its ceiling or its throughput was never measured — headroom unknown.';
+    else verdict = `Could absorb ${Math.round(headroom * 10) / 10} more msg/s.`;
+    return { id: step.id, name: option?.label ?? smscLabel(step.id), role: step.role, verdict };
+  });
+});
 
 // --- Route grid --------------------------------------------------------------
 const routes = ref<RecordValue[]>([]);
@@ -566,12 +630,21 @@ onMounted(() => {
     </section>
 
     <!-- Route grid ------------------------------------------------------------- -->
-    <section class="panel" data-testid="routes-panel" aria-label="Advanced routes">
+    <section class="panel" data-testid="routes-panel" aria-label="Carrier routes">
       <header class="panel-header">
         <div>
-          <h2>Advanced routes</h2>
+          <!--
+            The design's name for this register, and the subtitle draws the line
+            that matters: these are NETWORK-level routes. Which products a
+            customer may send on is a different question with a different screen
+            (Customers), and conflating the two is how a routing change gets
+            made in the wrong place.
+          -->
+          <h2>Carrier routes</h2>
           <p aria-live="polite">
-            {{ routeState === 'loading' ? 'Loading routes…' : `${routes.length} route(s) shown` }}
+            Network-level routing and continuity. Customer-facing routing products are out of scope
+            here.
+            {{ routeState === 'loading' ? 'Loading routes…' : `${routes.length} route(s) shown.` }}
           </p>
         </div>
         <button
@@ -671,7 +744,10 @@ onMounted(() => {
             <tr
               v-for="route in routes"
               :key="text(route.id)"
+              class="selectable"
+              :class="{ selected: text(route.id) === continuityRouteId }"
               :data-testid="`route-row-${text(route.id)}`"
+              @click="continuityRouteId = text(route.id)"
             >
               <td class="mono">{{ text(route.priority) }}</td>
               <td>
@@ -691,7 +767,7 @@ onMounted(() => {
                   {{ route.enabled === false ? 'disabled' : 'enabled' }}
                 </span>
               </td>
-              <td class="row-actions">
+              <td class="row-actions" @click.stop>
                 <button
                   class="secondary-button"
                   :data-testid="`route-versions-${text(route.id)}`"
@@ -751,6 +827,57 @@ onMounted(() => {
         </div>
       </footer>
     </section>
+
+    <!-- Continuity --------------------------------------------------------------
+      What happens to the selected route if its active target fails. The
+      register above says a route HAS a fallback; this says whether that
+      fallback could actually carry the traffic, which is a different question
+      and the only one worth asking during an incident.
+    -->
+    <section
+      v-if="continuityRoute"
+      class="panel"
+      data-testid="route-continuity"
+      aria-labelledby="route-continuity-heading"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="route-continuity-heading">Continuity</h2>
+          <p>
+            What happens to <strong>{{ text(continuityRoute.name) }}</strong> if the active target
+            fails.
+          </p>
+        </div>
+        <RouterLink class="text-button" to="/failover">Open Failover</RouterLink>
+      </header>
+
+      <ol v-if="continuityChain.length > 1" class="continuity-list" data-testid="continuity-chain">
+        <li v-for="(step, index) in continuityChain" :key="`${step.role}-${step.id}`">
+          <span class="mono continuity-order">{{ index + 1 }}</span>
+          <div>
+            <strong>{{ step.name }}</strong>
+            <small class="row-id">{{ step.role }}</small>
+            <span class="continuity-verdict">{{ step.verdict }}</span>
+          </div>
+        </li>
+      </ol>
+      <p v-else class="warn-notice" role="note" data-testid="continuity-none">
+        <strong>This route has one target and no alternative.</strong>
+        If it fails, traffic on this route queues rather than moving — there is nowhere for it to
+        go. A fallback is configured on the route, not chosen during an incident.
+      </p>
+
+      <p class="source-note">
+        Headroom is the target's configured ceiling less what the poller last observed on it.
+        “unknown” means one of the two was never measured, which is not the same as no spare
+        capacity — and a connection that is not bound cannot absorb anything regardless of its
+        ceiling.
+      </p>
+    </section>
+
+    <div v-else-if="routes.length" class="panel source-note" data-testid="continuity-hint">
+      Select a route above to see what happens to it if its target fails.
+    </div>
 
     <!-- Route editor ----------------------------------------------------------- -->
     <section
@@ -1043,4 +1170,35 @@ onMounted(() => {
   </div>
 </template>
 
+<style scoped>
+/* The continuity chain: a numbered order of where traffic would go next, which
+   is the shape of the answer — first choice, second choice, third. */
+.continuity-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.continuity-list li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+}
+.continuity-order {
+  color: var(--muted);
+  font-size: 13px;
+}
+.continuity-list strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+.continuity-verdict {
+  display: block;
+  font-size: 13.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+</style>
 <style src="./workspace-extras.css"></style>

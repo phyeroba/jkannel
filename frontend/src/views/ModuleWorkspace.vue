@@ -576,6 +576,39 @@ const definitions: Record<string, Workspace> = {
           return count ? `${count} configured` : 'none configured';
         },
       },
+      /*
+       * How much of the target's ceiling this route's traffic is already
+       * using. Kannel enforces throughput per bind, so the denominator is
+       * tps × connections — the un-multiplied figure would show three times
+       * the utilisation on a connection running `instances = 3`.
+       *
+       * "unknown" where either half is missing. A percentage of an
+       * unmeasured ceiling is not 0%, and 0% here reads as spare capacity.
+       */
+      {
+        header: 'Used / capacity',
+        value: (raw) => {
+          const tps = Number(raw.target_tps ?? raw.targetTps);
+          const connections = Math.max(1, Number(raw.target_connections ?? 1) || 1);
+          const rateRaw = raw.target_outbound_rate ?? raw.targetOutboundRate;
+          const rate = rateRaw === null || rateRaw === undefined ? null : Number(rateRaw);
+          if (!Number.isFinite(tps) || tps <= 0 || rate === null || !Number.isFinite(rate))
+            return 'unknown';
+          const ceiling = tps * connections;
+          return `${Math.round(rate * 10) / 10} / ${ceiling}/s`;
+        },
+        mono: true,
+      },
+      /*
+       * When traffic on this route last moved. Ended failovers count — a
+       * reverted move is still a move, and "nothing has moved this route" is
+       * a different and useful answer from "we do not know".
+       */
+      {
+        header: 'Last transition',
+        value: (raw) => text(raw.last_transition ?? raw.lastTransition, 'never moved'),
+        mono: true,
+      },
       { header: 'Cost', value: (raw) => text(raw.cost), mono: true },
       {
         header: 'Window',
