@@ -301,6 +301,22 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Scheduled sends, MO fan-out, delivery retries, reports and backups all
+    // execute as jobs, and none of it was visible: a dead-lettered job stopped
+    // silently and the only symptom was the thing it should have done not
+    // having happened.
+    path: '/jobs',
+    name: 'jobs',
+    component: () => import('../views/JobsView.vue'),
+    meta: {
+      title: 'Background Jobs',
+      description:
+        'The asynchronous work the platform runs for itself — what is queued, what is running, and what stopped without completing.',
+      breadcrumb: ['System', 'Background Jobs'],
+      permission: 'system.view',
+    },
+  },
+  {
     // The audit trail carries a tamper-evidence chain and nothing in the
     // console could verify it. An audit trail nobody can check is a record you
     // are asked to take on trust, which is the opposite of what it is for.

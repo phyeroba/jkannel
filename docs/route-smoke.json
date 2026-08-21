@@ -73,7 +73,7 @@
   },
   {
     "route": "/messages",
-    "chars": 1971,
+    "chars": 2011,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -85,7 +85,7 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2474,
+    "chars": 2481,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -97,7 +97,7 @@
   },
   {
     "route": "/queues",
-    "chars": 2229,
+    "chars": 2269,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -121,7 +121,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4392,
+    "chars": 4393,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -145,7 +145,7 @@
   },
   {
     "route": "/delivery-reports",
-    "chars": 933,
+    "chars": 973,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -205,7 +205,7 @@
   },
   {
     "route": "/mo-routing",
-    "chars": 4169,
+    "chars": 4177,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -313,7 +313,7 @@
   },
   {
     "route": "/smpp-errors",
-    "chars": 5395,
+    "chars": 5401,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -361,8 +361,8 @@
   },
   {
     "route": "/copilot",
-    "chars": 1130,
-    "panels": 4,
+    "chars": 1536,
+    "panels": 5,
     "errorState": false,
     "partial": false,
     "denied": false,
@@ -397,7 +397,7 @@
   },
   {
     "route": "/services",
-    "chars": 3384,
+    "chars": 3386,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -421,7 +421,7 @@
   },
   {
     "route": "/performance",
-    "chars": 2129,
+    "chars": 2135,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -445,7 +445,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8844,
+    "chars": 8936,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -468,8 +468,20 @@
     "failedRequests": []
   },
   {
+    "route": "/jobs",
+    "chars": 792,
+    "panels": 2,
+    "errorState": false,
+    "partial": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
     "route": "/log-explorer",
-    "chars": 15469,
+    "chars": 15425,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -553,7 +565,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 8750,
+    "chars": 7847,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -565,8 +577,8 @@
   },
   {
     "route": "/system",
-    "chars": 3873,
-    "panels": 2,
+    "chars": 4240,
+    "panels": 3,
     "errorState": false,
     "partial": false,
     "denied": false,

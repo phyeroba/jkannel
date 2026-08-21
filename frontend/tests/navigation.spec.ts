@@ -53,11 +53,11 @@ describe('primary navigation contract', () => {
         '/help',
       ]),
     );
-    // 49: Messaging gained Recipient Policy and Scheduled Sends, Traffic
-    // gained Delivery Retries, System gained Performance and Data Integrity —
-    // 44 before those five. The count is asserted so a route cannot appear in
-    // the sidebar without someone deciding it should.
-    expect(navigation).toHaveLength(49);
+    // 50: Messaging gained Recipient Policy and Scheduled Sends, Traffic
+    // gained Delivery Retries, System gained Performance, Data Integrity and
+    // Background Jobs — 44 before those six. The count is asserted so a route
+    // cannot appear in the sidebar without someone deciding it should.
+    expect(navigation).toHaveLength(50);
     expect(new Set(navigation.map((item) => item.to)).size).toBe(navigation.length);
     expect(
       navigation.every(

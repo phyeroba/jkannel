@@ -493,6 +493,13 @@ export const navigation: NavigationItem[] = [
     group: 'System',
   },
   {
+    label: 'Background Jobs',
+    to: '/jobs',
+    icon: 'cog',
+    permission: 'system.view',
+    group: 'System',
+  },
+  {
     label: 'Log Explorer',
     to: '/log-explorer',
     icon: 'terminal',

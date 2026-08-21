@@ -120,6 +120,46 @@ async function runLookup() {
 const body = ref('');
 const analysis = computed(() => describeComposerText(body.value));
 
+/**
+ * The server's own segment count, for the same body.
+ *
+ * The browser figure is a port of the engine's module and keeps up with typing;
+ * this one is the authority, because it is the code the send path runs. They
+ * should agree, and the case worth catching is when they do not — one character
+ * classified differently is what turns a one-segment message into two on the
+ * wire and surprises somebody's bill.
+ *
+ * POST rather than the GET form: a three-segment UCS-2 body is roughly 200
+ * characters of percent-encoded query string, and proxies do impose URL limits.
+ */
+const serverPreview = ref<Record<string, unknown> | null>(null);
+const serverPreviewBusy = ref(false);
+const serverPreviewError = ref('');
+
+const serverPreviewAgrees = computed<boolean | null>(() => {
+  const server = serverPreview.value;
+  if (!server) return null;
+  const count = Number(server.segments);
+  if (!Number.isFinite(count)) return null;
+  return count === analysis.value.segments;
+});
+
+async function checkOnServer() {
+  serverPreviewBusy.value = true;
+  serverPreviewError.value = '';
+  serverPreview.value = null;
+  try {
+    serverPreview.value = await apiRequest<Record<string, unknown>>('/messages/preview', {
+      method: 'POST',
+      body: JSON.stringify({ text: body.value }),
+    });
+  } catch (cause) {
+    serverPreviewError.value = messageFrom(cause, 'The server preview could not be read.');
+  } finally {
+    serverPreviewBusy.value = false;
+  }
+}
+
 // --- 3. Connectivity test ------------------------------------------------------
 const smscs = ref<SmscOption[]>([]);
 const smscError = ref('');
@@ -609,10 +649,57 @@ onMounted(() => {
         <dd class="mono">{{ displayValue(analysis.segments, 'live') }}</dd>
       </dl>
 
+      <!--
+        The browser figure keeps up with typing; the server's is authoritative.
+        They should agree, and the interesting case is when they do not — a
+        character the console classifies differently from the engine is exactly
+        what turns a one-segment message into two on the wire and surprises
+        somebody's bill.
+      -->
+      <footer class="detail-actions">
+        <button
+          class="secondary-button"
+          type="button"
+          data-testid="encoding-server-check"
+          :disabled="serverPreviewBusy"
+          @click="checkOnServer"
+        >
+          {{ serverPreviewBusy ? 'Checking…' : 'Check against the server' }}
+        </button>
+      </footer>
+
+      <p
+        v-if="serverPreview"
+        class="notice"
+        role="status"
+        :class="serverPreviewAgrees === false ? 'disagrees' : ''"
+        data-testid="encoding-server-result"
+      >
+        <strong>{{
+          serverPreviewAgrees === false
+            ? 'The server disagrees with the browser.'
+            : 'The server agrees.'
+        }}</strong>
+        Server: {{ serverPreview.segments }} segment(s),
+        {{ serverPreview.alphabet ?? serverPreview.encoding ?? 'encoding not reported' }}.
+        <template v-if="serverPreviewAgrees === false">
+          The server is authoritative — it runs the same rules the send path runs. Treat its answer
+          as what the message will cost.
+        </template>
+      </p>
+      <p
+        v-if="serverPreviewError"
+        class="form-error"
+        role="alert"
+        data-testid="encoding-server-error"
+      >
+        {{ serverPreviewError }}
+      </p>
+
       <p class="source-note">
         Computed in the browser by the console's port of the engine's own segment module, so it
-        keeps up with typing. The authoritative answer for a stored message comes from
-        <span class="mono">POST /messages/preview</span>, which runs the same rules server-side.
+        keeps up with typing. <span class="mono">POST /messages/preview</span> runs the same rules
+        server-side and is the authoritative answer for what a body will actually cost.
       </p>
     </section>
 
@@ -1020,6 +1107,10 @@ onMounted(() => {
 .trace-heading {
   margin: 20px 0 8px;
   font-size: 14px;
+}
+.notice.disagrees {
+  border-left: 3px solid var(--warn);
+  color: var(--warn);
 }
 .field-grid {
   display: grid;

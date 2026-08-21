@@ -41,6 +41,35 @@ const props = withDefaults(
 /** Emitted when the grant state changes, so the parent can re-fetch its rows. */
 const emit = defineEmits<{ (event: 'changed', revealing: boolean): void }>();
 
+/**
+ * The masking policy, fetched the first time somebody opens the disclosure.
+ *
+ * `GET /privacy/policy` is readable without the reveal grant by design — it
+ * describes the rules rather than exposing anything — and it is the answer to
+ * the question this notice provokes. Read lazily because most people who see
+ * the notice already know what it means, and it would otherwise be a request on
+ * every screen that masks anything.
+ */
+const policy = ref<Record<string, unknown> | null>(null);
+const policyError = ref('');
+
+async function loadPolicy(event: Event) {
+  if (!(event.target as HTMLDetailsElement)?.open || policy.value) return;
+  try {
+    policy.value = await apiRequest<Record<string, unknown>>('/privacy/policy');
+    policyError.value = '';
+  } catch {
+    policyError.value =
+      'The masking policy could not be read. The notice above still applies — what you can see is what the API returned.';
+  }
+}
+
+/** Coerced: the policy is free-form JSON and must not crash the notice. */
+const maskedFields = computed<string[]>(() => {
+  const fields = policy.value?.maskedFields;
+  return Array.isArray(fields) ? fields.map((field) => String(field)) : [];
+});
+
 const grant = ref<RevealGrant | null>(null);
 const asking = ref(false);
 const reason = ref('');
@@ -159,6 +188,31 @@ async function revoke() {
       {{ privacy.refusal }}
     </p>
 
+    <!--
+      The policy, on demand. "What exactly is masked, and what would revealing
+      it entail" is asked at the moment somebody meets the notice, and until now
+      the endpoint that answers it had no surface — so the answer lived only in
+      the API document.
+    -->
+    <details :data-testid="`${testid}-policy`" @toggle="loadPolicy">
+      <summary>What is masked, and how revealing works</summary>
+      <ul v-if="policy" class="policy-list" :data-testid="`${testid}-policy-list`">
+        <li>
+          Masked fields: <span class="mono">{{ maskedFields.join(', ') }}</span>
+        </li>
+        <li>
+          Revealing needs <span class="mono">{{ policy.revealPermission }}</span
+          >, a written reason, and it is recorded against every row read under the window.
+        </li>
+        <li>
+          A window lasts {{ policy.defaultWindowMinutes }} minutes by default and
+          {{ policy.maxWindowMinutes }} at most — it expires on its own rather than needing to be
+          remembered.
+        </li>
+      </ul>
+      <p v-else class="privacy-detail">{{ policyError || 'Reading the policy…' }}</p>
+    </details>
+
     <div v-if="status.state === 'maskable'" class="privacy-actions">
       <button
         v-if="!asking"
@@ -262,6 +316,20 @@ async function revoke() {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 13px;
+}
+.policy-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+details summary {
+  cursor: pointer;
+  color: var(--brand);
+  font-size: 13px;
+  margin-top: 8px;
 }
 .privacy-detail {
   margin: 0;

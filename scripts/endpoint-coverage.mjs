@@ -86,6 +86,15 @@ const RESOURCE_ALIASES = [
  */
 const SUPERSEDED = [
   [/^\/backups(\/|$)/, 'superseded by /backup-dr, which is what the console calls'],
+  // The controller's own comment says the POST form is "preferred by the
+  // console": a three-segment UCS-2 body is ~200 characters of percent-encoded
+  // query string and proxies impose URL limits. The GET remains for API callers
+  // who want a link they can paste. Two buttons doing the same thing would be
+  // the wrong way to close this.
+  [
+    /^\/messages\/segments$/,
+    'the GET form of /messages/preview; the console uses POST, as the controller recommends',
+  ],
 ];
 
 const EXPECTED_HEADLESS = [
@@ -217,6 +226,18 @@ function consolePaths() {
     for (const match of source.matchAll(/['"`](\/[A-Za-z0-9_\-{}$][^'"`\n]*)['"`]/g)) {
       const path = normalise(match[1]);
       if (path === '/' || path.startsWith('//')) continue;
+      /*
+       * A path made ENTIRELY of holes carries no information, and under
+       * segment-wise matching it matches every documented path of the same
+       * depth. One `/${path}` in the API Reference — which builds example URLs
+       * — was therefore marking every single-segment endpoint in the product as
+       * surfaced, `/jobs` and `/alerts` and `/carriers` alike.
+       *
+       * Dropped rather than matched. A literal segment is what makes a hit
+       * mean anything.
+       */
+      const segments = path.split('/').slice(1);
+      if (segments.length && segments.every((segment) => segment === '{}')) continue;
       if (!found.has(path)) found.set(path, new Set());
       found.get(path).add(where);
     }
