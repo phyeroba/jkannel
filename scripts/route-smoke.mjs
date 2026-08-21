@@ -76,9 +76,28 @@ for (const route of unique) {
     return {
       chars: text.length,
       panels: main ? main.querySelectorAll('.panel, article.panel, section.panel').length : 0,
-      // The console's own honest-failure states. Distinguished from a crash:
-      // an error state means the view worked and the DATA did not.
-      errorState: /could not be (loaded|read)|is unavailable|failed to load/i.test(text),
+      /*
+       * The console's own honest-failure states, read from `DataState`'s
+       * `data-state` attribute rather than from prose.
+       *
+       * Prose-matching was wrong in a way that matters: `/is unavailable/`
+       * matched Nodes, which renders a LIST of what this deployment cannot
+       * measure. The screen was working perfectly and reporting its limits, and
+       * the sweep called it data-unavailable — a screen explaining what is
+       * unavailable is not a screen that failed. `data-state` is set by the
+       * component, so it says what the view concluded rather than what it
+       * happened to say.
+       *
+       * `partial` is deliberately NOT a failure: several screens are honestly
+       * partial by design (Nodes measures one node of an unknown number), and
+       * flagging that trains people to ignore the report.
+       */
+      errorState: [...(main?.querySelectorAll('[data-state]') ?? [])].some((el) =>
+        ['error', 'unavailable'].includes(el.getAttribute('data-state') ?? ''),
+      ),
+      partial: [...(main?.querySelectorAll('[data-state]') ?? [])].some(
+        (el) => el.getAttribute('data-state') === 'partial',
+      ),
       // Anchored to the console's actual denial copy. A bare /permission/ also
       // matched every screen that merely NAMES a permission — the API reference
       // lists one per endpoint — and flagged eight healthy routes as denied.
@@ -107,6 +126,8 @@ for (const r of results) {
     r.consoleErrors.length ? `CONSOLE(${r.consoleErrors.length})` : '',
     r.denied ? 'denied' : '',
     r.errorState ? 'data-unavailable' : '',
+    // Reported, not counted as a fault: an honestly partial screen is working.
+    r.partial ? 'partial' : '',
   ]
     .filter(Boolean)
     .join(' ');
