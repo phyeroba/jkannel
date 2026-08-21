@@ -238,6 +238,8 @@ export interface SmscOption {
    */
   priority?: number | null;
   bindState?: string | null;
+  /** The carrier this connection is filed under, or null when unassigned. */
+  carrierName?: string | null;
   /** Per-connection ceiling. Kannel enforces `throughput` per bind. */
   tps?: number | null;
   connections?: number;
@@ -265,6 +267,7 @@ export function smscOptionsFrom(
         label: engineId ? `${name} (${engineId})` : name,
         priority: numberOrNull(row.priority),
         bindState: typeof row.bind_state === 'string' ? row.bind_state : null,
+        carrierName: typeof row.carrier_name === 'string' ? row.carrier_name : null,
         tps: numberOrNull(row.tps),
         connections: Math.max(1, numberOrNull(row.connection_count) ?? 1),
         outboundRate: numberOrNull(row.outbound_rate),

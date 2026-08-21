@@ -54,7 +54,19 @@ export interface LiveSnapshot {
   observedAt?: string;
   engine?: LiveEngine;
   binds?: LiveBind[];
-  spool?: { queued?: number | null; oldestEpoch?: number | null };
+  spool?: {
+    queued?: number | null;
+    oldestEpoch?: number | null;
+    /**
+     * Per-destination spool depth and age, from SQLBox rather than the engine.
+     *
+     * This is the only place a PER-BIND oldest-message age exists: bearerbox
+     * reports a queue depth per bind and no ages at all, while `send_sms`
+     * carries a timestamp on every waiting message. `oldestEpoch` is null when
+     * the group has no readable timestamp — 1970 is not an age.
+     */
+    bySmsc?: { smscId: string; count: number; oldestEpoch?: number | null }[];
+  };
   source?: { status?: string; detail?: string };
 }
 
