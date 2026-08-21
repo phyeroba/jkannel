@@ -192,13 +192,52 @@ export interface BindQuality {
   quality: DeliveryQuality;
 }
 
+/** One bucket of the MT-versus-receipts trend. */
+export interface VolumePoint {
+  at: string;
+  submitted: number;
+  receipts: number;
+  delivered: number;
+}
+
 export interface DlrPerformanceReport {
   from: string;
   to: string;
   overall: DeliveryQuality;
   byBind: BindQuality[];
+  /**
+   * The same window per carrier. Grouped in SQL rather than folded up from
+   * `byBind`, because percentiles do not roll up — see the service.
+   */
+  byCarrier: BindQuality[];
+  volume: VolumePoint[];
+  bucketSeconds: number;
   available: boolean;
   detail: string;
+}
+
+/**
+ * The verdict the design puts in its "Read as" column.
+ *
+ * The distinction it exists to make: a high no-receipt rate with an ordinary
+ * reject rate means the RECEIPTS are missing, not that handsets failed to get
+ * the message. Those two get different escalations — one is a carrier reporting
+ * problem, the other is a delivery failure — and a single "delivery %" cannot
+ * tell them apart.
+ *
+ * Order matters. No-receipt is tested before the delivery rate because a window
+ * where most messages have no receipt makes the delivery rate meaningless, and
+ * calling it a delivery failure would send someone to the wrong argument with
+ * the carrier.
+ */
+export function readDeliveryAs(quality: DeliveryQuality): { word: string; tone: Tone } {
+  if (quality.deliveryRate === null && quality.noReceiptRate === null)
+    return { word: 'no data', tone: 'muted' };
+  if ((quality.noReceiptRate ?? 0) > 0.03)
+    return { word: 'receipts delayed or lost', tone: 'warn' };
+  if (quality.deliveryRate === null) return { word: 'no data', tone: 'muted' };
+  if (quality.deliveryRate < 0.95) return { word: 'true delivery failure', tone: 'bad' };
+  return { word: 'healthy', tone: 'good' };
 }
 
 /**

@@ -38,6 +38,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
 import { resolveWindow, selectedRange } from '../stores/time-range';
@@ -45,6 +46,7 @@ import {
   DELIVERY_RATE_VIEWS,
   formatShare,
   formatLatency,
+  readDeliveryAs,
   type BindQuality,
   type DeliveryQuality,
   type DlrPerformanceReport,
@@ -109,6 +111,18 @@ function shareOfSubmitted(value: number): number {
   return submitted > 0 ? value / submitted : 0;
 }
 
+/**
+ * A share of ONE carrier's own submissions, not of the estate's.
+ *
+ * Using the overall denominator here would make a small carrier's 100% reject
+ * rate render as a fraction of a percent, which is the reading that lets a
+ * completely broken connection hide behind a busy healthy one.
+ */
+function shareOfCarrier(row: BindQuality, value: number): number | null {
+  const submitted = row.quality.funnel.submitted;
+  return submitted > 0 ? value / submitted : null;
+}
+
 /** The outcome breakdown. `expired` is deliberately not a number — see below. */
 const outcomes = computed(() => {
   const data = funnel.value;
@@ -139,6 +153,50 @@ const bindRows = computed<BindQuality[]>(() => {
 });
 
 const immatureBinds = computed(() => bindRows.value.filter((row) => row.quality.maturity.immature));
+
+/** Already ordered worst-delivery-first by the API, as the design orders it. */
+const carrierRows = computed<BindQuality[]>(() => report.value?.byCarrier ?? []);
+
+/**
+ * MT submitted against receipts, over the same buckets.
+ *
+ * §8's point is that quality must be trended SEPARATELY from raw traffic, so a
+ * busy hour is not read as a better hour. That needs both lines on one axis:
+ * receipts tracking submissions is health, receipts flattening while
+ * submissions climb is the picture worth catching.
+ */
+const volumeSeries = computed<ChartSeries[]>(() => {
+  const points = report.value?.volume ?? [];
+  return [
+    { label: 'MT submitted', values: points.map((point) => point.submitted) },
+    { label: 'Receipts received', values: points.map((point) => point.receipts) },
+  ];
+});
+
+const volumeLabels = computed(() =>
+  (report.value?.volume ?? []).map((point) => {
+    const at = new Date(point.at);
+    return Number.isNaN(at.getTime())
+      ? point.at
+      : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }),
+);
+
+const hasVolume = computed(() => (report.value?.volume ?? []).length > 0);
+
+/**
+ * The status breakdown as shares of the whole, for the design's bar rendering.
+ *
+ * A bar needs a denominator, and `submitted` is the only one that makes the
+ * five bars add up to the window. Guarded against zero so an empty window
+ * renders bars of nothing rather than NaN width.
+ */
+const statusBreakdown = computed(() =>
+  outcomes.value.map((outcome) => ({
+    ...outcome,
+    share: shareOfSubmitted(outcome.value),
+  })),
+);
 
 function bindLabel(row: BindQuality): string {
   return row.smscName ?? row.engineId;
@@ -188,9 +246,18 @@ onMounted(load);
       `role="alert"` so a screen reader announces it rather than leaving it to be
       discovered after the number it is about.
     -->
+    <!--
+      `stale-banner` is the design system's own class for "what is below is not
+      to be trusted as current", and an immature window is exactly that case —
+      the receipts have not arrived yet, so the rate underneath reads low. Using
+      the shared class rather than a local one keeps this banner identical to
+      the staleness banners on Carriers, Dashboard and SMSC Detail; `maturity-alert`
+      stays alongside it for the left-hand rule that marks this one as a warning
+      about the reading rather than about the connection.
+    -->
     <p
       v-if="showMaturityWarning"
-      class="maturity-alert"
+      class="stale-banner maturity-alert"
       role="alert"
       data-testid="dlr-maturity-warning"
     >
@@ -322,19 +389,35 @@ onMounted(load);
       >
         <header class="panel-header">
           <div>
-            <h2 id="dlr-outcomes-heading">Outcome breakdown</h2>
-            <p>Every accepted message in the window, by what happened to it.</p>
+            <h2 id="dlr-outcomes-heading">Status breakdown</h2>
+            <p>
+              Normalised status with the count behind it. Every accepted message in the window, by
+              what happened to it.
+            </p>
           </div>
         </header>
         <ul class="outcome-list">
           <li
-            v-for="outcome in outcomes"
+            v-for="outcome in statusBreakdown"
             :key="outcome.key"
             :data-testid="`dlr-outcome-${outcome.key}`"
           >
             <span class="status-badge" :class="outcome.tone">{{ outcome.label }}</span>
             <strong>{{ displayValue(outcome.value, state) }}</strong>
-            <small>{{ formatShare(shareOfSubmitted(outcome.value), state) }}</small>
+            <!--
+              The bar is the design's, and it carries no information the number
+              beside it does not — which is the point: a share is compared by
+              eye far faster than it is read, and this panel exists to be
+              scanned.
+            -->
+            <span class="breakdown-track" aria-hidden="true">
+              <span
+                class="breakdown-fill"
+                :class="`fill-${outcome.tone}`"
+                :style="{ width: `${Math.max(outcome.share > 0 ? 1 : 0, outcome.share * 100)}%` }"
+              ></span>
+            </span>
+            <small>{{ formatShare(outcome.share, state) }}</small>
           </li>
           <!--
             `expired` is in the contract and is always zero, because Kannel's DLR
@@ -350,6 +433,117 @@ onMounted(load);
             >
           </li>
         </ul>
+      </section>
+
+      <!-- DELIVERY RATE AGAINST VOLUME ----------------------------------- -->
+      <section class="panel" data-testid="dlr-volume-panel" aria-labelledby="dlr-volume-heading">
+        <header class="panel-header">
+          <div>
+            <h2 id="dlr-volume-heading">Delivery rate against volume</h2>
+            <p>
+              Quality is trended separately from raw traffic, so a busy hour is not read as a better
+              hour. Bucketed on the message's own submission time, so a late receipt still counts
+              against the minute the message was sent.
+            </p>
+          </div>
+        </header>
+        <MiniChart
+          v-if="hasVolume"
+          type="line"
+          :series="volumeSeries"
+          :labels="volumeLabels"
+          title="MT submitted against receipts received"
+          :height="170"
+          data-testid="dlr-volume-chart"
+        />
+        <p v-else class="chart-empty" data-testid="dlr-volume-empty">
+          No message was submitted in this window, so there is no trend to draw. That is an absence
+          of traffic, not an absence of measurement.
+        </p>
+        <p class="source-note">
+          Receipts tracking submissions is health. Receipts flattening while submissions climb is
+          the picture this panel exists to catch — and it is invisible on a delivery percentage,
+          which stays flat while the backlog grows.
+        </p>
+      </section>
+
+      <!-- CARRIER COMPARISON ---------------------------------------------- -->
+      <section class="panel" data-testid="dlr-carrier-panel" aria-labelledby="dlr-carrier-heading">
+        <header class="panel-header">
+          <div>
+            <h2 id="dlr-carrier-heading">Carrier comparison</h2>
+            <p>
+              An identical window for every carrier, worst delivery first. Rolled up in the database
+              per carrier rather than averaged from the binds below — a mean of two binds' P95s
+              describes no message that was ever sent.
+            </p>
+          </div>
+        </header>
+        <div v-if="carrierRows.length" class="table-wrap">
+          <table data-testid="dlr-carrier-table">
+            <thead>
+              <tr>
+                <th scope="col">Carrier</th>
+                <th scope="col">Delivery</th>
+                <th scope="col">P50</th>
+                <th scope="col">P95</th>
+                <th scope="col">P99</th>
+                <th scope="col">No-DLR</th>
+                <th scope="col">Reject</th>
+                <th scope="col">Read as</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in carrierRows"
+                :key="row.carrierId ?? 'unassigned'"
+                :data-testid="`dlr-carrier-${row.carrierId ?? 'unassigned'}`"
+              >
+                <td>
+                  <strong>{{ row.carrierName ?? 'No carrier record' }}</strong>
+                  <small v-if="!row.carrierName" class="row-id">
+                    traffic on connections that belong to no carrier
+                  </small>
+                </td>
+                <td>{{ formatShare(row.quality.deliveryRate, state) }}</td>
+                <td class="mono">{{ formatLatency(row.quality.latency?.p50) }}</td>
+                <td class="mono">{{ formatLatency(row.quality.latency?.p95) }}</td>
+                <td class="mono">{{ formatLatency(row.quality.latency?.p99) }}</td>
+                <td>{{ formatShare(row.quality.noReceiptRate, state) }}</td>
+                <td>{{ formatShare(shareOfCarrier(row, row.quality.funnel.rejected), state) }}</td>
+                <td>
+                  <span class="status-badge" :class="readDeliveryAs(row.quality).tone">{{
+                    readDeliveryAs(row.quality).word
+                  }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="chart-empty" data-testid="dlr-carrier-empty">
+          No carrier carried traffic in this window.
+        </p>
+        <!--
+          The sentence the whole column exists for. Kept verbatim from the
+          design, because the two conditions it separates get different
+          escalations and the distinction is the point of the panel.
+        -->
+        <p class="source-note">
+          A high no-DLR rate with a normal reject rate means receipts are missing, not that handsets
+          failed to receive the message. The two get different escalations.
+        </p>
+        <!--
+          Throttling is in the design's table and is NOT here. Kannel's status
+          interface exposes no per-message command_status, so ESME_RTHROTTLED
+          cannot be counted from the message store — only bearerbox's own log
+          carries it. An empty column would have implied nobody was throttled.
+        -->
+        <p class="source-note" data-testid="dlr-carrier-throttle-note">
+          There is no throttle column. A throttled submission is reported by the carrier as an SMPP
+          <span class="mono">command_status</span>, which this engine does not record against the
+          message — so the rate cannot be counted here at all. SMPP Errors is where throttling
+          shows up.
+        </p>
       </section>
 
       <section class="panel" data-testid="dlr-bind-panel" aria-labelledby="dlr-bind-heading">
