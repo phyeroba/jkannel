@@ -62,6 +62,36 @@ function levelTone(level: unknown) {
   return '';
 }
 /**
+ * Buffer health, without re-running the query.
+ *
+ * `GET /observability/logs/stats` returns the search envelope minus the lines.
+ * Merging it into `result` rather than holding it separately keeps ONE set of
+ * numbers on the screen: two independently-refreshed copies of "how full is the
+ * buffer" would eventually disagree, and the operator would have no way to tell
+ * which was current.
+ *
+ * `matched` is deliberately not overwritten — it belongs to the last query and
+ * means "matching this filter", which a filterless stats call cannot answer.
+ */
+const statsBusy = ref(false);
+
+async function refreshStats() {
+  statsBusy.value = true;
+  try {
+    const stats = await apiRequest<LogQueryResult>('/observability/logs/stats');
+    const { matched, items, ...health } = stats ?? {};
+    void matched;
+    void items;
+    result.value = { ...(result.value ?? {}), ...health };
+  } catch {
+    // The figures on screen stay as they were rather than being blanked: the
+    // last successful read is still the truest thing available.
+  } finally {
+    statsBusy.value = false;
+  }
+}
+
+/**
  * The thing a log line is about.
  *
  * A request line names a route; anything else names whoever it was acting for.
@@ -277,6 +307,20 @@ onMounted(() => {
             }}
           </p>
         </div>
+        <!--
+          Buffer health without re-running the query. `GET stats` returns the
+          same envelope minus the lines, so watching for eviction costs nothing
+          and does not disturb the results an operator is reading.
+        -->
+        <button
+          class="secondary-button"
+          type="button"
+          :disabled="statsBusy"
+          data-testid="log-stats-refresh"
+          @click="refreshStats"
+        >
+          {{ statsBusy ? 'Reading…' : 'Refresh buffer health' }}
+        </button>
       </header>
       <div class="summary-strip">
         <div class="metric">

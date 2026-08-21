@@ -186,11 +186,16 @@ function normalise(path) {
       // `/…/lifecycle`. A hole that IS the whole segment is preceded by `/`
       // and is left alone, because that one really is a parameter.
       .replace(/([A-Za-z0-9_\-.])\{\}/g, '$1')
-      // The console picks the export format and appends it — `apiDownloadFile`
-      // is given `/messages/export` and builds `.csv` or `.pdf` from the
-      // operator's choice. Comparing with the extension attached reports every
-      // export endpoint as unsurfaced while the button sits right there.
+      // The console picks the export format and appends it. Two spellings, and
+      // both were reporting live buttons as missing surfaces:
+      //
+      //   `/messages/export` + format chosen elsewhere  -> /messages/export
+      //   `/sessions/export.${format}`                  -> /sessions/export.
+      //
+      // The second collapses to a trailing dot, which matched no documented
+      // path — Sessions has had working CSV and PDF buttons the whole time.
       .replace(/\.(csv|pdf|json|xlsx)$/i, '')
+      .replace(/\.$/, '')
       .replace(/\/+$/, '') || '/'
   );
 }
