@@ -27,6 +27,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import MiniChart from '../components/MiniChart.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
   formatSmppCode,
@@ -113,7 +114,65 @@ function clearLookup() {
   lookupState.value = 'empty';
 }
 
-onMounted(load);
+/* --- THROTTLING IN CONTEXT ----------------------------------------------------
+ *
+ * The recorded throughput series, drawn against the configured ceiling. Same
+ * endpoint as Performance and Live Traffic, so all three show one history of
+ * one gateway rather than three readings that can disagree.
+ *
+ * The ceiling is a flat line repeated across the buckets rather than a chart
+ * annotation, because MiniChart draws series and a constant series IS the
+ * clearest way to show a threshold on one.
+ */
+const THROTTLE_WINDOW_MINUTES = 360;
+
+const throttlePoints = ref<{ at: string; outbound: number; peakOutbound: number }[]>([]);
+const throttleCeiling = ref<number | null>(null);
+const throttleState = ref<State>('loading');
+
+const throttleSeries = computed(() => {
+  const series = [
+    { label: 'Observed MT (/s)', values: throttlePoints.value.map((point) => point.outbound) },
+    { label: 'Peak in bucket (/s)', values: throttlePoints.value.map((point) => point.peakOutbound) },
+  ];
+  if (throttleCeiling.value !== null)
+    series.push({
+      label: `Configured ceiling (${throttleCeiling.value}/s)`,
+      values: throttlePoints.value.map(() => throttleCeiling.value as number),
+    });
+  return series;
+});
+
+const throttleLabels = computed(() =>
+  throttlePoints.value.map((point) => {
+    const at = new Date(point.at);
+    return Number.isNaN(at.getTime())
+      ? point.at
+      : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }),
+);
+
+async function loadThrottling() {
+  throttleState.value = 'loading';
+  try {
+    const result = await apiRequest<{
+      points?: { at: string; outbound: number; peakOutbound: number }[];
+      ceiling?: { effectiveTps: number | null };
+    }>(`/performance/throughput?minutes=${THROTTLE_WINDOW_MINUTES}`);
+    throttlePoints.value = Array.isArray(result?.points) ? result.points : [];
+    throttleCeiling.value = result?.ceiling?.effectiveTps ?? null;
+    throttleState.value = throttlePoints.value.length ? 'live' : 'empty';
+  } catch {
+    throttlePoints.value = [];
+    throttleCeiling.value = null;
+    throttleState.value = 'error';
+  }
+}
+
+onMounted(() => {
+  void load();
+  void loadThrottling();
+});
 </script>
 
 <template>
@@ -322,6 +381,70 @@ onMounted(load);
         the endpoint returns the complete decoder in one response — every status this build knows,
         with no paging — so filtering the list cannot hide a row that exists on a page you are not
         looking at.
+      </p>
+    </section>
+
+    <!-- THROTTLING IN CONTEXT ---------------------------------------------------
+      The design charts submitted against ACCEPTED, so the gap is what the
+      carrier refused. This engine cannot draw that line: a refusal arrives as
+      an SMPP command_status on a submit_sm_resp, and bearerbox records neither
+      the status nor a count of them anywhere this console can read.
+
+      What it does report is the rate that got through, and we know the ceiling
+      that was configured. That is a genuinely useful pairing — a rate pinned at
+      the ceiling is throughput being shaped, and a rate well under it with a
+      growing queue is something else entirely — so the panel draws that and
+      says which of the two questions it is answering.
+    -->
+    <section
+      class="panel"
+      data-testid="smpp-throttling"
+      aria-labelledby="smpp-throttling-heading"
+    >
+      <header class="panel-header">
+        <div>
+          <h2 id="smpp-throttling-heading">Throttling in context</h2>
+          <p>
+            Observed throughput against the ceiling configured across the estate, over the last
+            {{ Math.round(THROTTLE_WINDOW_MINUTES / 60) }} hours.
+          </p>
+        </div>
+        <RouterLink class="text-button" to="/performance">Open Performance</RouterLink>
+      </header>
+
+      <MiniChart
+        v-if="throttlePoints.length"
+        type="line"
+        :series="throttleSeries"
+        :labels="throttleLabels"
+        title="Throughput against configured ceiling"
+        :height="170"
+        data-testid="smpp-throttle-chart"
+      />
+      <p v-else class="chart-empty" data-testid="smpp-throttle-empty">
+        {{
+          throttleState === 'error'
+            ? 'The recorded throughput series could not be read.'
+            : 'The poller has recorded no sample in this window, so there is nothing to plot against the ceiling.'
+        }}
+      </p>
+
+      <p v-if="throttleCeiling === null" class="warn-notice" role="note" data-testid="smpp-throttle-noceiling">
+        <strong>No connection declares a throughput ceiling</strong>, so there is no line to compare
+        against and the chart above is throughput alone. The ceiling is set per SMSC as its TPS.
+      </p>
+
+      <!--
+        The refusal, stated where it will be looked for. Without it, a flat
+        throughput line under a ceiling reads as "nothing is being throttled",
+        which is a conclusion this data cannot support.
+      -->
+      <p class="source-note" data-testid="smpp-throttle-note">
+        This is the gateway's side only. A carrier refusing a submission answers
+        <span class="mono">ESME_RTHROTTLED</span> on the submit response, and this engine records
+        neither that status nor a count of it — so a carrier actively refusing traffic looks
+        identical here to a quiet hour. Throughput sitting exactly on the ceiling is the engine
+        shaping its own rate, which is a different thing and the one this chart can show.
       </p>
     </section>
   </div>

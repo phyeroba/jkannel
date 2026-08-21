@@ -2,9 +2,16 @@
 import { computed, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
 import MiniChart from '../components/MiniChart.vue';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { healthTone, type CarrierSummary } from '../utils/connectivity';
+import { alertDuration } from '../utils/alerts';
+import {
+  formatLatency,
+  formatShare,
+  type BindQuality,
+  type DlrPerformanceReport,
+} from '../utils/traffic';
 
 type RecordValue = Record<string, unknown>;
 type SourceState = 'checking' | 'ok' | 'unavailable';
@@ -161,6 +168,57 @@ async function checkCarriers() {
   }
 }
 
+/* --- DELIVERY QUALITY ---------------------------------------------------------
+ *
+ * P95 receipt latency and reject share, per carrier, over the last day. They
+ * come from the DLR report rather than the carrier register for the same reason
+ * they do on the Carriers screen: they are properties of MESSAGES, and that
+ * endpoint already correlates MT to receipt and takes percentiles per carrier.
+ *
+ * A separate request that is allowed to fail alone. `reports.view` is not
+ * `smsc.view`, so an operator who can read the dashboard may not be able to
+ * read delivery quality — those cells then say so.
+ */
+const DELIVERY_WINDOW_HOURS = 24;
+const deliveryByCarrier = ref<Record<string, BindQuality>>({});
+const deliveryDenied = ref(false);
+
+async function checkDelivery() {
+  const to = new Date();
+  const from = new Date(to.getTime() - DELIVERY_WINDOW_HOURS * 3_600_000);
+  const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+  try {
+    const report = await apiRequest<DlrPerformanceReport>(
+      `/reports/dlr-performance?${params.toString()}`,
+    );
+    const map: Record<string, BindQuality> = {};
+    for (const row of report?.byCarrier ?? []) if (row.carrierId) map[row.carrierId] = row;
+    deliveryByCarrier.value = map;
+    deliveryDenied.value = false;
+  } catch (reason) {
+    deliveryByCarrier.value = {};
+    deliveryDenied.value = reason instanceof ApiError && reason.status === 403;
+  }
+}
+
+function qualityFor(carrierId: string): BindQuality | null {
+  return deliveryByCarrier.value[carrierId] ?? null;
+}
+
+/**
+ * Rejects as a share of THIS carrier's own submissions.
+ *
+ * Against the estate's total instead, a small carrier rejecting everything
+ * renders as a fraction of a percent behind a busy healthy one — which is
+ * exactly the row a dashboard exists to surface.
+ */
+function rejectShare(carrierId: string): string {
+  const quality = qualityFor(carrierId)?.quality;
+  const submitted = quality?.funnel?.submitted ?? 0;
+  if (!quality || !submitted) return 'unknown';
+  return formatShare(quality.funnel.rejected / submitted, 'live');
+}
+
 /** Worst first, so the row that needs attention is the row you read. */
 const HEALTH_ORDER: Record<string, number> = {
   critical: 0,
@@ -274,6 +332,7 @@ async function refresh() {
     checkVolume(),
     checkAlerts(),
     checkCarriers(),
+    checkDelivery(),
   ]);
   refreshed.value = new Date().toLocaleTimeString();
 }
@@ -576,6 +635,7 @@ function statusTone(status: string) {
               <th>Condition</th>
               <th>Status</th>
               <th>Opened</th>
+              <th>Duration</th>
             </tr>
           </thead>
           <tbody>
@@ -596,14 +656,23 @@ function statusTone(status: string) {
               <td>{{ text(alert.summary ?? alert.rule_name) }}</td>
               <td>{{ text(alert.status) }}</td>
               <td>{{ text(alert.opened_at ?? alert.openedAt) }}</td>
+              <!--
+                "Longest running first" is this panel's own subtitle, and until
+                now nothing on it showed how long anything had been running.
+                Measured to now while open and to resolution once closed, so a
+                settled incident stops ageing on the dashboard.
+              -->
+              <td class="mono" :data-testid="`incident-duration-${text(alert.id)}`">
+                {{ alertDuration(alert) }}
+              </td>
             </tr>
             <tr v-if="alertsState === 'ok' && !recentAlerts.length">
-              <td colspan="4" class="empty-cell" data-testid="alerts-empty">
+              <td colspan="5" class="empty-cell" data-testid="alerts-empty">
                 No alert instances recorded.
               </td>
             </tr>
             <tr v-if="alertsState === 'checking'">
-              <td colspan="4" class="empty-cell">Loading alerts…</td>
+              <td colspan="5" class="empty-cell">Loading alerts…</td>
             </tr>
           </tbody>
         </table>
@@ -640,7 +709,10 @@ function statusTone(status: string) {
             <th scope="col" class="numeric">MT TPS</th>
             <th scope="col" class="numeric">Utilisation</th>
             <th scope="col" class="numeric">Queue</th>
+            <th scope="col" class="numeric">P95 DLR</th>
+            <th scope="col" class="numeric">Reject</th>
             <th scope="col" class="numeric">Open alerts</th>
+            <th scope="col">Last event</th>
           </tr>
         </thead>
         <tbody>
@@ -672,19 +744,40 @@ function statusTone(status: string) {
             </td>
             <td class="figures numeric">{{ utilisationLabel(carrier) }}</td>
             <td class="figures numeric">{{ carrier.queuedMessages.toLocaleString() }}</td>
+            <!--
+              Delivery quality over the last 24 hours, from the DLR report. It
+              is a second request and may be refused on its own — reports.view
+              is not smsc.view — so these two cells say "not permitted" rather
+              than an em dash an operator would read as "no receipts".
+            -->
+            <td class="figures numeric" :data-testid="`dashboard-p95-${carrier.id}`">
+              {{ deliveryDenied ? 'not permitted' : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95) }}
+            </td>
+            <td class="figures numeric" :data-testid="`dashboard-reject-${carrier.id}`">
+              {{ deliveryDenied ? 'not permitted' : rejectShare(carrier.id) }}
+            </td>
             <td class="figures numeric">{{ carrier.openAlerts }}</td>
+            <!--
+              The newest bind transition across the carrier's connections. "no
+              transitions recorded" is meaningful on history that is never
+              pruned: nothing has been observed to change, rather than older
+              entries having aged out.
+            -->
+            <td class="mono cell-tight" :data-testid="`dashboard-last-event-${carrier.id}`">
+              {{ carrier.lastEvent || 'no transitions recorded' }}
+            </td>
           </tr>
           <tr v-if="carriersState === 'ok' && !carriers.length">
-            <td colspan="8" class="empty-cell" data-testid="dashboard-carriers-empty">
+            <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-empty">
               No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
               network.
             </td>
           </tr>
           <tr v-if="carriersState === 'checking'">
-            <td colspan="8" class="empty-cell">Loading carriers…</td>
+            <td colspan="11" class="empty-cell">Loading carriers…</td>
           </tr>
           <tr v-if="carriersState === 'unavailable'">
-            <td colspan="8" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+            <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-unavailable">
               Carrier connectivity is unavailable — the register could not be read.
             </td>
           </tr>
