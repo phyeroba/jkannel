@@ -1,7 +1,7 @@
 [
   {
     "route": "/dashboard/operations",
-    "chars": 1615,
+    "chars": 1613,
     "panels": 5,
     "errorState": false,
     "denied": false,
@@ -23,7 +23,7 @@
   },
   {
     "route": "/alerts",
-    "chars": 2042,
+    "chars": 2048,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -34,7 +34,7 @@
   },
   {
     "route": "/alert-lifecycle",
-    "chars": 1337,
+    "chars": 1341,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -78,9 +78,9 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2263,
+    "chars": 2092,
     "panels": 2,
-    "errorState": true,
+    "errorState": false,
     "denied": false,
     "empty": false,
     "pageErrors": [],
@@ -89,7 +89,7 @@
   },
   {
     "route": "/queues",
-    "chars": 2113,
+    "chars": 2229,
     "panels": 4,
     "errorState": false,
     "denied": false,
@@ -111,7 +111,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4298,
+    "chars": 4300,
     "panels": 6,
     "errorState": false,
     "denied": false,
@@ -166,7 +166,7 @@
   },
   {
     "route": "/carriers",
-    "chars": 2015,
+    "chars": 2006,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -177,7 +177,7 @@
   },
   {
     "route": "/smsc",
-    "chars": 1442,
+    "chars": 1428,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -243,7 +243,7 @@
   },
   {
     "route": "/message-trace",
-    "chars": 599,
+    "chars": 822,
     "panels": 1,
     "errorState": false,
     "denied": false,
@@ -320,7 +320,7 @@
   },
   {
     "route": "/api-reference",
-    "chars": 27508,
+    "chars": 27615,
     "panels": 5,
     "errorState": false,
     "denied": false,
@@ -331,7 +331,7 @@
   },
   {
     "route": "/services",
-    "chars": 2783,
+    "chars": 2646,
     "panels": 5,
     "errorState": false,
     "denied": false,
@@ -342,7 +342,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1604,
+    "chars": 1603,
     "panels": 3,
     "errorState": true,
     "denied": false,
@@ -352,8 +352,19 @@
     "failedRequests": []
   },
   {
+    "route": "/performance",
+    "chars": 2121,
+    "panels": 3,
+    "errorState": false,
+    "denied": false,
+    "empty": false,
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  {
     "route": "/docker",
-    "chars": 3461,
+    "chars": 3457,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -364,7 +375,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 7411,
+    "chars": 7240,
     "panels": 2,
     "errorState": false,
     "denied": false,
@@ -375,7 +386,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 13194,
+    "chars": 13108,
     "panels": 3,
     "errorState": false,
     "denied": false,
@@ -452,7 +463,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 11042,
+    "chars": 10916,
     "panels": 2,
     "errorState": false,
     "denied": false,

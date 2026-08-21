@@ -380,6 +380,22 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    // Gateway-side performance (§14, §18). A System screen and not a Traffic
+    // one: it answers "can this gateway carry more", which is a capacity
+    // question about the platform, whereas DLR Performance answers "is the
+    // carrier delivering", which is a question about someone else's network.
+    path: '/performance',
+    name: 'performance',
+    component: () => import('../views/PerformanceView.vue'),
+    meta: {
+      title: 'Performance',
+      description:
+        'Gateway throughput against the sum of declared carrier ceilings, at the poller’s measured sampling interval, with the latencies this engine cannot report named rather than left blank.',
+      breadcrumb: ['System', 'Performance'],
+      permission: 'smsc.view',
+    },
+  },
+  {
     // Safe control (§9, §16). Failover is a Routing screen and not an SMSC one:
     // the thing being moved is a route's traffic, and the override lives on the
     // route rather than on either connection.
