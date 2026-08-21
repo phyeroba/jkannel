@@ -143,6 +143,31 @@ function text(value: unknown, fallback = '—') {
   return value === null || value === undefined || value === '' ? fallback : String(value);
 }
 
+/**
+ * An audit row's before/after value, as one readable cell.
+ *
+ * `old_value` is JSONB and is null for two entirely different reasons: the
+ * action created something and there WAS no previous state, or it changed
+ * something and nobody captured the before. The first is normal and the second
+ * is a gap in the trail, so they must not both print an em dash — "none (this
+ * created the record)" says which one happened.
+ *
+ * The value is summarised rather than dumped: a whole SMSC definition in a grid
+ * cell pushes every other column off the screen, and the detail drawer already
+ * carries the full object for anyone who needs it.
+ */
+function summariseState(value: unknown): string {
+  if (value === null || value === undefined) return 'none — nothing preceded this';
+  if (typeof value !== 'object') return String(value);
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return 'recorded as empty';
+  const rendered = entries
+    .slice(0, 3)
+    .map(([key, item]) => `${key}=${item === null ? 'null' : String(item)}`)
+    .join(', ');
+  return entries.length > 3 ? `${rendered}, +${entries.length - 3} more` : rendered;
+}
+
 function num(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -832,6 +857,17 @@ const definitions: Record<string, Workspace> = {
         header: 'Entity',
         value: (raw) =>
           `${text(raw.entity_type ?? raw.entityType)} ${text(raw.entity_id ?? raw.entityId, '')}`.trim(),
+        mono: true,
+      },
+      /*
+       * §12 asks an audit row to answer "what did it look like before". A
+       * creation genuinely has no previous state, and that is a different
+       * fact from a change whose before-value nobody captured — so the two
+       * read differently rather than both collapsing to an em dash.
+       */
+      {
+        header: 'Previous state',
+        value: (raw) => summariseState(raw.old_value ?? raw.oldValue),
         mono: true,
       },
       { header: 'Reason', value: (raw) => text(raw.reason) },

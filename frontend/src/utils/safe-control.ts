@@ -227,19 +227,65 @@ export interface SmscOption {
   engineId: string;
   name: string;
   label: string;
+  /**
+   * Operational fields, present when the caller read them from `GET /smscs`
+   * (which returns them all) and absent when it did not.
+   *
+   * Optional rather than required because several screens use this map purely
+   * to turn a uuid into a name and have no business asserting anything about
+   * a bind's health. `null` means the register carried the field and it was
+   * unmeasured; `undefined` means this caller never asked.
+   */
+  priority?: number | null;
+  bindState?: string | null;
+  /** Per-connection ceiling. Kannel enforces `throughput` per bind. */
+  tps?: number | null;
+  connections?: number;
+  outboundRate?: number | null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export function smscOptionsFrom(
-  rows: readonly { id?: unknown; engine_id?: unknown; name?: unknown }[],
+  rows: readonly Record<string, unknown>[],
 ): SmscOption[] {
   return rows
     .map((row) => {
       const id = typeof row.id === 'string' ? row.id : '';
       const engineId = typeof row.engine_id === 'string' ? row.engine_id : '';
       const name = typeof row.name === 'string' && row.name ? row.name : engineId;
-      return { id, engineId, name, label: engineId ? `${name} (${engineId})` : name };
+      return {
+        id,
+        engineId,
+        name,
+        label: engineId ? `${name} (${engineId})` : name,
+        priority: numberOrNull(row.priority),
+        bindState: typeof row.bind_state === 'string' ? row.bind_state : null,
+        tps: numberOrNull(row.tps),
+        connections: Math.max(1, numberOrNull(row.connection_count) ?? 1),
+        outboundRate: numberOrNull(row.outbound_rate),
+      };
     })
     .filter((option) => option.id);
+}
+
+/**
+ * Spare capacity on a connection, in messages per second.
+ *
+ * Null when either side is unknown, and that is two different unknowns held
+ * apart deliberately: no declared ceiling means Kannel imposes no limit we know
+ * of, and no observed rate means the poller has not seen this bind. Returning 0
+ * for either would read as "this connection is full", which is the reading that
+ * would divert traffic away from a perfectly healthy bind.
+ */
+export function smscHeadroom(option: SmscOption): number | null {
+  if (option.tps === null || option.tps === undefined) return null;
+  if (option.outboundRate === null || option.outboundRate === undefined) return null;
+  return Math.max(0, option.tps * (option.connections ?? 1) - option.outboundRate);
 }
 
 /** The label for an SMSC uuid, or the uuid itself when it is not in the map. */

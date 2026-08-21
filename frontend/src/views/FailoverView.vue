@@ -163,6 +163,33 @@ const notice = ref('');
 /** Which reads failed, so `partial` names something instead of implying all. */
 const missing = ref<string[]>([]);
 
+/**
+ * How many other connections could carry this route right now.
+ *
+ * Counted from observed bind state rather than from configuration. The question
+ * this column answers is asked mid-incident — "the target is failing, is there
+ * anywhere to move it" — and a configured connection that is not bound is not
+ * an answer. A route whose only alternative is down must not read the same as
+ * one with three healthy spares.
+ *
+ * "unknown" is a distinct third answer: if the poller has never observed the
+ * estate, we cannot say there is nowhere to go, only that we do not know. That
+ * is the reading that stops someone concluding they are trapped.
+ */
+function alternativesFor(route: RouteRow): { word: string; tone: string } {
+  const current = activePathOf(route, failovers.value).targetId;
+  const others = smscs.value.filter((option) => option.id !== current);
+  if (!others.length) return { word: 'none configured', tone: 'muted' };
+  const observed = others.filter((option) => option.bindState);
+  if (!observed.length) return { word: 'unknown', tone: 'muted' };
+  const healthy = observed.filter((option) => bindTone(option.bindState) === 'good');
+  if (!healthy.length) return { word: 'none healthy', tone: 'bad' };
+  return {
+    word: `${healthy.length} of ${others.length}`,
+    tone: healthy.length > 1 ? 'good' : 'warn',
+  };
+}
+
 // --- Start a failover ----------------------------------------------------------
 const selectedRouteId = ref('');
 const targetId = ref('');
@@ -570,6 +597,7 @@ onMounted(() => {
                 <th scope="col">Mode</th>
                 <th scope="col">Configured target</th>
                 <th scope="col">Configured fallback</th>
+                <th scope="col">Alternatives available</th>
                 <th scope="col">Enabled</th>
               </tr>
             </thead>
@@ -610,6 +638,18 @@ onMounted(() => {
                 </td>
                 <td class="mono">{{ activePathOf(route, failovers).configuredName }}</td>
                 <td class="mono">{{ route.fallback_smsc_name ?? 'none configured' }}</td>
+                <!--
+                  Where this route's traffic could go instead. Counted from the
+                  bind state the poller last observed, not from configuration —
+                  the question an operator has mid-incident is "is there
+                  anywhere to move it", and a configured-but-down connection is
+                  not an answer to that.
+                -->
+                <td :data-testid="`route-alternatives-${route.id}`">
+                  <span class="status-badge" :class="alternativesFor(route).tone">{{
+                    alternativesFor(route).word
+                  }}</span>
+                </td>
                 <td>
                   <span class="status-badge" :class="route.enabled ? 'good' : 'muted'">{{
                     route.enabled ? 'enabled' : 'disabled'
