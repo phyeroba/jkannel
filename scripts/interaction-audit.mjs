@@ -251,9 +251,16 @@ if (explained.length) {
 }
 // The reverse case is worth saying too: an allowlisted screen that started
 // opening something means the entry is stale and should come out.
-const stale = Object.keys(NO_RECORD_TO_OPEN).filter(
-  (route) => !inert.some((r) => r.route === route) && rows.some((r) => r.route === route),
-);
+//
+// "No rows" is NOT that evidence. An empty register was never clicked, so it
+// can neither confirm the entry nor contradict it — and on a deployment whose
+// data differs from the developer's, treating silence as a contradiction
+// reported /api-gateway and /backup as stale purely because they were empty
+// there.
+const stale = Object.keys(NO_RECORD_TO_OPEN).filter((route) => {
+  const measured = rows.find((r) => r.route === route);
+  return measured && !measured.row.startsWith('no rows') && !measured.row.startsWith('nothing');
+});
 if (stale.length)
   console.log(`\nSTALE allowlist entries — these DO open something now: ${stale.join(', ')}`);
 if (unexplained.length)

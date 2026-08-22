@@ -920,11 +920,20 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!-- The row opens the rule. A content rule's record IS its
+                 definition — pattern, scope, action — so "open" and "edit"
+                 are the same dialog, and the Edit button stays as the named,
+                 discoverable control. Only where the operator may change it:
+                 a row that opens a form they cannot submit is a dead end. -->
             <tr
               v-for="(rule, index) in rules"
               :key="text(rule.id)"
               :data-testid="`content-rule-${text(rule.id)}`"
-              :class="{ 'row-quarantined': isQuarantined(rule) }"
+              :class="{ 'row-quarantined': isQuarantined(rule), selectable: canManage }"
+              :tabindex="canManage ? 0 : undefined"
+              @click="canManage && openForm(rule)"
+              @keydown.enter="canManage && openForm(rule)"
+              @keydown.space.prevent="canManage && openForm(rule)"
             >
               <td class="mono">{{ inEvaluationOrder ? offset + index + 1 : '·' }}</td>
               <td>
@@ -972,7 +981,7 @@ onMounted(() => {
                   <button
                     class="secondary-button"
                     :data-testid="`content-rule-edit-${text(rule.id)}`"
-                    @click="openForm(rule)"
+                    @click.stop="openForm(rule)"
                   >
                     Edit
                   </button>
@@ -981,7 +990,7 @@ onMounted(() => {
                     class="secondary-button"
                     :data-testid="`content-rule-release-${text(rule.id)}`"
                     :disabled="busy"
-                    @click="releaseQuarantine(rule)"
+                    @click.stop="releaseQuarantine(rule)"
                   >
                     Re-enable
                   </button>
@@ -989,7 +998,7 @@ onMounted(() => {
                     class="secondary-button danger-button"
                     :data-testid="`content-rule-delete-${text(rule.id)}`"
                     :disabled="busy"
-                    @click="removeRule(rule)"
+                    @click.stop="removeRule(rule)"
                   >
                     Delete
                   </button>

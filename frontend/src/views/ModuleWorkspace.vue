@@ -1573,7 +1573,8 @@ const detailModule = computed(
     key.value === 'logs-audit' ||
     key.value === 'customers' ||
     key.value === 'plugins' ||
-    key.value === 'notifications',
+    key.value === 'notifications' ||
+    key.value === 'routing',
 );
 const settingGroups = computed(() => {
   const groups: Record<string, RecordValue[]> = {};
@@ -2170,7 +2171,9 @@ async function openDetail(row: Row) {
               ? `/plugins/${row.id}`
               : key.value === 'notifications'
                 ? `/notifications/${row.id}`
-                : `/audit-events/${row.id}`;
+                : key.value === 'routing'
+                  ? `/routes/${row.id}`
+                  : `/audit-events/${row.id}`;
     const record = await apiRequest<RecordValue>(endpoint);
     detail.value = record;
     // Reading a notification WRITES: `GET /notifications/:id` sets read_at.
@@ -2247,6 +2250,11 @@ const DETAIL_HEADINGS: Record<string, { eyebrow: string; title: string; subtitle
     title: 'Notification',
     subtitle: 'The full notice and the payload behind it',
   },
+  routing: {
+    eyebrow: 'Route',
+    title: 'Route detail',
+    subtitle: 'Match, targets and the deployed version',
+  },
 };
 const detailHeading = computed(
   () =>
@@ -2294,7 +2302,8 @@ const clickableRow = computed(
     detailModule.value ||
     key.value === 'messages' ||
     key.value === 'reports' ||
-    key.value === 'alerts',
+    key.value === 'alerts' ||
+    key.value === 'configuration',
 );
 const messageTraceEvents = computed<RecordValue[]>(() => {
   const events = messageTrace.value?.events;
@@ -2309,6 +2318,11 @@ function onRowClick(row: Row) {
   if (key.value === 'messages') void openMessageTrace(row);
   else if (key.value === 'reports') void openSnapshot(row);
   else if (key.value === 'alerts') void router.push(`/alert-lifecycle?alert=${row.id}`);
+  // A configuration version is immutable, so opening one loads it into the
+  // composer as the starting point for the next version — which is what the
+  // row's own Edit button does. `editConfiguration` reads
+  // `GET /configurations/:id`, so this is the record, not a copy of the row.
+  else if (key.value === 'configuration') void editConfiguration(row);
   else if (detailModule.value) void openDetail(row);
 }
 
@@ -5482,6 +5496,48 @@ onUnmounted(() => {
             </div>
           </template>
 
+          <template v-else-if="key === 'routing'">
+            <dl class="detail-grid">
+              <dt>Name</dt>
+              <dd data-testid="route-detail-name">{{ text(detail.name) }}</dd>
+              <dt>Priority</dt>
+              <dd class="mono">{{ text(detail.priority) }}</dd>
+              <dt>Enabled</dt>
+              <dd>{{ text(detail.enabled) }}</dd>
+              <dt>Destination prefix</dt>
+              <dd class="mono">
+                {{ text(detail.destination_prefix ?? detail.destinationPrefix) }}
+              </dd>
+              <dt>Sender</dt>
+              <dd class="mono">{{ text(detail.sender) }}</dd>
+              <dt>Target SMSC</dt>
+              <dd class="mono" data-testid="route-detail-target">
+                {{ text(detail.target_smsc_id ?? detail.targetSmscId ?? detail.smsc_id) }}
+              </dd>
+              <dt>Fallback SMSC</dt>
+              <dd class="mono">
+                {{ text(detail.fallback_smsc_id ?? detail.fallbackSmscId) }}
+              </dd>
+              <dt>Updated</dt>
+              <dd>{{ text(detail.updated_at ?? detail.updatedAt) }}</dd>
+            </dl>
+            <!--
+              The whole stored definition, raw. A route carries optional shapes
+              this build's grid does not name — weighted target lists, time
+              windows, cost fields — and a fixed field list here would silently
+              drop whichever of them a given route happens to use, which on a
+              routing table is the difference between reading the rule and
+              guessing at it.
+            -->
+            <h3>Stored definition</h3>
+            <pre class="json-block" data-testid="route-detail-json">{{ prettyJson(detail) }}</pre>
+            <p class="source-note">
+              From <span class="mono">GET /routes/{{ text(detail.id, '') }}</span
+              >, which nothing in the console was calling. Validate, deploy and rollback stay on the
+              row: they act on the route without needing it open.
+            </p>
+          </template>
+
           <template v-else-if="key === 'plugins'">
             <dl class="detail-grid">
               <dt>Plugin</dt>
@@ -6381,7 +6437,7 @@ onUnmounted(() => {
                   Resume
                 </button>
               </td>
-              <td v-else-if="key === 'routing'" class="row-actions">
+              <td v-else-if="key === 'routing'" class="row-actions" @click.stop>
                 <button class="secondary-button" @click="rowAction(row, 'validate')">
                   Validate
                 </button>
@@ -6390,7 +6446,7 @@ onUnmounted(() => {
                   Rollback
                 </button>
               </td>
-              <td v-else-if="key === 'configuration'" class="row-actions">
+              <td v-else-if="key === 'configuration'" class="row-actions" @click.stop>
                 <button
                   class="secondary-button"
                   :data-testid="`config-edit-${row.id}`"
@@ -6407,7 +6463,7 @@ onUnmounted(() => {
                   Rollback
                 </button>
               </td>
-              <td v-else-if="key === 'notifications'" class="row-actions">
+              <td v-else-if="key === 'notifications'" class="row-actions" @click.stop>
                 <button
                   v-if="!row.raw.read_at"
                   class="secondary-button"
@@ -6451,7 +6507,7 @@ onUnmounted(() => {
                   Lifecycle
                 </RouterLink>
               </td>
-              <td v-else-if="key === 'plugins'" class="row-actions">
+              <td v-else-if="key === 'plugins'" class="row-actions" @click.stop>
                 <template v-if="canManageSystem">
                   <button
                     class="secondary-button"
