@@ -66,6 +66,10 @@ node scripts/route-smoke.mjs         # all 50 routes: crashes, HTTP errors, empt
 node scripts/column-feasibility.mjs  # which missing columns have data behind them
 node scripts/kit-shots.mjs           # renders the KIT and ours, side by side
 node scripts/design-diff.mjs         # CSS conformance
+node scripts/menu-audit.mjs          # does every sidebar item reach a working endpoint
+node scripts/link-check.mjs          # does every in-page link resolve to a declared route
+node scripts/spacing-audit.mjs       # measured gap between every adjacent panel pair
+node scripts/interaction-audit.mjs   # what a click actually OPENS
 ```
 
 > Playwright scripts must be **copied into `e2e/`** to resolve `@playwright/test`:
@@ -74,8 +78,8 @@ node scripts/design-diff.mjs         # CSS conformance
 
 ### These tools lie in one direction, and it is always the same direction
 
-**Six false positives were found and fixed in them this session.** Every one
-reported work as already done:
+**Eleven false readings were found and fixed in them.** Every one reported work
+as already done, or as impossible:
 
 1. Exact string matching missed `/alerts/${id}/${transition}` — one call serving
    six operations, reported as six gaps.
@@ -87,8 +91,28 @@ reported work as already done:
 5. `screen-diff`'s Tabs detector matched the **word** "Tabs" in a prose comment.
 6. **`/{}` in the API Reference matched every one-segment endpoint**, hiding the
    entire `/jobs` resource.
+7. `menu-audit`'s refusal regex included `/requires the/`, which matched the
+   privacy notice on every masking screen.
+8. `filter({ hasText: /^new/ })` matches an **untrimmed** string, so it never
+   matched a button whose label sits on its own line — which is most of them.
+   Three screens were reported as having no Add control while having one.
+9. Only the FIRST table on a screen was measured. `/carriers` leads with the
+   unassigned-connection worklist, so the carrier register was judged by rows
+   that correctly do nothing.
+10. A master/detail screen read as inert twice over: its first row is
+    preselected, and picking a different component makes the page SHORTER, so
+    a growth-only test saw nothing happen.
+11. The allowlist staleness check treated "opens nothing" and "has no rows" as
+    the same answer, so an empty register on production announced its entry as
+    stale. Silence is not evidence, in either direction.
 
 If a tool says something is done, be suspicious in that direction specifically.
+
+**And run them against PRODUCTION, not only the local stack.** Three registers
+whose rows opened nothing were invisible locally because those tables are empty
+here — an empty register is never clicked, so it reports "no rows" and passes.
+The developer's database is not the test corpus. Every audit takes `BASE`, `U`
+and `P` from the environment; the console is `https://gw1.speedamobile.com`.
 
 ---
 
@@ -115,11 +139,37 @@ If a tool says something is done, be suspicious in that direction specifically.
 | `EventTimeline.vue` | the design's Timeline. `missing` = hollow dashed dot for a step that never arrived. `dense` prop. |
 | `TabStrip.vue` | the design's Tabs, with the roving tabindex the ARIA role promises. Renders the strip only; the parent owns the panels. |
 | `DetailDrawer.vue` | right-hand sheet, focus trap, Escape closes, focus returns. `wide` prop. |
+| `ModalDialog.vue` | centred dialog on a scrim. Same focus contract as the drawer. `wide` prop; `.dialog-grid` inside for a two-column field layout, `.dialog-span` on a field that needs the full width. |
 | `ConfirmAction.vue` | impact before the verb. Fetches from `/control/smscs/:id/impact/:op`, or takes a caller-supplied impact read from an API response. |
 | `CodeConsole.vue` | macOS terminal window. |
 | `ScopePicker.vue` | gateway API-key scopes with descriptions. |
 | `MiniChart.vue` | line/area/bar; `series`, `labels`, `title`, `height`, `grid`. |
 | `ObservabilityLimits.vue` | what one SMSC connection cannot report. Speaks about a connection — do not reuse it for gateway-wide statements. |
+
+### What a click opens — the rule, not a preference
+
+The design system has exactly three answers, and it has no fourth:
+
+| The operator clicks | What opens | Why |
+|---|---|---|
+| Add / New / Create | `ModalDialog` | there is no list position to preserve — they are filling something in, and a centred card is where the eye already is |
+| a row in a register | `DetailDrawer`, or that record's own page | the list stays visible behind the scrim, so an operator working down forty binds keeps their place |
+| a controlled action | `ConfirmAction` | impact before the verb (UC-SMSC-01) |
+
+**Never a div that unfolds under the table.** It pushes the rest of the list
+down, loses the operator's place, and on a long register puts the panel below
+the fold — which is how "Add SMSC" came to look like a button that did nothing.
+`interaction-audit.mjs` clicks every one of these and fails on `INLINE`.
+
+A register row is `tr.selectable` with `tabindex="0"` and Enter/Space handlers —
+the kit's click-through is mouse-only and the port must not be. Every control
+inside such a row needs `@click.stop`, or Edit also opens the record.
+`clickable-row` is the retired name for the same idea; it carried a hover and no
+focus ring. Do not use it in new markup.
+
+A row that opens nothing is only acceptable when the API has no per-record GET.
+Say so in `NO_RECORD_TO_OPEN` in the audit, with the reason — a decision that
+has been made must stop reading as a defect nobody has looked at.
 
 ---
 
@@ -151,8 +201,29 @@ If a tool says something is done, be suspicious in that direction specifically.
 - **PowerShell eats double quotes in ssh commands.** Write a `.sh`, normalise to
   LF, `scp`, then `ssh "bash /tmp/x.sh"`. Never pipe a script over ssh: the
   pipeline re-adds CRLF and remote bash fails on the last line.
-- **Teleported components escape the test wrapper.** `DetailDrawer` renders into
-  `<body>`. Clear `document.body.innerHTML` between mounts.
+- **Teleported components escape the test wrapper.** `DetailDrawer` and
+  `ModalDialog` render into `<body>`, so `wrapper.get()` cannot see them. Use
+  `tests/overlay.ts` — it looks in the component first and the body second, so
+  a test asserts on what is on screen rather than on where in the tree it
+  happens to live. `setup.ts` clears `document.body.innerHTML` between mounts.
+- **A malformed template binding makes a spec file report ZERO tests, not a
+  failure.** `:title=`…`` with backticks as the attribute delimiter is invalid;
+  two spec files stopped collecting and the suite went green with 23 tests
+  missing. Diff per-file counts against a known baseline — a suite that reports
+  no failures because it ran nothing is the worst possible green:
+  `npx vitest run --reporter=json --outputFile=…` then compare
+  `testResults[].assertionResults.length` per file.
+- **`offsetParent` is a layout property.** A focus trap that filters on it holds
+  nothing in any environment that does not do layout. Both overlays fall back to
+  the unfiltered list: the filter failing must not become the trap failing.
+- **A `watch` without `immediate` never fires for a component mounted in the
+  target state.** Both overlays registered Escape and the focus trap that way,
+  so one mounted already-open had neither while looking perfectly correct.
+- **Initial focus must enter the overlay's BODY.** `focusables()[0]` is the
+  header's Close button, so Enter — the most natural key on a form that just
+  opened — threw the form away.
+- **The vitest run can OOM on this machine with the default worker count.**
+  `--pool=forks --poolOptions.forks.maxForks=4` completes reliably.
 - **Nav counts are asserted in two specs.** Adding a sidebar entry breaks
   `navigation.spec.ts` and `app-shell.spec.ts` on purpose — a route should not
   appear without somebody deciding it should.
