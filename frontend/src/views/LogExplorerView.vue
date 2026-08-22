@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 
 type LoadState = 'loading' | 'ok' | 'error';
@@ -604,20 +605,17 @@ onMounted(() => {
       </template>
     </section>
 
-    <!-- Single entry ------------------------------------------------------------ -->
-    <section
-      v-if="selected"
-      class="panel detail-panel"
-      data-testid="log-entry-panel"
-      aria-label="Log entry"
+    <!-- Single entry ------------------------------------------------------------
+         A sheet. Reading one line means comparing it with the lines around it,
+         which a panel below the buffer scrolls out of view. -->
+    <DetailDrawer
+      :open="Boolean(selected)"
+      title="Log entry"
+      eyebrow="Log"
+      wide
+      @close="selected = null"
     >
-      <header>
-        <h2>Log entry</h2>
-        <button class="secondary-button" data-testid="log-entry-close" @click="selected = null">
-          Close
-        </button>
-      </header>
-      <dl class="detail-grid">
+      <dl v-if="selected" class="detail-grid" data-testid="log-entry-panel">
         <dt>Timestamp</dt>
         <dd class="mono">{{ text(selected.timestamp) }}</dd>
         <dt>Level</dt>
@@ -651,11 +649,11 @@ onMounted(() => {
         <dt>Client IP</dt>
         <dd class="mono">{{ text(selected.clientIp) }}</dd>
       </dl>
-      <template v-if="selected.trace">
+      <template v-if="selected?.trace">
         <h3>Trace</h3>
         <pre class="json-block" data-testid="log-entry-trace">{{ selected.trace }}</pre>
       </template>
-    </section>
+    </DetailDrawer>
   </div>
 </template>
 

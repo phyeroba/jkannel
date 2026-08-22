@@ -125,7 +125,6 @@ onUnmounted(() => window.clearInterval(timer));
     the shell and opens with its first panel.
   -->
   <div data-testid="nodes-view">
-
     <DataState
       :state="state"
       :detail="error || undefined"
@@ -148,7 +147,9 @@ onUnmounted(() => window.clearInterval(timer));
       <section class="panel" aria-labelledby="node-heading">
         <div class="panel-head">
           <h2 id="node-heading">{{ node.name }}</h2>
-          <span class="row-id mono">{{ node.role }} · observed {{ formatMoment(node.observedAt) }}</span>
+          <span class="row-id mono"
+            >{{ node.role }} · observed {{ formatMoment(node.observedAt) }}</span
+          >
         </div>
 
         <p class="pressure" data-testid="node-pressure">{{ node.pressure }}</p>
@@ -180,7 +181,11 @@ onUnmounted(() => window.clearInterval(timer));
             </span>
             <small class="mono">
               {{ formatBytes(node.memory.usedBytes) }} of
-              {{ node.memory.limitBytes === null ? 'no configured limit' : formatBytes(node.memory.limitBytes) }}
+              {{
+                node.memory.limitBytes === null
+                  ? 'no configured limit'
+                  : formatBytes(node.memory.limitBytes)
+              }}
             </small>
           </div>
 

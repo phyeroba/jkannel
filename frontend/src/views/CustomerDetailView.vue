@@ -236,7 +236,9 @@ const draftSenderId = ref('');
 async function loadSenderIds() {
   senderState.value = 'loading';
   try {
-    senderIds.value = asItems(await apiRequest(`/customer-accounts/${customerId.value}/sender-ids`));
+    senderIds.value = asItems(
+      await apiRequest(`/customer-accounts/${customerId.value}/sender-ids`),
+    );
     senderError.value = '';
     senderState.value = senderIds.value.length ? 'live' : 'empty';
   } catch (cause) {
@@ -391,7 +393,13 @@ async function unbindRoute(binding: RecordValue) {
 async function reload() {
   await loadCustomer();
   if (notFound.value) return;
-  await Promise.all([loadQuota(), loadCredit(), loadSenderIds(), loadBindings(), loadRouteOptions()]);
+  await Promise.all([
+    loadQuota(),
+    loadCredit(),
+    loadSenderIds(),
+    loadBindings(),
+    loadRouteOptions(),
+  ]);
 }
 
 onMounted(reload);
@@ -600,7 +608,9 @@ watch(customerId, reload);
                   :key="text(entry.id)"
                   :data-testid="`credit-txn-${text(entry.id)}`"
                 >
-                  <td class="mono">{{ formatMoment(text(entry.created_at ?? entry.createdAt, '')) }}</td>
+                  <td class="mono">
+                    {{ formatMoment(text(entry.created_at ?? entry.createdAt, '')) }}
+                  </td>
                   <td>
                     <span
                       class="status-badge"
@@ -659,8 +669,8 @@ watch(customerId, reload);
           </button>
         </div>
         <p v-if="canManage" class="source-note">
-          An adjustment is a ledger entry, not an edit — the balance is the sum of what is above,
-          so a mistake is corrected by posting its opposite rather than by changing history.
+          An adjustment is a ledger entry, not an edit — the balance is the sum of what is above, so
+          a mistake is corrected by posting its opposite rather than by changing history.
         </p>
       </section>
 
@@ -858,11 +868,16 @@ watch(customerId, reload);
                 >
                   <td>
                     {{ text(binding.route_name ?? binding.routeName ?? binding.route_id) }}
-                    <small class="row-id mono">{{ text(binding.route_id ?? binding.routeId) }}</small>
+                    <small class="row-id mono">{{
+                      text(binding.route_id ?? binding.routeId)
+                    }}</small>
                   </td>
                   <td class="mono">{{ displayValue(scalar(binding.priority), bindingState) }}</td>
                   <td>
-                    <span class="status-badge" :class="binding.enabled === false ? 'muted' : 'good'">
+                    <span
+                      class="status-badge"
+                      :class="binding.enabled === false ? 'muted' : 'good'"
+                    >
                       {{ binding.enabled === false ? 'disabled' : 'enabled' }}
                     </span>
                   </td>
@@ -897,7 +912,11 @@ watch(customerId, reload);
             <span>Route</span>
             <select v-model="draftRouteId" data-testid="binding-route">
               <option value="">choose a route</option>
-              <option v-for="option in routeOptions" :key="text(option.id)" :value="text(option.id)">
+              <option
+                v-for="option in routeOptions"
+                :key="text(option.id)"
+                :value="text(option.id)"
+              >
                 {{ text(option.name) }}
               </option>
             </select>

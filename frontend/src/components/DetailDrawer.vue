@@ -53,9 +53,13 @@ const FOCUSABLE =
 
 function focusables(): HTMLElement[] {
   if (!sheet.value) return [];
-  return [...sheet.value.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => el.offsetParent !== null,
-  );
+  const all = [...sheet.value.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  // See the same note in `ModalDialog.vue`: `offsetParent` correctly skips a
+  // control inside a collapsed branch, but it is a layout property, so an
+  // environment that does no layout would report the whole sheet as hidden and
+  // the trap would have nothing to hold on to. Unfiltered is the safe fallback.
+  const visible = all.filter((el) => el.offsetParent !== null);
+  return visible.length ? visible : all;
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -86,7 +90,13 @@ watch(
       opener = document.activeElement as HTMLElement | null;
       document.addEventListener('keydown', onKeydown);
       await nextTick();
-      (focusables()[0] ?? sheet.value)?.focus();
+      // The body first, not the head. The head holds Close and the caller's
+      // action slot — which on an SMSC sheet is Disable and Suspend — so
+      // `focusables()[0]` would put the caret on a destructive control the
+      // moment the sheet opened. The Tab cycle still reaches them.
+      const body = sheet.value?.querySelector<HTMLElement>('.drawer-body');
+      const first = body?.querySelector<HTMLElement>(FOCUSABLE) ?? null;
+      (first ?? focusables()[0] ?? sheet.value)?.focus();
     } else {
       document.removeEventListener('keydown', onKeydown);
       // Back to the row that opened the sheet, not to the top of the document.
@@ -94,6 +104,10 @@ watch(
       opener = null;
     }
   },
+  // `immediate`, because a sheet can be mounted ALREADY open — a deep link
+  // that names a record opens one on first render. Without this the watcher
+  // never fires for that render and the sheet has no Escape and no focus.
+  { immediate: true },
 );
 
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));

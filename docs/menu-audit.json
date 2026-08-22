@@ -2,7 +2,7 @@
   {
     "label": "Operations",
     "to": "/dashboard/operations",
-    "chars": 1728,
+    "chars": 1871,
     "panels": 5,
     "controls": 14,
     "denied": false,
@@ -26,9 +26,9 @@
   {
     "label": "Alert Lifecycle",
     "to": "/alert-lifecycle",
-    "chars": 1610,
+    "chars": 1864,
     "panels": 2,
-    "controls": 11,
+    "controls": 12,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -62,7 +62,7 @@
   {
     "label": "Live Traffic",
     "to": "/live-traffic",
-    "chars": 2482,
+    "chars": 2476,
     "panels": 4,
     "controls": 9,
     "denied": false,
@@ -158,9 +158,9 @@
   {
     "label": "Recipient Policy",
     "to": "/recipient-policy",
-    "chars": 1250,
+    "chars": 1096,
     "panels": 3,
-    "controls": 11,
+    "controls": 6,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -290,7 +290,7 @@
   {
     "label": "SMPP Errors",
     "to": "/smpp-errors",
-    "chars": 5401,
+    "chars": 5395,
     "panels": 5,
     "controls": 7,
     "denied": false,
@@ -314,7 +314,7 @@
   {
     "label": "Analytics & Reports",
     "to": "/reports",
-    "chars": 5334,
+    "chars": 5359,
     "panels": 12,
     "controls": 23,
     "denied": false,
@@ -374,7 +374,7 @@
   {
     "label": "Services",
     "to": "/services",
-    "chars": 3386,
+    "chars": 3389,
     "panels": 6,
     "controls": 4,
     "denied": false,
@@ -398,7 +398,7 @@
   {
     "label": "Performance",
     "to": "/performance",
-    "chars": 2135,
+    "chars": 2128,
     "panels": 3,
     "controls": 6,
     "denied": false,
@@ -422,7 +422,7 @@
   {
     "label": "Logs & Audit",
     "to": "/logs-audit",
-    "chars": 8927,
+    "chars": 9507,
     "panels": 2,
     "controls": 13,
     "denied": false,
@@ -434,9 +434,9 @@
   {
     "label": "Data Integrity",
     "to": "/data-integrity",
-    "chars": 1788,
+    "chars": 1768,
     "panels": 3,
-    "controls": 12,
+    "controls": 10,
     "denied": false,
     "calls": 6,
     "answered": 6,
@@ -446,7 +446,7 @@
   {
     "label": "Background Jobs",
     "to": "/jobs",
-    "chars": 792,
+    "chars": 790,
     "panels": 2,
     "controls": 6,
     "denied": false,
@@ -458,7 +458,7 @@
   {
     "label": "Log Explorer",
     "to": "/log-explorer",
-    "chars": 15588,
+    "chars": 15555,
     "panels": 3,
     "controls": 119,
     "denied": false,
@@ -542,7 +542,7 @@
   {
     "label": "Sessions",
     "to": "/sessions",
-    "chars": 8862,
+    "chars": 9863,
     "panels": 2,
     "controls": 61,
     "denied": false,

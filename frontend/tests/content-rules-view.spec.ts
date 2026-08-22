@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -159,7 +160,7 @@ function stubApi(overrides: Record<string, unknown> = {}) {
 const mountView = async (fetchMock = stubApi()) => {
   const wrapper = mount(ContentRulesView);
   await vi.waitFor(() =>
-    expect(wrapper.find('[data-testid="content-rule-rule-block"]').exists()).toBe(true),
+    expect(overlayHas(wrapper, '[data-testid="content-rule-rule-block"]')).toBe(true),
   );
   return { wrapper, fetchMock };
 };
@@ -186,22 +187,24 @@ describe('content filtering view', () => {
     expect(url).toContain('limit=50');
     expect(url).toContain('offset=0');
     // Position numbers are only shown when the listing really is in order.
-    expect(wrapper.get('[data-testid="content-rule-rule-block"]').text()).toContain('1');
-    expect(wrapper.find('[data-testid="content-order-warning"]').exists()).toBe(false);
+    expect(overlay(wrapper, '[data-testid="content-rule-rule-block"]').text()).toContain('1');
+    expect(overlayHas(wrapper, '[data-testid="content-order-warning"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('hides the position numbers and warns when sorted out of evaluation order', async () => {
     const fetchMock = stubApi();
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="content-rule-sort"]').setValue('matchCount');
+    await overlay(wrapper, '[data-testid="content-rule-sort"]').setValue('matchCount');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-order-warning"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="content-order-warning"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="content-order-warning"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-order-warning"]').text()).toContain(
       'sorted by matchCount, which is not evaluation order',
     );
-    expect(wrapper.get('[data-testid="content-rule-rule-block"]').text()).not.toMatch(/^\s*1\b/);
+    expect(overlay(wrapper, '[data-testid="content-rule-rule-block"]').text()).not.toMatch(
+      /^\s*1\b/,
+    );
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('sort=matchCount'))).toBe(
       true,
     );
@@ -211,39 +214,39 @@ describe('content filtering view', () => {
   it('sends only whitelisted filter keys as server-side grid parameters', async () => {
     const fetchMock = stubApi();
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="content-filter-action"]').setValue('block');
+    await overlay(wrapper, '[data-testid="content-filter-action"]').setValue('block');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.action=block')),
       ).toBe(true),
     );
-    await wrapper.get('[data-testid="content-filter-match-type"]').setValue('regex');
+    await overlay(wrapper, '[data-testid="content-filter-match-type"]').setValue('regex');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.matchType=regex')),
       ).toBe(true),
     );
     // No control exists for anything the API does not whitelist.
-    expect(wrapper.find('[data-testid="content-filter-pattern"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="content-filter-case"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-filter-pattern"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-filter-case"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('renders a quarantined rule distinctly and says a message may have slipped past it', async () => {
     const { wrapper } = await mountView();
-    const banner = wrapper.get('[data-testid="content-quarantine-banner"]').text();
+    const banner = overlay(wrapper, '[data-testid="content-quarantine-banner"]').text();
     expect(banner).toContain('QUARANTINED');
     expect(banner).toContain('at least one message was evaluated as though the rule did not match');
     expect(banner).toContain('not filtering anything now');
 
-    const row = wrapper.get('[data-testid="content-rule-rule-regex"]');
+    const row = overlay(wrapper, '[data-testid="content-rule-rule-regex"]');
     expect(row.find('[data-testid="content-rule-quarantined-rule-regex"]').exists()).toBe(true);
     expect(row.classes()).toContain('row-quarantined');
     expect(row.get('[data-testid="content-rule-quarantine-reason-rule-regex"]').text()).toContain(
       'exceeded the send-path budget',
     );
     // The healthy rule must NOT be dressed up as quarantined.
-    const healthy = wrapper.get('[data-testid="content-rule-rule-block"]');
+    const healthy = overlay(wrapper, '[data-testid="content-rule-rule-block"]');
     expect(healthy.classes()).not.toContain('row-quarantined');
     expect(healthy.find('[data-testid="content-rule-quarantined-rule-block"]').exists()).toBe(
       false,
@@ -255,7 +258,7 @@ describe('content filtering view', () => {
     const fetchMock = stubApi();
     const { wrapper } = await mountView(fetchMock);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await wrapper.get('[data-testid="content-rule-release-rule-regex"]').trigger('click');
+    await overlay(wrapper, '[data-testid="content-rule-release-rule-regex"]').trigger('click');
     await vi.waitFor(() => {
       const patch = fetchMock.mock.calls.find(
         (call) => (call[1] as RequestInit | undefined)?.method === 'PATCH',
@@ -267,33 +270,35 @@ describe('content filtering view', () => {
       expect(String(patch?.[0])).toContain('/messaging/content-rules/rule-regex');
     });
     // Only the quarantined row offers the control.
-    expect(wrapper.find('[data-testid="content-rule-release-rule-block"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-rule-release-rule-block"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('flags shadowed matches in the preview as rules that can never decide', async () => {
     const { wrapper } = await mountView();
-    await wrapper.get('[data-testid="content-preview-text"]').setValue('get a quick loan today');
-    await wrapper.get('[data-testid="content-preview-run"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-preview-result"]').exists()).toBe(true),
+    await overlay(wrapper, '[data-testid="content-preview-text"]').setValue(
+      'get a quick loan today',
     );
-    expect(wrapper.get('[data-testid="content-preview-outcome"]').text()).toBe('block');
-    expect(wrapper.get('[data-testid="content-preview-decided-by"]').text()).toBe(
+    await overlay(wrapper, '[data-testid="content-preview-run"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="content-preview-result"]')).toBe(true),
+    );
+    expect(overlay(wrapper, '[data-testid="content-preview-outcome"]').text()).toBe('block');
+    expect(overlay(wrapper, '[data-testid="content-preview-decided-by"]').text()).toBe(
       'Block loan spam',
     );
-    expect(wrapper.get('[data-testid="content-preview-shadowed-count"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="content-preview-shadow-warning"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-preview-shadowed-count"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="content-preview-shadow-warning"]').text()).toContain(
       'can never decide it',
     );
     // Row 0 decides; row 1 is inert and is labelled and dimmed as such.
-    expect(wrapper.get('[data-testid="content-preview-shadowed-0"]').text()).toBe(
+    expect(overlay(wrapper, '[data-testid="content-preview-shadowed-0"]').text()).toBe(
       'decides this message',
     );
-    expect(wrapper.get('[data-testid="content-preview-shadowed-1"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-preview-shadowed-1"]').text()).toContain(
       'shadowed — never decides',
     );
-    expect(wrapper.get('[data-testid="content-preview-match-1"]').classes()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-preview-match-1"]').classes()).toContain(
       'row-shadowed',
     );
     wrapper.unmount();
@@ -318,16 +323,16 @@ describe('content filtering view', () => {
         },
       }),
     );
-    await wrapper.get('[data-testid="content-preview-text"]').setValue('hello');
-    await wrapper.get('[data-testid="content-preview-run"]').trigger('click');
+    await overlay(wrapper, '[data-testid="content-preview-text"]').setValue('hello');
+    await overlay(wrapper, '[data-testid="content-preview-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-preview-result"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="content-preview-result"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="content-preview-decided-by"]').text()).toBe('no rule');
-    expect(wrapper.get('[data-testid="content-preview-default-outcome"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-preview-decided-by"]').text()).toBe('no rule');
+    expect(overlay(wrapper, '[data-testid="content-preview-default-outcome"]').text()).toContain(
       'allowed by default — not by a rule',
     );
-    expect(wrapper.get('[data-testid="content-preview-no-match"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-preview-no-match"]').text()).toContain(
       'No rule matched',
     );
     wrapper.unmount();
@@ -337,12 +342,12 @@ describe('content filtering view', () => {
     const { wrapper } = await mountView(
       stubApi({ preview: { ...previewWithShadow, quarantined: ['rule-regex'] } }),
     );
-    await wrapper.get('[data-testid="content-preview-text"]').setValue('aaaaaaaaaaaaaaaa');
-    await wrapper.get('[data-testid="content-preview-run"]').trigger('click');
+    await overlay(wrapper, '[data-testid="content-preview-text"]').setValue('aaaaaaaaaaaaaaaa');
+    await overlay(wrapper, '[data-testid="content-preview-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-preview-quarantined"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="content-preview-quarantined"]')).toBe(true),
     );
-    const text = wrapper.get('[data-testid="content-preview-quarantined"]').text();
+    const text = overlay(wrapper, '[data-testid="content-preview-quarantined"]').text();
     expect(text).toContain('have now been disabled and quarantined for real');
     expect(text).toContain('not a simulation');
     expect(text).toContain('rule-regex');
@@ -356,27 +361,29 @@ describe('content filtering view', () => {
       'is not accepted';
     const fetchMock = stubApi({ mutationError: rejection, mutationStatus: 400 });
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="content-rule-create"]').trigger('click');
-    await wrapper.get('[data-testid="content-form-name"]').setValue('Bad regex');
-    await wrapper.get('[data-testid="content-form-match-type"]').setValue('regex');
-    await wrapper.get('[data-testid="content-form-pattern"]').setValue('(a+)+b');
-    await wrapper.get('[data-testid="content-form-save"]').trigger('click');
+    await overlay(wrapper, '[data-testid="content-rule-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="content-form-name"]').setValue('Bad regex');
+    await overlay(wrapper, '[data-testid="content-form-match-type"]').setValue('regex');
+    await overlay(wrapper, '[data-testid="content-form-pattern"]').setValue('(a+)+b');
+    await overlay(wrapper, '[data-testid="content-form-save"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-form-error"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="content-form-error"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="content-form-error"]').text()).toContain('nested_quantifier');
+    expect(overlay(wrapper, '[data-testid="content-form-error"]').text()).toContain(
+      'nested_quantifier',
+    );
     wrapper.unmount();
   });
 
   it('warns about the three regex safety layers only when the match type is regex', async () => {
     const { wrapper } = await mountView();
-    await wrapper.get('[data-testid="content-rule-create"]').trigger('click');
-    expect(wrapper.find('[data-testid="content-form-regex-note"]').exists()).toBe(false);
-    await wrapper.get('[data-testid="content-form-match-type"]').setValue('regex');
+    await overlay(wrapper, '[data-testid="content-rule-create"]').trigger('click');
+    expect(overlayHas(wrapper, '[data-testid="content-form-regex-note"]')).toBe(false);
+    await overlay(wrapper, '[data-testid="content-form-match-type"]').setValue('regex');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="content-form-regex-note"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="content-form-regex-note"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="content-form-regex-note"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-form-regex-note"]').text()).toContain(
       'disabled and quarantined automatically',
     );
     wrapper.unmount();
@@ -384,7 +391,7 @@ describe('content filtering view', () => {
 
   it('names the missing trace route rather than offering a control that cannot work', async () => {
     const { wrapper } = await mountView();
-    expect(wrapper.get('[data-testid="content-trace-gap"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="content-trace-gap"]').text()).toContain(
       'no REST route returns it yet',
     );
     wrapper.unmount();
@@ -393,12 +400,14 @@ describe('content filtering view', () => {
   it('hides every mutation from an operator without messages.send', async () => {
     grant('messages.view');
     const { wrapper } = await mountView();
-    expect(wrapper.find('[data-testid="content-rule-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="content-rule-edit-rule-block"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="content-rule-release-rule-regex"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-rule-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-rule-edit-rule-block"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="content-rule-release-rule-regex"]')).toBe(false);
     // The preview stays available on the read permission, as the API allows.
-    expect(wrapper.find('[data-testid="content-preview-run"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="content-rules-readonly"]').text()).toContain('messages.send');
+    expect(overlayHas(wrapper, '[data-testid="content-preview-run"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="content-rules-readonly"]').text()).toContain(
+      'messages.send',
+    );
     wrapper.unmount();
   });
 });

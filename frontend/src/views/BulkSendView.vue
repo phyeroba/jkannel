@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { canAccess, session } from '../stores/session';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import MessagePriority from '../components/MessagePriority.vue';
 import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
@@ -823,9 +824,12 @@ onMounted(() => {
             <tr
               v-for="job in jobs"
               :key="text(job.id)"
-              class="clickable-row"
+              class="selectable"
               :data-testid="`bulk-job-${text(job.id)}`"
+              tabindex="0"
               @click="openJob(job)"
+              @keydown.enter="openJob(job)"
+              @keydown.space.prevent="openJob(job)"
             >
               <td v-for="column in jobColumns" :key="column.key" :class="{ mono: column.mono }">
                 <span
@@ -888,227 +892,217 @@ onMounted(() => {
     </section>
 
     <!-- Job drill-down ----------------------------------------------------- -->
-    <section
-      v-if="detailOpen"
-      id="bulk-detail-panel"
-      class="panel detail-panel"
-      data-testid="bulk-detail-panel"
-      aria-label="Bulk send job detail"
-    >
-      <header class="panel-header">
-        <div>
-          <h2>Job details</h2>
-        </div>
-        <button class="secondary-button" data-testid="bulk-detail-close" @click="closeJob">
-          Close
-        </button>
-      </header>
-      <p v-if="detailError" class="form-error" role="alert" data-testid="bulk-detail-error">
-        {{ detailError }}
-      </p>
-      <p v-if="detailNotice" class="notice" role="status" data-testid="bulk-detail-notice">
-        {{ detailNotice }}
-      </p>
-      <p v-if="detailLoading && !jobDetail" class="chart-empty" data-testid="bulk-detail-loading">
-        Loading…
-      </p>
-      <template v-else-if="jobDetail">
-        <dl class="detail-grid">
-          <dt>Campaign</dt>
-          <dd>{{ text(jobDetail.name) }}</dd>
-          <dt>Status</dt>
-          <dd data-testid="bulk-detail-status">
-            <span class="status-badge" :class="badgeTone(jobDetail.status)">{{
-              text(jobDetail.status)
-            }}</span>
-          </dd>
-          <dt>SMSC</dt>
-          <dd class="mono">{{ text(jobDetail.smsc_id ?? jobDetail.smscId, 'routed') }}</dd>
-          <dt>Total</dt>
-          <dd>{{ text(jobDetail.total, '0') }}</dd>
-          <dt>Priority</dt>
-          <dd data-testid="bulk-detail-priority">
-            {{ priorityCellLabel(jobDetail.priority) }}
-          </dd>
-          <dt>Scheduled for</dt>
-          <dd data-testid="bulk-detail-scheduled">
-            {{ text(jobDetail.scheduled_at ?? jobDetail.scheduledAt, 'immediate') }}
-          </dd>
-          <dt>Validity</dt>
-          <dd>
-            {{ text(jobDetail.validity_minutes ?? jobDetail.validityMinutes, 'carrier default') }}
-          </dd>
-          <dt>Detail</dt>
-          <dd>{{ text(jobDetail.detail) }}</dd>
-        </dl>
-
-        <p class="form-hint">
-          Submitted recipients leave the spool immediately. Trace them in the
-          <RouterLink to="/messages">message log</RouterLink> or
-          <RouterLink to="/delivery-reports">Delivery Reports</RouterLink> — the Live Queue spool
-          shows only messages still waiting to be handed to a bind.
+    <!-- A sheet, not a panel below the campaign list: the list is what the
+         operator is working down, and it stays visible behind the scrim. -->
+    <DetailDrawer :open="detailOpen" title="Job details" eyebrow="Bulk send" wide @close="closeJob">
+      <div id="bulk-detail-panel" data-testid="bulk-detail-panel">
+        <p v-if="detailError" class="form-error" role="alert" data-testid="bulk-detail-error">
+          {{ detailError }}
         </p>
+        <p v-if="detailNotice" class="notice" role="status" data-testid="bulk-detail-notice">
+          {{ detailNotice }}
+        </p>
+        <p v-if="detailLoading && !jobDetail" class="chart-empty" data-testid="bulk-detail-loading">
+          Loading…
+        </p>
+        <template v-else-if="jobDetail">
+          <dl class="detail-grid">
+            <dt>Campaign</dt>
+            <dd>{{ text(jobDetail.name) }}</dd>
+            <dt>Status</dt>
+            <dd data-testid="bulk-detail-status">
+              <span class="status-badge" :class="badgeTone(jobDetail.status)">{{
+                text(jobDetail.status)
+              }}</span>
+            </dd>
+            <dt>SMSC</dt>
+            <dd class="mono">{{ text(jobDetail.smsc_id ?? jobDetail.smscId, 'routed') }}</dd>
+            <dt>Total</dt>
+            <dd>{{ text(jobDetail.total, '0') }}</dd>
+            <dt>Priority</dt>
+            <dd data-testid="bulk-detail-priority">
+              {{ priorityCellLabel(jobDetail.priority) }}
+            </dd>
+            <dt>Scheduled for</dt>
+            <dd data-testid="bulk-detail-scheduled">
+              {{ text(jobDetail.scheduled_at ?? jobDetail.scheduledAt, 'immediate') }}
+            </dd>
+            <dt>Validity</dt>
+            <dd>
+              {{ text(jobDetail.validity_minutes ?? jobDetail.validityMinutes, 'carrier default') }}
+            </dd>
+            <dt>Detail</dt>
+            <dd>{{ text(jobDetail.detail) }}</dd>
+          </dl>
 
-        <h3>Status counts</h3>
-        <div class="summary-strip" data-testid="bulk-status-counts">
-          <div v-for="entry in recipientCounts" :key="entry.status" class="metric">
-            <strong>{{ entry.count }}</strong>
-            <small>{{ entry.status }}</small>
+          <p class="form-hint">
+            Submitted recipients leave the spool immediately. Trace them in the
+            <RouterLink to="/messages">message log</RouterLink> or
+            <RouterLink to="/delivery-reports">Delivery Reports</RouterLink> — the Live Queue spool
+            shows only messages still waiting to be handed to a bind.
+          </p>
+
+          <h3>Status counts</h3>
+          <div class="summary-strip" data-testid="bulk-status-counts">
+            <div v-for="entry in recipientCounts" :key="entry.status" class="metric">
+              <strong>{{ entry.count }}</strong>
+              <small>{{ entry.status }}</small>
+            </div>
+            <div v-if="!recipientCounts.length" class="metric">
+              <strong>0</strong>
+              <small>no recipients</small>
+            </div>
           </div>
-          <div v-if="!recipientCounts.length" class="metric">
-            <strong>0</strong>
-            <small>no recipients</small>
-          </div>
-        </div>
 
-        <h3>Recipients</h3>
-        <div class="grid-toolbar">
-          <label class="filter-select filter-search">
-            <span>Search</span>
-            <input
-              v-model="recipientsSearch"
-              type="search"
-              data-testid="bulk-recipients-search"
-              placeholder="Receiver, foreign ID, or error"
-              @change="applyRecipientFilters"
-              @keyup.enter="applyRecipientFilters"
-            />
-          </label>
-          <label class="filter-select">
-            <span>Status</span>
-            <select
-              v-model="recipientsStatusFilter"
-              data-testid="bulk-recipients-status"
-              @change="applyRecipientFilters"
-            >
-              <option value="">All statuses</option>
-              <option v-for="status in RECIPIENT_STATUSES" :key="status" :value="status">
-                {{ status }}
-              </option>
-            </select>
-          </label>
-          <label class="filter-select">
-            <span>Per page</span>
-            <select
-              v-model.number="recipientsLimit"
-              data-testid="bulk-recipients-limit"
-              @change="applyRecipientFilters"
-            >
-              <option v-for="size in RECIPIENT_PAGE_SIZES" :key="size" :value="size">
-                {{ size }}
-              </option>
-            </select>
-          </label>
-          <button
-            class="secondary-button"
-            data-testid="bulk-recipients-export"
-            :disabled="recipientsExporting"
-            @click="exportRecipients"
-          >
-            {{ recipientsExporting ? 'Exporting…' : 'Export CSV' }}
-          </button>
-          <small class="source-note" data-testid="bulk-recipients-csv-only"
-            >CSV only — the API has no PDF route for this export.</small
-          >
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th
-                  v-for="column in recipientColumns"
-                  :key="column.key"
-                  scope="col"
-                  :aria-sort="
-                    column.sort
-                      ? ariaSort(recipientsSortField === column.sort, recipientsSortDir)
-                      : undefined
-                  "
-                >
-                  <button
-                    v-if="column.sort"
-                    type="button"
-                    class="column-sort"
-                    :data-testid="`bulk-recipients-sort-${column.key}`"
-                    @click="sortRecipientsBy(column.sort)"
-                  >
-                    {{ column.label }}
-                    <span v-if="recipientsSortField === column.sort">{{
-                      recipientsSortDir === 'asc' ? '▲' : '▼'
-                    }}</span>
-                  </button>
-                  <span v-else class="column-static" :title="column.note">
-                    {{ column.label }}
-                    <abbr v-if="column.note" title="Not sortable" aria-hidden="true">·</abbr>
-                  </span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(recipient, index) in recipients"
-                :key="text(recipient.id, String(index))"
-                :data-testid="`bulk-recipient-${index}`"
+          <h3>Recipients</h3>
+          <div class="grid-toolbar">
+            <label class="filter-select filter-search">
+              <span>Search</span>
+              <input
+                v-model="recipientsSearch"
+                type="search"
+                data-testid="bulk-recipients-search"
+                placeholder="Receiver, foreign ID, or error"
+                @change="applyRecipientFilters"
+                @keyup.enter="applyRecipientFilters"
+              />
+            </label>
+            <label class="filter-select">
+              <span>Status</span>
+              <select
+                v-model="recipientsStatusFilter"
+                data-testid="bulk-recipients-status"
+                @change="applyRecipientFilters"
               >
-                <td
-                  v-for="column in recipientColumns"
-                  :key="column.key"
-                  :class="{ mono: column.mono }"
-                >
-                  <span
-                    v-if="column.badge"
-                    class="status-badge"
-                    :class="badgeTone(column.value(recipient))"
-                  >
-                    {{ column.value(recipient) || '—' }}
-                  </span>
-                  <template v-else>{{ column.value(recipient) || '—' }}</template>
-                </td>
-              </tr>
-              <tr v-if="!recipients.length">
-                <td :colspan="recipientColumns.length" class="empty-cell">
-                  {{
-                    recipientsFiltered
-                      ? 'No recipients match these filters.'
-                      : 'No recipients recorded for this job.'
-                  }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer class="pager">
-          <span data-testid="bulk-recipients-range">
-            Page {{ recipientsPage }} · {{ recipients.length }} row(s)
-          </span>
-          <div class="pager-buttons">
+                <option value="">All statuses</option>
+                <option v-for="status in RECIPIENT_STATUSES" :key="status" :value="status">
+                  {{ status }}
+                </option>
+              </select>
+            </label>
+            <label class="filter-select">
+              <span>Per page</span>
+              <select
+                v-model.number="recipientsLimit"
+                data-testid="bulk-recipients-limit"
+                @change="applyRecipientFilters"
+              >
+                <option v-for="size in RECIPIENT_PAGE_SIZES" :key="size" :value="size">
+                  {{ size }}
+                </option>
+              </select>
+            </label>
             <button
               class="secondary-button"
-              data-testid="bulk-recipients-prev"
-              :disabled="!recipientsCursorHistory.length || detailLoading"
-              @click="turnRecipientsPage(-1)"
+              data-testid="bulk-recipients-export"
+              :disabled="recipientsExporting"
+              @click="exportRecipients"
             >
-              Previous
+              {{ recipientsExporting ? 'Exporting…' : 'Export CSV' }}
             </button>
-            <button
-              class="secondary-button"
-              data-testid="bulk-recipients-next"
-              :disabled="!recipientsNextCursor || detailLoading"
-              @click="turnRecipientsPage(1)"
+            <small class="source-note" data-testid="bulk-recipients-csv-only"
+              >CSV only — the API has no PDF route for this export.</small
             >
-              Next
-            </button>
           </div>
-        </footer>
-        <p class="source-note" data-testid="bulk-recipients-sort-note">
-          The API sorts recipients by receiver, status, foreign ID or created time only. Error text
-          is searchable — the search box covers receiver, foreign ID and error — but it is not in
-          the sort whitelist, so that column has no sort control.
-        </p>
-      </template>
-    </section>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th
+                    v-for="column in recipientColumns"
+                    :key="column.key"
+                    scope="col"
+                    :aria-sort="
+                      column.sort
+                        ? ariaSort(recipientsSortField === column.sort, recipientsSortDir)
+                        : undefined
+                    "
+                  >
+                    <button
+                      v-if="column.sort"
+                      type="button"
+                      class="column-sort"
+                      :data-testid="`bulk-recipients-sort-${column.key}`"
+                      @click="sortRecipientsBy(column.sort)"
+                    >
+                      {{ column.label }}
+                      <span v-if="recipientsSortField === column.sort">{{
+                        recipientsSortDir === 'asc' ? '▲' : '▼'
+                      }}</span>
+                    </button>
+                    <span v-else class="column-static" :title="column.note">
+                      {{ column.label }}
+                      <abbr v-if="column.note" title="Not sortable" aria-hidden="true">·</abbr>
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(recipient, index) in recipients"
+                  :key="text(recipient.id, String(index))"
+                  :data-testid="`bulk-recipient-${index}`"
+                >
+                  <td
+                    v-for="column in recipientColumns"
+                    :key="column.key"
+                    :class="{ mono: column.mono }"
+                  >
+                    <span
+                      v-if="column.badge"
+                      class="status-badge"
+                      :class="badgeTone(column.value(recipient))"
+                    >
+                      {{ column.value(recipient) || '—' }}
+                    </span>
+                    <template v-else>{{ column.value(recipient) || '—' }}</template>
+                  </td>
+                </tr>
+                <tr v-if="!recipients.length">
+                  <td :colspan="recipientColumns.length" class="empty-cell">
+                    {{
+                      recipientsFiltered
+                        ? 'No recipients match these filters.'
+                        : 'No recipients recorded for this job.'
+                    }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <footer class="pager">
+            <span data-testid="bulk-recipients-range">
+              Page {{ recipientsPage }} · {{ recipients.length }} row(s)
+            </span>
+            <div class="pager-buttons">
+              <button
+                class="secondary-button"
+                data-testid="bulk-recipients-prev"
+                :disabled="!recipientsCursorHistory.length || detailLoading"
+                @click="turnRecipientsPage(-1)"
+              >
+                Previous
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="bulk-recipients-next"
+                :disabled="!recipientsNextCursor || detailLoading"
+                @click="turnRecipientsPage(1)"
+              >
+                Next
+              </button>
+            </div>
+          </footer>
+          <p class="source-note" data-testid="bulk-recipients-sort-note">
+            The API sorts recipients by receiver, status, foreign ID or created time only. Error
+            text is searchable — the search box covers receiver, foreign ID and error — but it is
+            not in the sort whitelist, so that column has no sort control.
+          </p>
+        </template>
+      </div>
+    </DetailDrawer>
   </div>
 </template>
 

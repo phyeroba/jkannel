@@ -1,7 +1,7 @@
 [
   {
     "route": "/dashboard/operations",
-    "chars": 1728,
+    "chars": 1871,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -25,7 +25,7 @@
   },
   {
     "route": "/alerts",
-    "chars": 2048,
+    "chars": 2317,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -37,7 +37,7 @@
   },
   {
     "route": "/alert-lifecycle",
-    "chars": 1610,
+    "chars": 1864,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -61,7 +61,7 @@
   },
   {
     "route": "/notifications",
-    "chars": 3874,
+    "chars": 4073,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -85,7 +85,7 @@
   },
   {
     "route": "/live-traffic",
-    "chars": 2482,
+    "chars": 2476,
     "panels": 4,
     "errorState": false,
     "partial": false,
@@ -121,7 +121,7 @@
   },
   {
     "route": "/live-queue",
-    "chars": 4394,
+    "chars": 4393,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -181,7 +181,7 @@
   },
   {
     "route": "/recipient-policy",
-    "chars": 1250,
+    "chars": 1096,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -313,7 +313,7 @@
   },
   {
     "route": "/smpp-errors",
-    "chars": 5401,
+    "chars": 5395,
     "panels": 5,
     "errorState": false,
     "partial": false,
@@ -337,7 +337,7 @@
   },
   {
     "route": "/reports",
-    "chars": 5334,
+    "chars": 5359,
     "panels": 12,
     "errorState": false,
     "partial": false,
@@ -397,7 +397,7 @@
   },
   {
     "route": "/services",
-    "chars": 3386,
+    "chars": 3389,
     "panels": 6,
     "errorState": false,
     "partial": false,
@@ -409,7 +409,7 @@
   },
   {
     "route": "/nodes",
-    "chars": 1989,
+    "chars": 1990,
     "panels": 4,
     "errorState": false,
     "partial": true,
@@ -421,7 +421,7 @@
   },
   {
     "route": "/performance",
-    "chars": 2135,
+    "chars": 2129,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -433,7 +433,7 @@
   },
   {
     "route": "/docker",
-    "chars": 3457,
+    "chars": 3456,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -445,7 +445,7 @@
   },
   {
     "route": "/logs-audit",
-    "chars": 8908,
+    "chars": 9502,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -457,7 +457,7 @@
   },
   {
     "route": "/data-integrity",
-    "chars": 1788,
+    "chars": 1768,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -469,7 +469,7 @@
   },
   {
     "route": "/jobs",
-    "chars": 792,
+    "chars": 790,
     "panels": 2,
     "errorState": false,
     "partial": false,
@@ -481,7 +481,7 @@
   },
   {
     "route": "/log-explorer",
-    "chars": 15583,
+    "chars": 15560,
     "panels": 3,
     "errorState": false,
     "partial": false,
@@ -565,7 +565,7 @@
   },
   {
     "route": "/sessions",
-    "chars": 8820,
+    "chars": 9982,
     "panels": 2,
     "errorState": false,
     "partial": false,

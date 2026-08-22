@@ -98,7 +98,9 @@ const dependents = computed(() =>
  * console was re-deriving an answer the API already gives, and a deep link to a
  * component that does not exist had nothing to say.
  */
-const detail = ref<(ServiceReading & { dependencies?: ServiceReading[]; dependents?: ServiceReading[] }) | null>(null);
+const detail = ref<
+  (ServiceReading & { dependencies?: ServiceReading[]; dependents?: ServiceReading[] }) | null
+>(null);
 const detailMissing = ref(false);
 const serviceEvents = ref<OperationalEvent[]>([]);
 
@@ -157,7 +159,8 @@ async function load() {
     error.value = '';
   } catch (reason) {
     board.value = null;
-    error.value = reason instanceof Error ? reason.message : 'The service register could not be read.';
+    error.value =
+      reason instanceof Error ? reason.message : 'The service register could not be read.';
     state.value =
       reason instanceof ApiError && reason.status === 403 ? 'permission-denied' : 'error';
   }
@@ -297,10 +300,10 @@ onMounted(() => {
         -->
         <p class="source-note" data-testid="services-resource-note">
           There are no CPU or memory columns. Per-component usage would need a Docker socket, and
-          this container deliberately has none — an API process that can inspect and control its
-          own siblings is a much larger blast radius than a console needs. What
-          <em>is</em> measured is this container's own accounting, read from its cgroup and shown
-          on <RouterLink class="text-link" to="/system">System</RouterLink>; attributing that one
+          this container deliberately has none — an API process that can inspect and control its own
+          siblings is a much larger blast radius than a console needs. What
+          <em>is</em> measured is this container's own accounting, read from its cgroup and shown on
+          <RouterLink class="text-link" to="/system">System</RouterLink>; attributing that one
           figure to each of the components hosted inside it would be an invention.
         </p>
       </section>
@@ -369,7 +372,10 @@ onMounted(() => {
               @click="selected = dep.name"
             >
               <span class="status-badge" :class="stateTone(dep.state)">{{ stateWord(dep) }}</span>
-              <span><strong>{{ dep.name }}</strong><small>{{ dep.role }}</small></span>
+              <span
+                ><strong>{{ dep.name }}</strong
+                ><small>{{ dep.role }}</small></span
+              >
             </li>
           </ul>
           <p v-else class="source-note">Nothing — this is a root service.</p>
@@ -383,7 +389,10 @@ onMounted(() => {
               @click="selected = dep.name"
             >
               <span class="status-badge" :class="stateTone(dep.state)">{{ stateWord(dep) }}</span>
-              <span><strong>{{ dep.name }}</strong><small>{{ dep.role }}</small></span>
+              <span
+                ><strong>{{ dep.name }}</strong
+                ><small>{{ dep.role }}</small></span
+              >
             </li>
           </ul>
           <p v-else class="source-note">No other component depends on it.</p>

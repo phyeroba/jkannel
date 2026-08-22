@@ -183,13 +183,10 @@ async function decide(decision: 'approve' | 'reject') {
   assistanceBusy.value = true;
   assistanceError.value = '';
   try {
-    assistance.value = await apiRequest<AssistanceRecord>(
-      `/ai/assistance/${record.id}/decisions`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ decision, reason: decisionReason.value.trim() }),
-      },
-    );
+    assistance.value = await apiRequest<AssistanceRecord>(`/ai/assistance/${record.id}/decisions`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, reason: decisionReason.value.trim() }),
+    });
     decisionReason.value = '';
   } catch (reason) {
     assistanceError.value =
@@ -331,9 +328,11 @@ onMounted(() => void loadTools());
           </dd>
           <dt>Status</dt>
           <dd>
-            <span class="status-badge" :class="assistance.status === 'approved' ? 'good' : 'warn'">{{
-              assistance.status
-            }}</span>
+            <span
+              class="status-badge"
+              :class="assistance.status === 'approved' ? 'good' : 'warn'"
+              >{{ assistance.status }}</span
+            >
           </dd>
         </dl>
 

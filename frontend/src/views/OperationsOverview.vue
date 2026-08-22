@@ -476,221 +476,226 @@ function statusTone(status: string) {
       hides exactly the numbers they came to look at.
     -->
     <p v-if="unobservedCarriers" class="stale-banner" data-testid="dashboard-stale-banner">
-    Telemetry for {{ unobservedCarriers }}
-    {{ unobservedCarriers === 1 ? 'carrier is' : 'carriers are' }} not being observed, so
-    {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than healthy.
-  </p>
-  <div class="dashboard-actions">
-    <button
-      class="secondary-button"
-      data-testid="refresh-dashboard"
-      :disabled="refreshing"
-      @click="manualRefresh"
-    >
-      {{ refreshing ? 'Refreshing…' : 'Refresh dashboard' }}</button
-    ><RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
-      >Ask AI Copilot</RouterLink
-    ><label class="filter-select"
-      ><span>Auto refresh</span
-      ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
-        <option :value="true">On</option>
-        <option :value="false">Off</option>
-      </select></label
-    ><label class="filter-select"
-      ><span>Every</span
-      ><select v-model.number="intervalSeconds" data-testid="dashboard-interval">
-        <option v-for="choice in refreshChoices" :key="choice" :value="choice">
-          {{ choice }}s
-        </option>
-      </select></label
-    ><span data-testid="dashboard-last-checked"
-      >Last checked: {{ refreshed }}{{ autoRefresh ? '' : ' — auto refresh is off' }}</span
-    >
-  </div>
-  <section class="metrics-grid">
-    <!--
+      Telemetry for {{ unobservedCarriers }}
+      {{ unobservedCarriers === 1 ? 'carrier is' : 'carriers are' }} not being observed, so
+      {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than
+      healthy.
+    </p>
+    <div class="dashboard-actions">
+      <button
+        class="secondary-button"
+        data-testid="refresh-dashboard"
+        :disabled="refreshing"
+        @click="manualRefresh"
+      >
+        {{ refreshing ? 'Refreshing…' : 'Refresh dashboard' }}</button
+      ><RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
+        >Ask AI Copilot</RouterLink
+      ><label class="filter-select"
+        ><span>Auto refresh</span
+        ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
+          <option :value="true">On</option>
+          <option :value="false">Off</option>
+        </select></label
+      ><label class="filter-select"
+        ><span>Every</span
+        ><select v-model.number="intervalSeconds" data-testid="dashboard-interval">
+          <option v-for="choice in refreshChoices" :key="choice" :value="choice">
+            {{ choice }}s
+          </option>
+        </select></label
+      ><span data-testid="dashboard-last-checked"
+        >Last checked: {{ refreshed }}{{ autoRefresh ? '' : ' — auto refresh is off' }}</span
+      >
+    </div>
+    <section class="metrics-grid">
+      <!--
       Each tile drills into the screen that owns the figure. Reading a worrying
       number and then hunting the sidebar for where to act on it is friction the
       tile can remove.
     -->
-    <MetricCard
-      label="Queue depth"
-      :value="queueMetric.value"
-      :detail="queueMetric.detail"
-      :tone="queueMetric.tone"
-      icon="queue"
-      to="/queues"
-    /><MetricCard
-      label="Messages (latest daily)"
-      :value="messagesMetric.value"
-      :detail="messagesMetric.detail"
-      icon="sms"
-      to="/messages"
-    /><MetricCard
-      label="DLRs (latest daily)"
-      :value="dlrMetric.value"
-      :detail="dlrMetric.detail"
-      icon="check"
-      to="/dlr-performance"
-    /><MetricCard
-      label="Alerts"
-      :value="alertsMetric.value"
-      :detail="alertsMetric.detail"
-      :tone="alertsMetric.tone"
-      icon="alert"
-      to="/alerts"
-    />
-  </section>
-  <!--
+      <MetricCard
+        label="Queue depth"
+        :value="queueMetric.value"
+        :detail="queueMetric.detail"
+        :tone="queueMetric.tone"
+        icon="queue"
+        to="/queues"
+      /><MetricCard
+        label="Messages (latest daily)"
+        :value="messagesMetric.value"
+        :detail="messagesMetric.detail"
+        icon="sms"
+        to="/messages"
+      /><MetricCard
+        label="DLRs (latest daily)"
+        :value="dlrMetric.value"
+        :detail="dlrMetric.detail"
+        icon="check"
+        to="/dlr-performance"
+      /><MetricCard
+        label="Alerts"
+        :value="alertsMetric.value"
+        :detail="alertsMetric.detail"
+        :tone="alertsMetric.tone"
+        icon="alert"
+        to="/alerts"
+      />
+    </section>
+    <!--
     Traffic and Queue pressure — the two panels the design system's
     DashboardScreen leads with, and the two this dashboard was missing. Their
     absence is why the console did not look like the package even after every
     token and component class matched.
   -->
-  <section class="split-grid wide-left" data-testid="dashboard-traffic-row">
-    <article class="panel">
-      <header class="panel-header">
-        <div>
-          <h2>Traffic</h2>
-          <p>Daily message and receipt volume, from the report snapshots</p>
-        </div>
-        <RouterLink class="text-button" to="/live-traffic">Open Live Traffic</RouterLink>
-      </header>
-      <MiniChart
-        v-if="hasTraffic"
-        type="line"
-        title="Daily message volume"
-        :series="trafficSeries"
-        :labels="trafficLabels"
-        :height="180"
-        grid
-        data-testid="dashboard-traffic-chart"
-      />
-      <p v-else-if="volumeState === 'checking'" class="chart-empty">Loading volume snapshots…</p>
-      <p v-else-if="volumeState === 'unavailable'" class="chart-empty">
-        Volume report data is unavailable.
-      </p>
-      <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
-        No traffic has been recorded in the snapshots held so far.
-      </p>
-    </article>
-
-    <article class="panel" data-testid="dashboard-queue-pressure">
-      <header class="panel-header">
-        <div>
-          <h2>Queue pressure</h2>
-          <p>Carriers with messages waiting, deepest first</p>
-        </div>
-        <RouterLink class="text-button" to="/queues">Open Queues</RouterLink>
-      </header>
-      <div v-if="queuePressure.length" class="pressure-list">
-        <div v-for="row in queuePressure" :key="row.id" class="pressure-row">
-          <div class="pressure-head">
-            <span class="mono">{{ row.label }}</span>
-            <strong class="figures">{{ row.depth.toLocaleString() }}</strong>
+    <section class="split-grid wide-left" data-testid="dashboard-traffic-row">
+      <article class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Traffic</h2>
+            <p>Daily message and receipt volume, from the report snapshots</p>
           </div>
-          <span class="breakdown-track"
-            ><span class="breakdown-fill" :style="{ width: `${row.share}%` }"></span
-          ></span>
-          <span class="pressure-note">
-            {{ row.rate === null ? 'drain rate unknown' : `draining at ${row.rate}/s` }}
-          </span>
+          <RouterLink class="text-button" to="/live-traffic">Open Live Traffic</RouterLink>
+        </header>
+        <MiniChart
+          v-if="hasTraffic"
+          type="line"
+          title="Daily message volume"
+          :series="trafficSeries"
+          :labels="trafficLabels"
+          :height="180"
+          grid
+          data-testid="dashboard-traffic-chart"
+        />
+        <p v-else-if="volumeState === 'checking'" class="chart-empty">Loading volume snapshots…</p>
+        <p v-else-if="volumeState === 'unavailable'" class="chart-empty">
+          Volume report data is unavailable.
+        </p>
+        <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
+          No traffic has been recorded in the snapshots held so far.
+        </p>
+      </article>
+
+      <article class="panel" data-testid="dashboard-queue-pressure">
+        <header class="panel-header">
+          <div>
+            <h2>Queue pressure</h2>
+            <p>Carriers with messages waiting, deepest first</p>
+          </div>
+          <RouterLink class="text-button" to="/queues">Open Queues</RouterLink>
+        </header>
+        <div v-if="queuePressure.length" class="pressure-list">
+          <div v-for="row in queuePressure" :key="row.id" class="pressure-row">
+            <div class="pressure-head">
+              <span class="mono">{{ row.label }}</span>
+              <strong class="figures">{{ row.depth.toLocaleString() }}</strong>
+            </div>
+            <span class="breakdown-track"
+              ><span class="breakdown-fill" :style="{ width: `${row.share}%` }"></span
+            ></span>
+            <span class="pressure-note">
+              {{ row.rate === null ? 'drain rate unknown' : `draining at ${row.rate}/s` }}
+            </span>
+          </div>
         </div>
-      </div>
-      <p v-else-if="carriersState === 'checking'" class="chart-empty">Loading carriers…</p>
-      <p v-else class="chart-empty" data-testid="dashboard-queue-pressure-empty">
-        Nothing is queued. Every carrier's spool is empty.
-      </p>
-    </article>
-  </section>
-  <section class="dashboard-grid">
-    <article class="panel">
-      <header class="panel-header">
-        <div>
-          <h2>System health</h2>
-          <p>Observed dependency state</p>
-        </div>
-        <!-- The services board is the fuller version of this list: every
+        <p v-else-if="carriersState === 'checking'" class="chart-empty">Loading carriers…</p>
+        <p v-else class="chart-empty" data-testid="dashboard-queue-pressure-empty">
+          Nothing is queued. Every carrier's spool is empty.
+        </p>
+      </article>
+    </section>
+    <section class="dashboard-grid">
+      <article class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>System health</h2>
+            <p>Observed dependency state</p>
+          </div>
+          <!-- The services board is the fuller version of this list: every
              component, its dependencies, and which one to fix first. -->
-        <RouterLink class="text-link" to="/services" data-testid="open-services"
-          >All services</RouterLink
+          <RouterLink class="text-link" to="/services" data-testid="open-services"
+            >All services</RouterLink
+          >
+        </header>
+        <ul class="health-list" data-testid="health-list">
+          <li v-for="row in healthRows" :key="row.name">
+            <span class="status-dot" :class="statusTone(row.status)"></span
+            ><span
+              ><strong>{{ row.name }}</strong
+              ><small>{{ row.detail }}</small></span
+            ><span class="status-badge" :class="statusTone(row.status)">{{ row.status }}</span>
+          </li>
+        </ul>
+      </article>
+      <article class="panel wide">
+        <header class="panel-header">
+          <div>
+            <h2>Active incidents</h2>
+            <p>Longest running first</p>
+          </div>
+          <RouterLink class="text-link" to="/alerts">View all alerts</RouterLink>
+        </header>
+        <p
+          v-if="alertsState === 'unavailable'"
+          class="chart-empty"
+          data-testid="alerts-unavailable"
         >
-      </header>
-      <ul class="health-list" data-testid="health-list">
-        <li v-for="row in healthRows" :key="row.name">
-          <span class="status-dot" :class="statusTone(row.status)"></span
-          ><span
-            ><strong>{{ row.name }}</strong
-            ><small>{{ row.detail }}</small></span
-          ><span class="status-badge" :class="statusTone(row.status)">{{ row.status }}</span>
-        </li>
-      </ul>
-    </article>
-    <article class="panel wide">
-      <header class="panel-header">
-        <div>
-          <h2>Active incidents</h2>
-          <p>Longest running first</p>
-        </div>
-        <RouterLink class="text-link" to="/alerts">View all alerts</RouterLink>
-      </header>
-      <p v-if="alertsState === 'unavailable'" class="chart-empty" data-testid="alerts-unavailable">
-        Alert data is unavailable.
-      </p>
-      <div v-else class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Severity</th>
-              <th>Condition</th>
-              <th>Status</th>
-              <th>Opened</th>
-              <th>Duration</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="alert in recentAlerts" :key="text(alert.id)">
-              <td>
-                <span
-                  class="status-badge"
-                  :class="
-                    alert.severity === 'critical'
-                      ? 'bad'
-                      : alert.severity === 'warning'
-                        ? 'warn'
-                        : 'good'
-                  "
-                  >{{ text(alert.severity) }}</span
-                >
-              </td>
-              <td>{{ text(alert.summary ?? alert.rule_name) }}</td>
-              <td>{{ text(alert.status) }}</td>
-              <td>{{ text(alert.opened_at ?? alert.openedAt) }}</td>
-              <!--
+          Alert data is unavailable.
+        </p>
+        <div v-else class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Condition</th>
+                <th>Status</th>
+                <th>Opened</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="alert in recentAlerts" :key="text(alert.id)">
+                <td>
+                  <span
+                    class="status-badge"
+                    :class="
+                      alert.severity === 'critical'
+                        ? 'bad'
+                        : alert.severity === 'warning'
+                          ? 'warn'
+                          : 'good'
+                    "
+                    >{{ text(alert.severity) }}</span
+                  >
+                </td>
+                <td>{{ text(alert.summary ?? alert.rule_name) }}</td>
+                <td>{{ text(alert.status) }}</td>
+                <td>{{ text(alert.opened_at ?? alert.openedAt) }}</td>
+                <!--
                 "Longest running first" is this panel's own subtitle, and until
                 now nothing on it showed how long anything had been running.
                 Measured to now while open and to resolution once closed, so a
                 settled incident stops ageing on the dashboard.
               -->
-              <td class="mono" :data-testid="`incident-duration-${text(alert.id)}`">
-                {{ alertDuration(alert) }}
-              </td>
-            </tr>
-            <tr v-if="alertsState === 'ok' && !recentAlerts.length">
-              <td colspan="5" class="empty-cell" data-testid="alerts-empty">
-                No alert instances recorded.
-              </td>
-            </tr>
-            <tr v-if="alertsState === 'checking'">
-              <td colspan="5" class="empty-cell">Loading alerts…</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
-  </section>
+                <td class="mono" :data-testid="`incident-duration-${text(alert.id)}`">
+                  {{ alertDuration(alert) }}
+                </td>
+              </tr>
+              <tr v-if="alertsState === 'ok' && !recentAlerts.length">
+                <td colspan="5" class="empty-cell" data-testid="alerts-empty">
+                  No alert instances recorded.
+                </td>
+              </tr>
+              <tr v-if="alertsState === 'checking'">
+                <td colspan="5" class="empty-cell">Loading alerts…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
 
-  <!--
+    <!--
     Carrier connectivity — the design system's DashboardScreen centrepiece, and
     the panel §3 asks for so a shift can be assessed in ten seconds: every
     network this gateway binds to, worst first, each row opening its carrier.
@@ -700,98 +705,102 @@ function statusTone(status: string) {
     read `unknown` rather than 0 — the design specifies that treatment, and a
     zero we never measured is the one thing this console must never print.
   -->
-  <article class="panel" data-testid="carrier-connectivity">
-    <header class="panel-header">
-      <div>
-        <h2>Carrier connectivity</h2>
-        <p>Every network this gateway binds to, worst first</p>
-      </div>
-      <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
-    </header>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Carrier</th>
-            <th scope="col">Health</th>
-            <th scope="col">SMSCs</th>
-            <th scope="col">Sessions</th>
-            <th scope="col" class="numeric">MT TPS</th>
-            <th scope="col" class="numeric">Utilisation</th>
-            <th scope="col" class="numeric">Queue</th>
-            <th scope="col" class="numeric">P95 DLR</th>
-            <th scope="col" class="numeric">Reject</th>
-            <th scope="col" class="numeric">Open alerts</th>
-            <th scope="col">Last event</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="carrier in carriersByHealth"
-            :key="carrier.id"
-            class="selectable"
-            :data-testid="`dashboard-carrier-${carrier.id}`"
-            tabindex="0"
-            @click="$router.push(`/carriers/${carrier.id}`)"
-            @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
-          >
-            <td>
-              <strong>{{ carrier.name }}</strong>
-              <span class="row-id">{{
-                [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
-                'no network code'
-              }}</span>
-            </td>
-            <td>
-              <span class="status-badge" :class="healthTone(carrier.health)">{{
-                carrier.health
-              }}</span>
-            </td>
-            <td class="figures">{{ carrier.smscCount }}</td>
-            <td class="figures">{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</td>
-            <td class="figures numeric">
-              {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps }}
-            </td>
-            <td class="figures numeric">{{ utilisationLabel(carrier) }}</td>
-            <td class="figures numeric">{{ carrier.queuedMessages.toLocaleString() }}</td>
-            <!--
+    <article class="panel" data-testid="carrier-connectivity">
+      <header class="panel-header">
+        <div>
+          <h2>Carrier connectivity</h2>
+          <p>Every network this gateway binds to, worst first</p>
+        </div>
+        <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Carrier</th>
+              <th scope="col">Health</th>
+              <th scope="col">SMSCs</th>
+              <th scope="col">Sessions</th>
+              <th scope="col" class="numeric">MT TPS</th>
+              <th scope="col" class="numeric">Utilisation</th>
+              <th scope="col" class="numeric">Queue</th>
+              <th scope="col" class="numeric">P95 DLR</th>
+              <th scope="col" class="numeric">Reject</th>
+              <th scope="col" class="numeric">Open alerts</th>
+              <th scope="col">Last event</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="carrier in carriersByHealth"
+              :key="carrier.id"
+              class="selectable"
+              :data-testid="`dashboard-carrier-${carrier.id}`"
+              tabindex="0"
+              @click="$router.push(`/carriers/${carrier.id}`)"
+              @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
+            >
+              <td>
+                <strong>{{ carrier.name }}</strong>
+                <span class="row-id">{{
+                  [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
+                  'no network code'
+                }}</span>
+              </td>
+              <td>
+                <span class="status-badge" :class="healthTone(carrier.health)">{{
+                  carrier.health
+                }}</span>
+              </td>
+              <td class="figures">{{ carrier.smscCount }}</td>
+              <td class="figures">{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</td>
+              <td class="figures numeric">
+                {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps }}
+              </td>
+              <td class="figures numeric">{{ utilisationLabel(carrier) }}</td>
+              <td class="figures numeric">{{ carrier.queuedMessages.toLocaleString() }}</td>
+              <!--
               Delivery quality over the last 24 hours, from the DLR report. It
               is a second request and may be refused on its own — reports.view
               is not smsc.view — so these two cells say "not permitted" rather
               than an em dash an operator would read as "no receipts".
             -->
-            <td class="figures numeric" :data-testid="`dashboard-p95-${carrier.id}`">
-              {{ deliveryDenied ? 'not permitted' : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95) }}
-            </td>
-            <td class="figures numeric" :data-testid="`dashboard-reject-${carrier.id}`">
-              {{ deliveryDenied ? 'not permitted' : rejectShare(carrier.id) }}
-            </td>
-            <td class="figures numeric">{{ carrier.openAlerts }}</td>
-            <!--
+              <td class="figures numeric" :data-testid="`dashboard-p95-${carrier.id}`">
+                {{
+                  deliveryDenied
+                    ? 'not permitted'
+                    : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                }}
+              </td>
+              <td class="figures numeric" :data-testid="`dashboard-reject-${carrier.id}`">
+                {{ deliveryDenied ? 'not permitted' : rejectShare(carrier.id) }}
+              </td>
+              <td class="figures numeric">{{ carrier.openAlerts }}</td>
+              <!--
               The newest bind transition across the carrier's connections. "no
               transitions recorded" is meaningful on history that is never
               pruned: nothing has been observed to change, rather than older
               entries having aged out.
             -->
-            <td class="mono cell-tight" :data-testid="`dashboard-last-event-${carrier.id}`">
-              {{ carrier.lastEvent || 'no transitions recorded' }}
-            </td>
-          </tr>
-          <tr v-if="carriersState === 'ok' && !carriers.length">
-            <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-empty">
-              No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
-              network.
-            </td>
-          </tr>
-          <tr v-if="carriersState === 'checking'">
-            <td colspan="11" class="empty-cell">Loading carriers…</td>
-          </tr>
-          <tr v-if="carriersState === 'unavailable'">
-            <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-unavailable">
-              Carrier connectivity is unavailable — the register could not be read.
-            </td>
-          </tr>
-        </tbody>
+              <td class="mono cell-tight" :data-testid="`dashboard-last-event-${carrier.id}`">
+                {{ carrier.lastEvent || 'no transitions recorded' }}
+              </td>
+            </tr>
+            <tr v-if="carriersState === 'ok' && !carriers.length">
+              <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-empty">
+                No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
+                network.
+              </td>
+            </tr>
+            <tr v-if="carriersState === 'checking'">
+              <td colspan="11" class="empty-cell">Loading carriers…</td>
+            </tr>
+            <tr v-if="carriersState === 'unavailable'">
+              <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+                Carrier connectivity is unavailable — the register could not be read.
+              </td>
+            </tr>
+          </tbody>
         </table>
       </div>
     </article>

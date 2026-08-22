@@ -33,6 +33,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 import { type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
@@ -104,11 +105,10 @@ const counts = computed(() => {
  * rest. A count taken from a filtered view would claim the estate is in
  * whitelist mode on the strength of one visible row.
  */
-const whitelistActive = computed(
-  () => !filterType.value && counts.value.whitelist > 0,
-);
+const whitelistActive = computed(() => !filterType.value && counts.value.whitelist > 0);
 
 // --- Add an entry ---------------------------------------------------------------
+const showForm = ref(false);
 const draftMsisdn = ref('');
 const draftType = ref<string>('blacklist');
 const draftReason = ref('');
@@ -137,6 +137,9 @@ async function addEntry() {
     draftMsisdn.value = '';
     draftReason.value = '';
     draftExpiresAt.value = '';
+    // The dialog closes only on success. A failed add leaves the operator's
+    // input on screen next to the reason it was refused.
+    showForm.value = false;
     await loadEntries();
   } catch (cause) {
     listError.value = messageFrom(cause, 'The entry could not be added.');
@@ -216,9 +219,9 @@ onMounted(loadEntries);
         <div>
           <h2 id="policy-check-heading">Would this number be accepted?</h2>
           <p>
-            Runs the same evaluation the send path runs. Reading the list by eye cannot answer
-            this: an entry may be scoped to one customer or already expired, and either makes a
-            listed number perfectly sendable.
+            Runs the same evaluation the send path runs. Reading the list by eye cannot answer this:
+            an entry may be scoped to one customer or already expired, and either makes a listed
+            number perfectly sendable.
           </p>
         </div>
       </header>
@@ -290,13 +293,27 @@ onMounted(loadEntries);
             {{ counts.dnd }} on DND
           </p>
         </div>
-        <label class="filter-select">
-          <span>List</span>
-          <select v-model="filterType" data-testid="policy-filter" @change="loadEntries">
-            <option value="">all lists</option>
-            <option v-for="type in LIST_TYPES" :key="type" :value="type">{{ type }}</option>
-          </select>
-        </label>
+        <!-- Two controls in the header slot, which `.panel-header` lays out as
+             a single flex child — hence the wrapper rather than two siblings
+             that would be pushed to opposite ends by `space-between`. -->
+        <div class="header-controls">
+          <label class="filter-select">
+            <span>List</span>
+            <select v-model="filterType" data-testid="policy-filter" @change="loadEntries">
+              <option value="">all lists</option>
+              <option v-for="type in LIST_TYPES" :key="type" :value="type">{{ type }}</option>
+            </select>
+          </label>
+          <button
+            v-if="canManage"
+            class="primary-button"
+            type="button"
+            data-testid="policy-new"
+            @click="showForm = true"
+          >
+            New entry
+          </button>
+        </div>
       </header>
 
       <!--
@@ -305,7 +322,12 @@ onMounted(loadEntries);
         Shown only on the unfiltered view — a count taken from a filtered list
         would make this claim on the strength of one visible row.
       -->
-      <p v-if="whitelistActive" class="warn-notice" role="status" data-testid="policy-whitelist-warning">
+      <p
+        v-if="whitelistActive"
+        class="warn-notice"
+        role="status"
+        data-testid="policy-whitelist-warning"
+      >
         <strong>A whitelist is in force.</strong> With {{ counts.whitelist }} entr(y/ies) present,
         every destination NOT on the whitelist is refused. Removing the last entry restores normal
         sending.
@@ -408,12 +430,24 @@ onMounted(loadEntries);
         </div>
       </DataState>
 
-      <template v-if="canManage">
-        <h3 class="add-heading">Add an entry</h3>
+      <!--
+        A Dialog behind a "New entry" control, like every other create form in
+        the console. This was a permanently-open field grid under the register:
+        the screen offered a half-filled form nobody had asked for, and the
+        control that submitted it read "Add", which looks like a disclosure and
+        is not.
+      -->
+      <ModalDialog
+        :open="showForm && canManage"
+        title="Add an entry"
+        testid="policy-form"
+        wide
+        @close="showForm = false"
+      >
         <p class="source-note" data-testid="policy-meaning">
           {{ LIST_MEANING[draftType] }}
         </p>
-        <div class="field-grid" data-testid="policy-form">
+        <div class="dialog-grid">
           <label class="filter-select">
             <span>Destination</span>
             <input v-model="draftMsisdn" type="text" data-testid="entry-msisdn" />
@@ -436,6 +470,14 @@ onMounted(loadEntries);
             <span>Expires (optional)</span>
             <input v-model="draftExpiresAt" type="datetime-local" data-testid="entry-expires" />
           </label>
+        </div>
+        <!-- The panel's own error banner is behind the scrim while this is
+             open, so a refused add has to say so in here. -->
+        <p v-if="listError" class="form-error" role="alert" data-testid="policy-form-error">
+          {{ listError }}
+        </p>
+        <template #footer>
+          <button class="secondary-button" type="button" @click="showForm = false">Cancel</button>
           <button
             class="primary-button"
             type="button"
@@ -445,12 +487,12 @@ onMounted(loadEntries);
           >
             Add
           </button>
-        </div>
-      </template>
-      <p v-else class="source-note" data-testid="policy-readonly">
+        </template>
+      </ModalDialog>
+      <p v-if="!canManage" class="source-note" data-testid="policy-readonly">
         Adding and removing entries needs <span class="mono">messages.send</span> — refusing a
-        destination changes what the platform will transmit, so it is gated with the permission
-        that transmits.
+        destination changes what the platform will transmit, so it is gated with the permission that
+        transmits.
       </p>
     </section>
   </div>
@@ -468,9 +510,12 @@ onMounted(loadEntries);
   align-items: end;
   margin-top: 12px;
 }
-.add-heading {
-  margin: 22px 0 6px;
-  font-size: 14px;
+/* The filter and the create control share the header's right-hand slot. */
+.header-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
 }
 .notice.refused {
   border-left: 3px solid var(--bad);

@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 const permissions = ref(new Set(['alerts.view', 'alerts.acknowledge', 'system.manage']));
 
@@ -119,11 +120,11 @@ describe('Alert lifecycle view', () => {
     stubApi();
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="lifecycle-assignee-a1"]').text()).toBe('joel');
-    expect(wrapper.get('[data-testid="lifecycle-suppressed-a1"]').text()).toBe('—');
-    expect(wrapper.get('[data-testid="lifecycle-notification-a1"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="lifecycle-assignee-a1"]').text()).toBe('joel');
+    expect(overlay(wrapper, '[data-testid="lifecycle-suppressed-a1"]').text()).toBe('—');
+    expect(overlay(wrapper, '[data-testid="lifecycle-notification-a1"]').text()).toContain(
       'undeliverable',
     );
     wrapper.unmount();
@@ -133,23 +134,23 @@ describe('Alert lifecycle view', () => {
     stubApi();
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-detail-assignee"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-detail-assignee"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="lifecycle-detail-assignee"]').text()).toBe('joel');
-    expect(wrapper.get('[data-testid="lifecycle-detail-notification"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="lifecycle-detail-assignee"]').text()).toBe('joel');
+    expect(overlay(wrapper, '[data-testid="lifecycle-detail-notification"]').text()).toContain(
       'undeliverable',
     );
     // notification_state=undeliverable means the alert reached nobody; say so.
-    expect(wrapper.find('[data-testid="lifecycle-undeliverable-banner"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-undeliverable-banner"]')).toBe(true);
     // The thread is now the design's Timeline. A transition is still rendered
     // as platform history rather than as somebody's note, and a comment still
     // names its author — the distinction the flat list used to make with a
     // badge is now made by the step label.
-    const thread = wrapper.get('[data-testid="lifecycle-thread"]').text();
+    const thread = overlay(wrapper, '[data-testid="lifecycle-thread"]').text();
     expect(thread).toContain('State change');
     expect(thread).toContain('Comment by amina');
     wrapper.unmount();
@@ -159,19 +160,23 @@ describe('Alert lifecycle view', () => {
     stubApi();
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-acknowledge"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-acknowledge"]')).toBe(true),
     );
     // open -> acknowledge/resolve/suppress/close are legal; reopen is not.
     expect(
-      wrapper.get('[data-testid="lifecycle-acknowledge"]').attributes('disabled'),
+      overlay(wrapper, '[data-testid="lifecycle-acknowledge"]').attributes('disabled'),
     ).toBeUndefined();
-    expect(wrapper.get('[data-testid="lifecycle-resolve"]').attributes('disabled')).toBeUndefined();
-    expect(wrapper.get('[data-testid="lifecycle-close"]').attributes('disabled')).toBeUndefined();
-    const reopen = wrapper.get('[data-testid="lifecycle-reopen"]');
+    expect(
+      overlay(wrapper, '[data-testid="lifecycle-resolve"]').attributes('disabled'),
+    ).toBeUndefined();
+    expect(
+      overlay(wrapper, '[data-testid="lifecycle-close"]').attributes('disabled'),
+    ).toBeUndefined();
+    const reopen = overlay(wrapper, '[data-testid="lifecycle-reopen"]');
     expect(reopen.attributes('disabled')).toBeDefined();
     expect(reopen.attributes('title')).toContain('Cannot reopen an alert that is open');
     wrapper.unmount();
@@ -185,14 +190,16 @@ describe('Alert lifecycle view', () => {
     );
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-resolve"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-resolve"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-reason"]').setValue('Carrier restored the bind');
-    await wrapper.get('[data-testid="lifecycle-resolve"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-reason"]').setValue(
+      'Carrier restored the bind',
+    );
+    await overlay(wrapper, '[data-testid="lifecycle-resolve"]').trigger('click');
 
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find((entry) =>
@@ -203,7 +210,9 @@ describe('Alert lifecycle view', () => {
       });
     });
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="lifecycle-action-notice"]').text()).toContain('resolved'),
+      expect(overlay(wrapper, '[data-testid="lifecycle-action-notice"]').text()).toContain(
+        'resolved',
+      ),
     );
     wrapper.unmount();
   });
@@ -218,15 +227,15 @@ describe('Alert lifecycle view', () => {
     );
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-resolve"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-resolve"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-resolve"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-resolve"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="lifecycle-action-error"]').text()).toBe(
+      expect(overlay(wrapper, '[data-testid="lifecycle-action-error"]').text()).toBe(
         'Cannot resolve an alert that is closed (allowed from: open, acknowledged, suppressed)',
       ),
     );
@@ -238,18 +247,18 @@ describe('Alert lifecycle view', () => {
     stubApi();
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="lifecycle-readonly"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="lifecycle-readonly"]').text()).toContain(
       'alerts.acknowledge',
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-suppress-denied"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-suppress-denied"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="lifecycle-actions"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="lifecycle-suppress"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="lifecycle-suppress-denied"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-actions"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-suppress"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="lifecycle-suppress-denied"]').text()).toContain(
       'system.manage',
     );
     wrapper.unmount();
@@ -259,9 +268,9 @@ describe('Alert lifecycle view', () => {
     stubApi();
     const wrapper = await mountView('/alert-lifecycle?alert=a1');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-detail-status"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-detail-status"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="lifecycle-detail-status"]').text()).toContain('open');
+    expect(overlay(wrapper, '[data-testid="lifecycle-detail-status"]').text()).toContain('open');
     wrapper.unmount();
   });
 
@@ -269,14 +278,16 @@ describe('Alert lifecycle view', () => {
     const fetchMock = stubApi();
     const wrapper = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-row-a1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-open-a1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-open-a1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="lifecycle-comment-input"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-comment-input"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="lifecycle-comment-input"]').setValue('Paging the carrier.');
-    await wrapper.get('[data-testid="lifecycle-comment-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="lifecycle-comment-input"]').setValue(
+      'Paging the carrier.',
+    );
+    await overlay(wrapper, '[data-testid="lifecycle-comment-submit"]').trigger('click');
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find(
         (entry) =>

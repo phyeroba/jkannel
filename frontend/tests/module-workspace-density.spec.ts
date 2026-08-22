@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayAll, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -125,8 +126,8 @@ describe('module workspace operational density', () => {
       vi.fn().mockImplementation(() => apiResponse(gridPage([alertRow]))),
     );
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-al-1"]').exists()).toBe(true));
-    const headers = wrapper.findAll('th').map((th) => th.text());
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-al-1"]')).toBe(true));
+    const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining([
         'Severity',
@@ -141,7 +142,7 @@ describe('module workspace operational density', () => {
         'Resolved',
       ]),
     );
-    const row = wrapper.get('[data-testid="record-al-1"]').text();
+    const row = overlay(wrapper, '[data-testid="record-al-1"]').text();
     expect(row).toContain('critical');
     expect(row).toContain('Outbound queue depth 4200');
     expect(row).toContain('smsc:local-fake');
@@ -159,18 +160,18 @@ describe('module workspace operational density', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="alert-ack-al-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="alert-ack-al-1"]')).toBe(true),
     );
     // The note must describe what the console can actually do. It previously
     // asserted "no manual resolve, assign or per-alert suppress endpoint", which
     // stopped being true when those endpoints and the Alert Lifecycle screen
     // shipped — so the test was pinning a false claim in place. Assert the
     // capability is advertised, and that the old denial is gone for good.
-    const note = wrapper.get('[data-testid="alert-actions-note"]').text();
+    const note = overlay(wrapper, '[data-testid="alert-actions-note"]').text();
     expect(note).toContain('Alert Lifecycle');
     expect(note).not.toContain('no manual resolve');
 
-    await wrapper.get('[data-testid="alert-ack-al-1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="alert-ack-al-1"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) =>
@@ -190,10 +191,10 @@ describe('module workspace operational density', () => {
       vi.fn().mockImplementation(() => apiResponse(gridPage([alertRow]))),
     );
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-al-1"]').exists()).toBe(true));
-    expect(wrapper.find('[data-testid="alert-ack-al-1"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="alert-notify-al-1"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="record-al-1"]').text()).toContain(
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-al-1"]')).toBe(true));
+    expect(overlayHas(wrapper, '[data-testid="alert-ack-al-1"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="alert-notify-al-1"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="record-al-1"]').text()).toContain(
       'Requires alerts.acknowledge',
     );
     wrapper.unmount();
@@ -205,15 +206,13 @@ describe('module workspace operational density', () => {
       vi.fn().mockImplementation(() => apiResponse(gridPage([alertRow]))),
     );
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="live-controls"]').exists()).toBe(true),
-    );
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="live-controls"]')).toBe(true));
     expect(
-      (wrapper.get('[data-testid="live-auto-toggle"]').element as HTMLSelectElement).value,
+      (overlay(wrapper, '[data-testid="live-auto-toggle"]').element as HTMLSelectElement).value,
     ).toBe('true');
-    await wrapper.get('[data-testid="live-auto-toggle"]').setValue(false);
+    await overlay(wrapper, '[data-testid="live-auto-toggle"]').setValue(false);
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="live-last-refreshed"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="live-last-refreshed"]').text()).toContain(
         'auto refresh is off',
       ),
     );
@@ -256,8 +255,8 @@ describe('module workspace operational density', () => {
       ),
     );
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-s1"]').exists()).toBe(true));
-    const row = wrapper.get('[data-testid="record-s1"]').text();
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-s1"]')).toBe(true));
+    const row = overlay(wrapper, '[data-testid="record-s1"]').text();
     expect(row).toContain('smpp.example:2775');
     // The design system's register is an OPERATIONAL view: carrier, state,
     // throughput against capacity, queue and last event. System ID, tags,
@@ -272,7 +271,7 @@ describe('module workspace operational density', () => {
     // A bind with no sample reads unknown, never 0.0 — see rateText.
     expect(row).not.toContain('sysid-primary');
     // The reachability dot the SMSC screen has always shown survives the change.
-    expect(wrapper.get('[data-testid="smsc-dot-s1"]').classes()).toContain('good');
+    expect(overlay(wrapper, '[data-testid="smsc-dot-s1"]').classes()).toContain('good');
     wrapper.unmount();
   });
 
@@ -300,12 +299,12 @@ describe('module workspace operational density', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-900"]')).toBe(true));
 
-    await wrapper.get('[data-testid="message-status"]').setValue('resendable');
-    await wrapper.get('[data-testid="message-direction"]').setValue('MT');
-    await wrapper.get('[data-testid="message-smsc"]').setValue('primary-smpp');
-    await wrapper.get('[data-testid="message-apply"]').trigger('click');
+    await overlay(wrapper, '[data-testid="message-status"]').setValue('resendable');
+    await overlay(wrapper, '[data-testid="message-direction"]').setValue('MT');
+    await overlay(wrapper, '[data-testid="message-smsc"]').setValue('primary-smpp');
+    await overlay(wrapper, '[data-testid="message-apply"]').trigger('click');
     await vi.waitFor(() => {
       const listed = String(fetchMock.mock.calls.at(-1)?.[0]);
       expect(listed).toContain('status=resendable');
@@ -314,7 +313,7 @@ describe('module workspace operational density', () => {
     });
 
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="export-messages"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-messages"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
     const exportCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes('/messages/export.csv'),
@@ -333,8 +332,8 @@ describe('module workspace operational density', () => {
       vi.fn().mockImplementation(() => apiResponse({ items: [messageRow], nextCursor: null })),
     );
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
-    const row = wrapper.get('[data-testid="record-900"]').text();
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-900"]')).toBe(true));
+    const row = overlay(wrapper, '[data-testid="record-900"]').text();
     expect(row).toContain('failed');
     expect(row).toContain('MT');
     expect(row).toContain('otp');
@@ -359,22 +358,22 @@ describe('module workspace operational density', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-900"]')).toBe(true));
 
-    await wrapper.get('[data-testid="message-from"]').setValue('2026-08-05T00:00');
-    await wrapper.get('[data-testid="message-apply"]').trigger('click');
+    await overlay(wrapper, '[data-testid="message-from"]').setValue('2026-08-05T00:00');
+    await overlay(wrapper, '[data-testid="message-apply"]').trigger('click');
 
     // The range goes to the API; the row it returned is NOT re-filtered away.
     await vi.waitFor(() => {
       const listed = fetchMock.mock.calls.map((call) => String(call[0]));
       expect(listed.some((url) => url.includes('/messages?') && url.includes('from='))).toBe(true);
     });
-    expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="record-900"]')).toBe(true);
     // The old "the API does not accept a date range yet" warning is gone.
     expect(wrapper.html()).not.toContain('does not accept a date range yet');
     // And the echoed filter set proves what the store actually applied.
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="message-applied-filters"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="message-applied-filters"]').text()).toContain(
         'from=2026-08-05T00:00:00.000Z',
       ),
     );
@@ -399,25 +398,25 @@ describe('module workspace operational density', () => {
       ),
     );
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-900"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-900"]')).toBe(true));
 
     // An inverted range is caught locally before the round trip.
-    await wrapper.get('[data-testid="message-from"]').setValue('2026-09-01T00:00');
-    await wrapper.get('[data-testid="message-to"]').setValue('2026-08-01T00:00');
-    expect(wrapper.get('[data-testid="message-range-error"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="message-from"]').setValue('2026-09-01T00:00');
+    await overlay(wrapper, '[data-testid="message-to"]').setValue('2026-08-01T00:00');
+    expect(overlay(wrapper, '[data-testid="message-range-error"]').text()).toContain(
       'after the “To” date',
     );
 
     // And the API's own wording is shown when it is the one refusing.
-    await wrapper.get('[data-testid="message-to"]').setValue('');
-    await wrapper.get('[data-testid="message-apply"]').trigger('click');
+    await overlay(wrapper, '[data-testid="message-to"]').setValue('');
+    await overlay(wrapper, '[data-testid="message-apply"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="message-filter-error"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="message-filter-error"]').text()).toContain(
         'from must not be after to',
       ),
     );
     // Not rendered as "workspace could not load".
-    expect(wrapper.find('[data-testid="api-state"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="api-state"]')).toBe(false);
     wrapper.unmount();
   });
 
@@ -446,17 +445,17 @@ describe('module workspace operational density', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/backup', 'Backup');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="schedule-row-sch-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="schedule-row-sch-1"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="schedule-row-sch-1"]').text()).toContain('0 2 * * *');
-    expect(wrapper.get('[data-testid="schedule-row-sch-1"]').text()).toContain('daily');
+    expect(overlay(wrapper, '[data-testid="schedule-row-sch-1"]').text()).toContain('0 2 * * *');
+    expect(overlay(wrapper, '[data-testid="schedule-row-sch-1"]').text()).toContain('daily');
 
-    await wrapper.get('[data-testid="schedule-new"]').trigger('click');
-    await wrapper.get('[data-testid="schedule-name"]').setValue('Hourly schema');
-    await wrapper.get('[data-testid="schedule-interval"]').setValue('60');
-    await wrapper.get('[data-testid="schedule-kind"]').setValue('schema');
-    await wrapper.get('[data-testid="schedule-retention"]').setValue('hourly');
-    await wrapper.get('[data-testid="schedule-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="schedule-new"]').trigger('click');
+    await overlay(wrapper, '[data-testid="schedule-name"]').setValue('Hourly schema');
+    await overlay(wrapper, '[data-testid="schedule-interval"]').setValue('60');
+    await overlay(wrapper, '[data-testid="schedule-kind"]').setValue('schema');
+    await overlay(wrapper, '[data-testid="schedule-retention"]').setValue('hourly');
+    await overlay(wrapper, '[data-testid="schedule-submit"]').trigger('click');
 
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
@@ -484,11 +483,11 @@ describe('module workspace operational density', () => {
     );
     const wrapper = await mountWorkspace('/backup', 'Backup');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="backup-schedules"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="backup-schedules"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="schedule-new"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="retention-apply"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="backup-schedules"]').text()).toContain('system.manage');
+    expect(overlayHas(wrapper, '[data-testid="schedule-new"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="retention-apply"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="backup-schedules"]').text()).toContain('system.manage');
     wrapper.unmount();
   });
 
@@ -512,12 +511,14 @@ describe('module workspace operational density', () => {
       }),
     );
     const wrapper = await mountWorkspace('/users', 'Users & Roles');
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="record-u1"]').exists()).toBe(true));
-    const headers = wrapper.findAll('th').map((th) => th.text());
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-u1"]')).toBe(true));
+    const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining(['User', 'Status', 'Roles', 'Created', 'Updated']),
     );
-    expect(wrapper.get('[data-testid="record-u1"]').text()).toContain('administrator, auditor');
+    expect(overlay(wrapper, '[data-testid="record-u1"]').text()).toContain(
+      'administrator, auditor',
+    );
     wrapper.unmount();
   });
 });

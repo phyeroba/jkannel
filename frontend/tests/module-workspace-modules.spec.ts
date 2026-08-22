@@ -58,6 +58,12 @@ const inDrawer = (selector: string): DOMWrapper<Element> => {
 };
 const drawerHas = (selector: string) =>
   Boolean(mounted?.find(selector).exists()) || Boolean(document.body.querySelector(selector));
+/** The same tolerance for a count rather than a single node. */
+const drawerAll = (selector: string): DOMWrapper<Element>[] => {
+  const local = mounted?.findAll(selector) ?? [];
+  if (local.length) return local;
+  return [...document.body.querySelectorAll(selector)].map((el) => new DOMWrapper(el));
+};
 const apiResponse = (data: unknown, status = 200) =>
   Promise.resolve(
     new Response(
@@ -125,7 +131,7 @@ describe('module workspace per-module enhancements', () => {
 
     // Create user with a role (roles render as a labelled checkbox list).
     await inDrawer('[data-testid="create-user"]').trigger('click');
-    await vi.waitFor(() => expect(wrapper.findAll('[data-testid^="new-role-"]').length).toBe(2));
+    await vi.waitFor(() => expect(drawerAll('[data-testid^="new-role-"]').length).toBe(2));
     expect(inDrawer('[data-testid="new-roles"]').text()).toContain('Ops');
     await inDrawer('[data-testid="new-username"]').setValue('joel');
     await inDrawer('[data-testid="new-password"]').setValue('longenoughpwd');
@@ -728,7 +734,8 @@ describe('module workspace per-module enhancements', () => {
       fetchMock.mock.calls.filter((call) => String(call[0]).includes('/reports/delivery')).length,
     ).toBe(1);
 
-    await drawer.get('[data-testid="dlr-detail-close"]').trigger('click');
+    // The detail is a Drawer now, so the close control is the sheet's own.
+    await inDrawer('[data-testid="detail-drawer-close"]').trigger('click');
     expect(drawerHas('[data-testid="dlr-detail-panel"]')).toBe(false);
   });
 

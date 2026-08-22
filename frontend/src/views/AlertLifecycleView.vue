@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import EventTimeline from '../components/EventTimeline.vue';
 import {
   alertAcknowledgement,
@@ -473,10 +474,7 @@ const incidentTimeline = computed(() => {
       order: at(escalatedAt),
       at: clock(escalatedAt),
       label: `Escalation step ${text(step.step_index ?? step.stepIndex, '?')}`,
-      detail: [
-        text(step.policy_name ?? step.policyName, 'policy not named'),
-        text(step.detail, ''),
-      ]
+      detail: [text(step.policy_name ?? step.policyName, 'policy not named'), text(step.detail, '')]
         .filter((part) => part && part !== '—')
         .join(' — '),
       state: status === 'failed' || status === 'undeliverable' ? 'error' : 'info',
@@ -650,11 +648,19 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!-- The whole row opens the alert, as the design system's register
+                 rows do. The Open button stays: a named control is what makes
+                 the affordance discoverable. -->
             <tr
               v-for="row in alerts"
               :key="rowId(row)"
+              class="selectable"
               :data-testid="`lifecycle-row-${rowId(row)}`"
-              :class="{ 'preset-active': rowId(row) === selectedId }"
+              :class="{ selected: rowId(row) === selectedId }"
+              tabindex="0"
+              @click="selectAlert(rowId(row))"
+              @keydown.enter="selectAlert(rowId(row))"
+              @keydown.space.prevent="selectAlert(rowId(row))"
             >
               <td>
                 <span class="status-badge" :class="severityTone(row.severity)">
@@ -704,7 +710,7 @@ onMounted(() => {
                 <button
                   class="secondary-button"
                   :data-testid="`lifecycle-open-${rowId(row)}`"
-                  @click="selectAlert(rowId(row))"
+                  @click.stop="selectAlert(rowId(row))"
                 >
                   Open
                 </button>
@@ -727,286 +733,296 @@ onMounted(() => {
       </p>
     </section>
 
-    <!-- Alert detail ------------------------------------------------------------ -->
-    <section
-      v-if="selectedId"
-      class="panel detail-panel"
-      data-testid="lifecycle-detail-panel"
-      aria-label="Alert detail"
+    <!-- Alert detail ------------------------------------------------------------
+         A sheet, not a panel below the register. An operator triaging an
+         incident works down the alert list; a detail that unfolds underneath
+         pushes the list away and loses their place, which is the reason the
+         design system opens a record from a register in a Drawer. -->
+    <DetailDrawer
+      :open="Boolean(selectedId)"
+      title="Alert detail"
+      eyebrow="Alert"
+      :subtitle="selectedId"
+      wide
+      @close="closeDetail"
     >
-      <header>
-        <h2>Alert detail</h2>
-        <button class="secondary-button" data-testid="lifecycle-detail-close" @click="closeDetail">
-          Close
-        </button>
-      </header>
-
-      <p v-if="detailState === 'loading'" class="form-hint" data-testid="lifecycle-detail-loading">
-        Loading the lifecycle record…
-      </p>
-      <p
-        v-else-if="detailState === 'error'"
-        class="form-error"
-        role="alert"
-        data-testid="lifecycle-detail-error"
-      >
-        {{ detailError }}
-      </p>
-      <template v-else-if="record">
-        <div class="summary-strip">
-          <div class="metric">
-            <strong data-testid="lifecycle-detail-status">
-              <span class="status-badge" :class="statusTone(record.status)">
-                {{ text(record.status) }}
-              </span>
-            </strong>
-            <small>Status</small>
-          </div>
-          <div class="metric">
-            <strong>
-              <span class="status-badge" :class="severityTone(record.severity)">
-                {{ text(record.severity) }}
-              </span>
-            </strong>
-            <small>
-              Severity{{ record.previousSeverity ? ` (was ${record.previousSeverity})` : '' }}
-            </small>
-          </div>
-          <div class="metric">
-            <strong data-testid="lifecycle-detail-notification">
-              <span class="status-badge" :class="notificationTone(record.notificationState)">
-                {{ text(record.notificationState, 'unknown') }}
-              </span>
-            </strong>
-            <small>Notification state</small>
-          </div>
-          <div class="metric">
-            <strong>{{ Number(record.reopenCount ?? 0) }}</strong>
-            <small>Reopened</small>
-          </div>
-          <div class="metric">
-            <strong>{{ Number(record.dedupCount ?? 1) }}</strong>
-            <small>Occurrences</small>
-          </div>
-        </div>
-
-        <p class="row-id">
-          <strong>{{ text(record.summary) }}</strong>
-        </p>
-
+      <div data-testid="lifecycle-detail-panel">
         <p
-          v-if="suppressionActive"
-          class="warn-notice"
-          role="status"
-          data-testid="lifecycle-suppression-banner"
+          v-if="detailState === 'loading'"
+          class="form-hint"
+          data-testid="lifecycle-detail-loading"
         >
-          Suppressed until {{ text(record.suppressedUntil) }} — escalation is paused, so nobody is
-          being paged for it.
-          <span v-if="record.suppressedReason">Reason: {{ record.suppressedReason }}</span>
+          Loading the lifecycle record…
         </p>
         <p
-          v-if="String(record.notificationState ?? '') === 'undeliverable'"
-          class="warn-notice"
-          role="alert"
-          data-testid="lifecycle-undeliverable-banner"
-        >
-          This alert's escalation could not be delivered to any channel — it has reached nobody.
-          Check notification readiness on the Escalation &amp; Maintenance workspace.
-        </p>
-
-        <dl class="detail-grid">
-          <dt>Alert ID</dt>
-          <dd class="mono">{{ text(record.id) }}</dd>
-          <dt>Assigned to</dt>
-          <dd class="mono" data-testid="lifecycle-detail-assignee">
-            {{ text(record.assignedToUsername ?? record.assignedTo, 'unassigned') }}
-          </dd>
-          <dt>Assigned at</dt>
-          <dd>{{ text(record.assignedAt) }}</dd>
-          <dt>Suppressed until</dt>
-          <dd data-testid="lifecycle-detail-suppressed">{{ text(record.suppressedUntil) }}</dd>
-          <dt>Opened</dt>
-          <dd>{{ text(record.openedAt) }}</dd>
-          <dt>Escalated</dt>
-          <dd>{{ text(record.escalatedAt) }}</dd>
-          <dt>Resolved</dt>
-          <dd>{{ text(record.resolvedAt) }}</dd>
-          <dt>Closed</dt>
-          <dd>{{ text(record.closedAt) }}</dd>
-          <dt>Correlation group</dt>
-          <dd class="mono">{{ text(record.correlationGroup) }}</dd>
-        </dl>
-
-        <!-- Actions ---------------------------------------------------------- -->
-        <h3>Actions</h3>
-        <p v-if="actionNotice" class="notice" role="status" data-testid="lifecycle-action-notice">
-          {{ actionNotice }}
-        </p>
-        <p v-if="actionError" class="form-error" role="alert" data-testid="lifecycle-action-error">
-          {{ actionError }}
-        </p>
-
-        <template v-if="canAct">
-          <label class="filter-select filter-search">
-            <span>Note / reason (recorded in the thread and the audit log)</span>
-            <input
-              v-model="actionReason"
-              data-testid="lifecycle-reason"
-              type="text"
-              placeholder="What was found, or why this is being parked"
-            />
-          </label>
-          <div class="detail-actions" data-testid="lifecycle-actions">
-            <button
-              class="secondary-button"
-              data-testid="lifecycle-acknowledge"
-              :disabled="actionBusy || !allowed('acknowledge')"
-              :title="blockedReason('acknowledge') || undefined"
-              @click="acknowledgeAlert"
-            >
-              Acknowledge
-            </button>
-            <button
-              class="primary-button"
-              data-testid="lifecycle-resolve"
-              :disabled="actionBusy || !allowed('resolve')"
-              :title="blockedReason('resolve') || undefined"
-              @click="resolveAlert"
-            >
-              Resolve
-            </button>
-            <button
-              class="secondary-button"
-              data-testid="lifecycle-reopen"
-              :disabled="actionBusy || !allowed('reopen')"
-              :title="blockedReason('reopen') || undefined"
-              @click="reopenAlert"
-            >
-              Reopen
-            </button>
-            <button
-              class="secondary-button danger-button"
-              data-testid="lifecycle-close"
-              :disabled="actionBusy || !allowed('close')"
-              :title="blockedReason('close') || undefined"
-              @click="closeAlert"
-            >
-              Close
-            </button>
-          </div>
-
-          <div class="grid-toolbar" data-testid="lifecycle-assign-row">
-            <label class="filter-select filter-search">
-              <span>Assign to</span>
-              <input
-                v-model="assignee"
-                data-testid="lifecycle-assignee-input"
-                type="text"
-                list="lifecycle-user-options"
-                placeholder="username"
-              />
-            </label>
-            <datalist id="lifecycle-user-options">
-              <option v-for="name in userOptions" :key="name" :value="name" />
-            </datalist>
-            <button
-              class="secondary-button"
-              data-testid="lifecycle-assign"
-              :disabled="actionBusy || !allowed('assign') || !assignee.trim()"
-              :title="blockedReason('assign') || undefined"
-              @click="assignAlert"
-            >
-              Assign
-            </button>
-            <span class="source-note">
-              The assignee must be a user in this tenant; an unknown name is rejected rather than
-              stored as free text that reaches nobody.
-            </span>
-          </div>
-        </template>
-
-        <div v-if="canSuppress" class="grid-toolbar" data-testid="lifecycle-suppress-row">
-          <label class="filter-select">
-            <span>Suppress for</span>
-            <select v-model.number="suppressMinutes" data-testid="lifecycle-suppress-minutes">
-              <option v-for="choice in SUPPRESS_CHOICES" :key="choice" :value="choice">
-                {{ choice }} minutes
-              </option>
-            </select>
-          </label>
-          <button
-            class="secondary-button danger-button"
-            data-testid="lifecycle-suppress"
-            :disabled="actionBusy || !allowed('suppress')"
-            :title="blockedReason('suppress') || undefined"
-            @click="suppressAlert"
-          >
-            Suppress
-          </button>
-          <span class="source-note">
-            Suppression stops escalation only. The alert stays visible and returns to open when the
-            window lapses.
-          </span>
-        </div>
-        <p v-else class="source-note" data-testid="lifecycle-suppress-denied">
-          Suppressing an alert stops anyone being paged for it, so it requires the system.manage
-          permission.
-        </p>
-
-        <!-- Thread ----------------------------------------------------------- -->
-        <h3>Thread</h3>
-        <p class="source-note">
-          {{ operatorComments.length }} operator comment(s) and
-          {{ transitionEntries.length }} recorded transition(s). Transitions are written by the
-          platform when the alert moves state — they are history, not somebody's note.
-        </p>
-        <p
-          v-if="commentsState === 'error'"
+          v-else-if="detailState === 'error'"
           class="form-error"
           role="alert"
-          data-testid="lifecycle-comments-error"
+          data-testid="lifecycle-detail-error"
         >
-          {{ commentsError }}
+          {{ detailError }}
         </p>
-        <template v-else>
-          <EventTimeline
-            v-if="incidentTimeline.length"
-            :items="incidentTimeline"
-            dense
-            data-testid="lifecycle-thread"
-          />
-          <p
-            v-if="commentsState === 'ok' && !comments.length"
-            class="source-note"
-            data-testid="lifecycle-thread-empty"
-          >
-            Nothing has happened to this alert yet beyond it opening.
-          </p>
-          <p v-if="commentsState === 'loading'" class="source-note">Loading the thread…</p>
-        </template>
+        <template v-else-if="record">
+          <div class="summary-strip">
+            <div class="metric">
+              <strong data-testid="lifecycle-detail-status">
+                <span class="status-badge" :class="statusTone(record.status)">
+                  {{ text(record.status) }}
+                </span>
+              </strong>
+              <small>Status</small>
+            </div>
+            <div class="metric">
+              <strong>
+                <span class="status-badge" :class="severityTone(record.severity)">
+                  {{ text(record.severity) }}
+                </span>
+              </strong>
+              <small>
+                Severity{{ record.previousSeverity ? ` (was ${record.previousSeverity})` : '' }}
+              </small>
+            </div>
+            <div class="metric">
+              <strong data-testid="lifecycle-detail-notification">
+                <span class="status-badge" :class="notificationTone(record.notificationState)">
+                  {{ text(record.notificationState, 'unknown') }}
+                </span>
+              </strong>
+              <small>Notification state</small>
+            </div>
+            <div class="metric">
+              <strong>{{ Number(record.reopenCount ?? 0) }}</strong>
+              <small>Reopened</small>
+            </div>
+            <div class="metric">
+              <strong>{{ Number(record.dedupCount ?? 1) }}</strong>
+              <small>Occurrences</small>
+            </div>
+          </div>
 
-        <div v-if="canAct" class="grid-toolbar" data-testid="lifecycle-comment-row">
-          <label class="filter-select filter-search">
-            <span>Add a comment</span>
-            <input
-              v-model="commentDraft"
-              data-testid="lifecycle-comment-input"
-              type="text"
-              placeholder="What you found, what you did next"
-              @keyup.enter="addComment"
-            />
-          </label>
-          <button
-            class="secondary-button"
-            data-testid="lifecycle-comment-submit"
-            :disabled="actionBusy || !commentDraft.trim()"
-            @click="addComment"
+          <p class="row-id">
+            <strong>{{ text(record.summary) }}</strong>
+          </p>
+
+          <p
+            v-if="suppressionActive"
+            class="warn-notice"
+            role="status"
+            data-testid="lifecycle-suppression-banner"
           >
-            Comment
-          </button>
-        </div>
-      </template>
-    </section>
+            Suppressed until {{ text(record.suppressedUntil) }} — escalation is paused, so nobody is
+            being paged for it.
+            <span v-if="record.suppressedReason">Reason: {{ record.suppressedReason }}</span>
+          </p>
+          <p
+            v-if="String(record.notificationState ?? '') === 'undeliverable'"
+            class="warn-notice"
+            role="alert"
+            data-testid="lifecycle-undeliverable-banner"
+          >
+            This alert's escalation could not be delivered to any channel — it has reached nobody.
+            Check notification readiness on the Escalation &amp; Maintenance workspace.
+          </p>
+
+          <dl class="detail-grid">
+            <dt>Alert ID</dt>
+            <dd class="mono">{{ text(record.id) }}</dd>
+            <dt>Assigned to</dt>
+            <dd class="mono" data-testid="lifecycle-detail-assignee">
+              {{ text(record.assignedToUsername ?? record.assignedTo, 'unassigned') }}
+            </dd>
+            <dt>Assigned at</dt>
+            <dd>{{ text(record.assignedAt) }}</dd>
+            <dt>Suppressed until</dt>
+            <dd data-testid="lifecycle-detail-suppressed">{{ text(record.suppressedUntil) }}</dd>
+            <dt>Opened</dt>
+            <dd>{{ text(record.openedAt) }}</dd>
+            <dt>Escalated</dt>
+            <dd>{{ text(record.escalatedAt) }}</dd>
+            <dt>Resolved</dt>
+            <dd>{{ text(record.resolvedAt) }}</dd>
+            <dt>Closed</dt>
+            <dd>{{ text(record.closedAt) }}</dd>
+            <dt>Correlation group</dt>
+            <dd class="mono">{{ text(record.correlationGroup) }}</dd>
+          </dl>
+
+          <!-- Actions ---------------------------------------------------------- -->
+          <h3>Actions</h3>
+          <p v-if="actionNotice" class="notice" role="status" data-testid="lifecycle-action-notice">
+            {{ actionNotice }}
+          </p>
+          <p
+            v-if="actionError"
+            class="form-error"
+            role="alert"
+            data-testid="lifecycle-action-error"
+          >
+            {{ actionError }}
+          </p>
+
+          <template v-if="canAct">
+            <label class="filter-select filter-search">
+              <span>Note / reason (recorded in the thread and the audit log)</span>
+              <input
+                v-model="actionReason"
+                data-testid="lifecycle-reason"
+                type="text"
+                placeholder="What was found, or why this is being parked"
+              />
+            </label>
+            <div class="detail-actions" data-testid="lifecycle-actions">
+              <button
+                class="secondary-button"
+                data-testid="lifecycle-acknowledge"
+                :disabled="actionBusy || !allowed('acknowledge')"
+                :title="blockedReason('acknowledge') || undefined"
+                @click="acknowledgeAlert"
+              >
+                Acknowledge
+              </button>
+              <button
+                class="primary-button"
+                data-testid="lifecycle-resolve"
+                :disabled="actionBusy || !allowed('resolve')"
+                :title="blockedReason('resolve') || undefined"
+                @click="resolveAlert"
+              >
+                Resolve
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="lifecycle-reopen"
+                :disabled="actionBusy || !allowed('reopen')"
+                :title="blockedReason('reopen') || undefined"
+                @click="reopenAlert"
+              >
+                Reopen
+              </button>
+              <button
+                class="secondary-button danger-button"
+                data-testid="lifecycle-close"
+                :disabled="actionBusy || !allowed('close')"
+                :title="blockedReason('close') || undefined"
+                @click="closeAlert"
+              >
+                Close
+              </button>
+            </div>
+
+            <div class="grid-toolbar" data-testid="lifecycle-assign-row">
+              <label class="filter-select filter-search">
+                <span>Assign to</span>
+                <input
+                  v-model="assignee"
+                  data-testid="lifecycle-assignee-input"
+                  type="text"
+                  list="lifecycle-user-options"
+                  placeholder="username"
+                />
+              </label>
+              <datalist id="lifecycle-user-options">
+                <option v-for="name in userOptions" :key="name" :value="name" />
+              </datalist>
+              <button
+                class="secondary-button"
+                data-testid="lifecycle-assign"
+                :disabled="actionBusy || !allowed('assign') || !assignee.trim()"
+                :title="blockedReason('assign') || undefined"
+                @click="assignAlert"
+              >
+                Assign
+              </button>
+              <span class="source-note">
+                The assignee must be a user in this tenant; an unknown name is rejected rather than
+                stored as free text that reaches nobody.
+              </span>
+            </div>
+          </template>
+
+          <div v-if="canSuppress" class="grid-toolbar" data-testid="lifecycle-suppress-row">
+            <label class="filter-select">
+              <span>Suppress for</span>
+              <select v-model.number="suppressMinutes" data-testid="lifecycle-suppress-minutes">
+                <option v-for="choice in SUPPRESS_CHOICES" :key="choice" :value="choice">
+                  {{ choice }} minutes
+                </option>
+              </select>
+            </label>
+            <button
+              class="secondary-button danger-button"
+              data-testid="lifecycle-suppress"
+              :disabled="actionBusy || !allowed('suppress')"
+              :title="blockedReason('suppress') || undefined"
+              @click="suppressAlert"
+            >
+              Suppress
+            </button>
+            <span class="source-note">
+              Suppression stops escalation only. The alert stays visible and returns to open when
+              the window lapses.
+            </span>
+          </div>
+          <p v-else class="source-note" data-testid="lifecycle-suppress-denied">
+            Suppressing an alert stops anyone being paged for it, so it requires the system.manage
+            permission.
+          </p>
+
+          <!-- Thread ----------------------------------------------------------- -->
+          <h3>Thread</h3>
+          <p class="source-note">
+            {{ operatorComments.length }} operator comment(s) and
+            {{ transitionEntries.length }} recorded transition(s). Transitions are written by the
+            platform when the alert moves state — they are history, not somebody's note.
+          </p>
+          <p
+            v-if="commentsState === 'error'"
+            class="form-error"
+            role="alert"
+            data-testid="lifecycle-comments-error"
+          >
+            {{ commentsError }}
+          </p>
+          <template v-else>
+            <EventTimeline
+              v-if="incidentTimeline.length"
+              :items="incidentTimeline"
+              dense
+              data-testid="lifecycle-thread"
+            />
+            <p
+              v-if="commentsState === 'ok' && !comments.length"
+              class="source-note"
+              data-testid="lifecycle-thread-empty"
+            >
+              Nothing has happened to this alert yet beyond it opening.
+            </p>
+            <p v-if="commentsState === 'loading'" class="source-note">Loading the thread…</p>
+          </template>
+
+          <div v-if="canAct" class="grid-toolbar" data-testid="lifecycle-comment-row">
+            <label class="filter-select filter-search">
+              <span>Add a comment</span>
+              <input
+                v-model="commentDraft"
+                data-testid="lifecycle-comment-input"
+                type="text"
+                placeholder="What you found, what you did next"
+                @keyup.enter="addComment"
+              />
+            </label>
+            <button
+              class="secondary-button"
+              data-testid="lifecycle-comment-submit"
+              :disabled="actionBusy || !commentDraft.trim()"
+              @click="addComment"
+            >
+              Comment
+            </button>
+          </div>
+        </template>
+      </div>
+    </DetailDrawer>
   </div>
 </template>
 

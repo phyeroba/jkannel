@@ -28,9 +28,11 @@
  * server-side paging that does not exist.
  */
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { canAccess, session } from '../stores/session';
 import DataState from '../components/DataState.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
   CARRIER_STATUSES,
@@ -212,6 +214,12 @@ async function attach(smsc: UnassignedSmsc) {
   } finally {
     attachBusy.value = '';
   }
+}
+
+/** Opening a carrier from its row. See the `.selectable` row in the template. */
+const router = useRouter();
+function openCarrier(id: string) {
+  void router.push(`/carriers/${id}`);
 }
 
 // --- Create / edit --------------------------------------------------------------
@@ -544,10 +552,29 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
+              <!--
+                The whole row opens the carrier, as `CarriersScreen.jsx` does:
+                `<tr className="selectable" onClick={() => onNavigate(...)}>`.
+                A register row is a target the size of the row, not the size of
+                the word in the first cell.
+
+                It is also keyboard-reachable, which the kit's click-through is
+                not: `tabindex` plus Enter/Space, so this is not a mouse-only
+                affordance. The Open button stays for exactly that reason too —
+                a visible, named control for anyone who does not discover that
+                the row is clickable.
+              -->
               <tr
                 v-for="carrier in visibleCarriers"
                 :key="carrier.id"
+                class="selectable"
                 :data-testid="`carrier-${carrier.id}`"
+                tabindex="0"
+                role="link"
+                :aria-label="`Open ${carrier.name}`"
+                @click="openCarrier(carrier.id)"
+                @keydown.enter.prevent="openCarrier(carrier.id)"
+                @keydown.space.prevent="openCarrier(carrier.id)"
               >
                 <td>
                   <router-link class="text-link" :to="`/carriers/${carrier.id}`">{{
@@ -626,18 +653,21 @@ onMounted(() => {
                   <router-link class="secondary-button" :to="`/carriers/${carrier.id}`"
                     >Open</router-link
                   >
+                  <!-- `.stop`: these act on the row, they do not open it. The
+                       kit does the same with `e.stopPropagation()` on every
+                       control inside a `.selectable` row. -->
                   <template v-if="canManage">
                     <button
                       class="secondary-button"
                       :data-testid="`carrier-edit-${carrier.id}`"
-                      @click="openForm(carrier)"
+                      @click.stop="openForm(carrier)"
                     >
                       Edit
                     </button>
                     <button
                       class="secondary-button danger-button"
                       :data-testid="`carrier-delete-${carrier.id}`"
-                      @click="pendingDelete = carrier"
+                      @click.stop="pendingDelete = carrier"
                     >
                       Delete
                     </button>
@@ -666,42 +696,61 @@ onMounted(() => {
       </p>
     </section>
 
-    <!-- CREATE / EDIT --------------------------------------------------------- -->
-    <section v-if="showForm" class="panel composer" data-testid="carrier-form" aria-label="Carrier">
-      <h2>{{ editingId ? 'Edit carrier' : 'New carrier' }}</h2>
-      <label class="filter-select filter-search">
-        <span>Name (required, up to 120 characters)</span>
-        <input v-model="draftName" data-testid="carrier-form-name" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Country (ISO 3166-1 alpha-2, e.g. UG)</span>
-        <input
-          v-model="draftCountry"
-          data-testid="carrier-form-country"
-          type="text"
-          maxlength="2"
-        />
-      </label>
-      <label class="filter-select">
-        <span>Network code (MCC+MNC, 4–6 digits)</span>
-        <input v-model="draftNetwork" data-testid="carrier-form-network" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Operational status</span>
-        <select v-model="draftStatus" data-testid="carrier-form-status">
-          <option v-for="status in CARRIER_STATUSES" :key="status" :value="status">
-            {{ status }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select filter-search">
-        <span>Notes</span>
-        <input v-model="draftNotes" data-testid="carrier-form-notes" type="text" />
-      </label>
+    <!-- CREATE / EDIT ----------------------------------------------------------
+         A Dialog, as the design system specifies for anything that makes a new
+         record. This was an inline composer that unfolded below a register of
+         every carrier on the gateway, so on any real estate the form opened
+         off-screen and pressing "New carrier" looked like it did nothing. -->
+    <ModalDialog
+      :open="showForm"
+      :title="editingId ? 'Edit carrier' : 'New carrier'"
+      testid="carrier-form"
+      wide
+      @close="closeForm"
+    >
+      <div class="dialog-grid">
+        <label class="filter-select filter-search">
+          <span>Name (required, up to 120 characters)</span>
+          <input v-model="draftName" data-testid="carrier-form-name" type="text" />
+        </label>
+        <label class="filter-select">
+          <span>Country (ISO 3166-1 alpha-2, e.g. UG)</span>
+          <input
+            v-model="draftCountry"
+            data-testid="carrier-form-country"
+            type="text"
+            maxlength="2"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Network code (MCC+MNC, 4–6 digits)</span>
+          <input v-model="draftNetwork" data-testid="carrier-form-network" type="text" />
+        </label>
+        <label class="filter-select">
+          <span>Operational status</span>
+          <select v-model="draftStatus" data-testid="carrier-form-status">
+            <option v-for="status in CARRIER_STATUSES" :key="status" :value="status">
+              {{ status }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-select filter-search">
+          <span>Notes</span>
+          <input v-model="draftNotes" data-testid="carrier-form-notes" type="text" />
+        </label>
+      </div>
       <p v-if="formError" class="form-error" role="alert" data-testid="carrier-form-error">
         {{ formError }}
       </p>
-      <div class="detail-actions">
+      <p v-if="editingId" class="warn-notice" role="note" data-testid="carrier-form-clear-note">
+        Emptying the country, network code or notes field leaves the stored value unchanged. The
+        update endpoint treats a null as “no change”, so this form cannot clear a field once it has
+        been set — it can only replace it.
+      </p>
+      <template #footer>
+        <button class="secondary-button" data-testid="carrier-form-cancel" @click="closeForm">
+          Cancel
+        </button>
         <button
           class="primary-button"
           data-testid="carrier-form-save"
@@ -710,27 +759,22 @@ onMounted(() => {
         >
           {{ formBusy ? 'Saving…' : 'Save carrier' }}
         </button>
-        <button class="secondary-button" data-testid="carrier-form-cancel" @click="closeForm">
-          Cancel
-        </button>
-      </div>
-      <p v-if="editingId" class="warn-notice" role="note" data-testid="carrier-form-clear-note">
-        Emptying the country, network code or notes field leaves the stored value unchanged. The
-        update endpoint treats a null as “no change”, so this form cannot clear a field once it has
-        been set — it can only replace it.
-      </p>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <!-- DELETE CONFIRMATION ---------------------------------------------------- -->
-    <section
-      v-if="pendingDelete"
-      class="panel detail-panel"
-      data-testid="carrier-delete-confirm"
-      role="alertdialog"
-      aria-labelledby="carrier-delete-heading"
+    <!-- DELETE CONFIRMATION ------------------------------------------------------
+         `ConfirmAction` is the kit's component for this, but it exists to render
+         an impact fetched from `/control/smscs/:id/impact/:operation` and there
+         is no such endpoint for a carrier. Rather than invent an impact to fit
+         the component, this states the same four facts in the same Dialog the
+         component itself is built on — impact before the verb, per UC-SMSC-01. -->
+    <ModalDialog
+      :open="Boolean(pendingDelete)"
+      :title="pendingDelete ? `Delete ${pendingDelete.name}?` : ''"
+      testid="carrier-delete-confirm"
+      @close="pendingDelete = null"
     >
-      <h2 id="carrier-delete-heading">Delete {{ pendingDelete.name }}?</h2>
-      <dl class="detail-grid">
+      <dl v-if="pendingDelete" class="detail-grid">
         <dt>SMSCs attached</dt>
         <dd data-testid="carrier-delete-impact">
           {{ pendingDelete.smscCount }} — each becomes unassigned and reappears in the panel at the
@@ -752,7 +796,14 @@ onMounted(() => {
           connections afterwards is manual.
         </dd>
       </dl>
-      <div class="detail-actions">
+      <template #footer>
+        <button
+          class="secondary-button"
+          data-testid="carrier-delete-cancel"
+          @click="pendingDelete = null"
+        >
+          Keep it
+        </button>
         <button
           class="secondary-button danger-button"
           data-testid="carrier-delete-go"
@@ -761,15 +812,8 @@ onMounted(() => {
         >
           {{ deleteBusy ? 'Deleting…' : 'Delete carrier' }}
         </button>
-        <button
-          class="secondary-button"
-          data-testid="carrier-delete-cancel"
-          @click="pendingDelete = null"
-        >
-          Keep it
-        </button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
   </div>
 </template>
 

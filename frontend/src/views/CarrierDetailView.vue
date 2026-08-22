@@ -188,7 +188,9 @@ const trafficLabels = computed(() =>
 async function loadTraffic() {
   trafficState.value = 'loading';
   try {
-    const result = await apiRequest<{ points?: { at: string; outbound: number; inbound: number }[] }>(
+    const result = await apiRequest<{
+      points?: { at: string; outbound: number; inbound: number }[];
+    }>(
       `/performance/throughput?minutes=${TRAFFIC_WINDOW_MINUTES}&carrierId=${encodeURIComponent(carrierId.value)}`,
     );
     trafficPoints.value = Array.isArray(result?.points) ? result.points : [];
@@ -681,7 +683,11 @@ watch(carrierId, reload);
 
       <section class="split-grid wide-left">
         <!-- TRAFFIC AND QUALITY -------------------------------------------- -->
-        <article class="panel" data-testid="carrier-traffic" aria-labelledby="carrier-traffic-heading">
+        <article
+          class="panel"
+          data-testid="carrier-traffic"
+          aria-labelledby="carrier-traffic-heading"
+        >
           <header class="panel-header">
             <div>
               <h2 id="carrier-traffic-heading">Traffic and quality</h2>
@@ -712,7 +718,11 @@ watch(carrierId, reload);
         </article>
 
         <!-- WHAT CHANGED --------------------------------------------------- -->
-        <article class="panel" data-testid="carrier-changes" aria-labelledby="carrier-changes-heading">
+        <article
+          class="panel"
+          data-testid="carrier-changes"
+          aria-labelledby="carrier-changes-heading"
+        >
           <header class="panel-header">
             <div>
               <h2 id="carrier-changes-heading">What changed</h2>

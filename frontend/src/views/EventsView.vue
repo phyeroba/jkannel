@@ -29,6 +29,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import { canAccess, session } from '../stores/session';
 import { resolveWindow, selectedRange } from '../stores/time-range';
 import { displayValue, type DataState as State } from '../utils/data-state';
@@ -543,155 +544,155 @@ onMounted(load);
       </DataState>
     </section>
 
-    <!-- ONE INCIDENT, THREADED ---------------------------------------------- -->
-    <section
-      v-if="bundleId"
-      class="panel detail-panel"
-      data-testid="correlation-panel"
-      aria-labelledby="correlation-heading"
+    <!-- ONE INCIDENT, THREADED ----------------------------------------------
+         In a sheet: the event stream this was opened from is the context for
+         reading it, and a panel below the stream scrolls that context away. -->
+    <DetailDrawer
+      :open="Boolean(bundleId)"
+      title="Incident thread"
+      eyebrow="Correlation"
+      :subtitle="bundleId"
+      wide
+      @close="closeCorrelation"
     >
-      <header>
-        <div>
-          <h2 id="correlation-heading">Incident thread</h2>
-          <p class="mono" data-testid="correlation-id">{{ bundleId }}</p>
-        </div>
-        <button class="secondary-button" data-testid="correlation-close" @click="closeCorrelation">
-          Close
-        </button>
-      </header>
-
-      <DataState
-        :state="bundleState"
-        subject="this incident"
-        skeleton="table"
-        :skeleton-rows="4"
-        :detail="bundleState === 'error' ? bundleError : undefined"
-        permission="monitoring.view"
-        testid="correlation-state"
-        :on-retry="() => openCorrelation(bundleId)"
-      >
-        <div class="summary-strip">
-          <div class="metric">
-            <strong data-testid="correlation-metric-events">{{
-              displayValue(bundle?.events?.length, bundleState)
-            }}</strong>
-            <small>events</small>
+      <div data-testid="correlation-panel">
+        <p class="mono" data-testid="correlation-id">{{ bundleId }}</p>
+        <DataState
+          :state="bundleState"
+          subject="this incident"
+          skeleton="table"
+          :skeleton-rows="4"
+          :detail="bundleState === 'error' ? bundleError : undefined"
+          permission="monitoring.view"
+          testid="correlation-state"
+          :on-retry="() => openCorrelation(bundleId)"
+        >
+          <div class="summary-strip">
+            <div class="metric">
+              <strong data-testid="correlation-metric-events">{{
+                displayValue(bundle?.events?.length, bundleState)
+              }}</strong>
+              <small>events</small>
+            </div>
+            <div class="metric">
+              <strong data-testid="correlation-metric-alerts">{{
+                displayValue(bundle?.alerts?.length, bundleState)
+              }}</strong>
+              <small>alerts</small>
+            </div>
+            <div class="metric">
+              <strong data-testid="correlation-metric-audit">{{
+                displayValue(bundle?.audit?.length, bundleState)
+              }}</strong>
+              <small>audit entries</small>
+            </div>
           </div>
-          <div class="metric">
-            <strong data-testid="correlation-metric-alerts">{{
-              displayValue(bundle?.alerts?.length, bundleState)
-            }}</strong>
-            <small>alerts</small>
-          </div>
-          <div class="metric">
-            <strong data-testid="correlation-metric-audit">{{
-              displayValue(bundle?.audit?.length, bundleState)
-            }}</strong>
-            <small>audit entries</small>
-          </div>
-        </div>
 
-        <!-- Events ---------------------------------------------------------- -->
-        <h3>Events</h3>
-        <ul v-if="bundle?.events?.length" class="sample-list" data-testid="correlation-events">
-          <li v-for="event in bundle.events" :key="event.id">
-            <span class="status-badge" :class="severityTone(event.severity)">{{
-              severityWord(event.severity)
-            }}</span>
-            <span class="mono">{{ event.kind }}</span>
-            <span>{{ event.summary }}</span>
-            <small>{{ formatMoment(event.observed_at) }}</small>
-          </li>
-        </ul>
-        <p v-else class="source-note" data-testid="correlation-events-empty">
-          No operational event carries this correlation id.
-        </p>
+          <!-- Events ---------------------------------------------------------- -->
+          <h3>Events</h3>
+          <ul v-if="bundle?.events?.length" class="sample-list" data-testid="correlation-events">
+            <li v-for="event in bundle.events" :key="event.id">
+              <span class="status-badge" :class="severityTone(event.severity)">{{
+                severityWord(event.severity)
+              }}</span>
+              <span class="mono">{{ event.kind }}</span>
+              <span>{{ event.summary }}</span>
+              <small>{{ formatMoment(event.observed_at) }}</small>
+            </li>
+          </ul>
+          <p v-else class="source-note" data-testid="correlation-events-empty">
+            No operational event carries this correlation id.
+          </p>
 
-        <!-- Alerts ---------------------------------------------------------- -->
-        <h3>Alerts</h3>
-        <ul v-if="bundle?.alerts?.length" class="sample-list" data-testid="correlation-alerts">
-          <li v-for="alert in bundle.alerts" :key="alert.id">
-            <span class="status-badge" :class="severityTone(alert.severity)">{{
-              severityWord(alert.severity)
-            }}</span>
-            <span>{{ alert.summary }}</span>
-            <small
-              >opened {{ formatMoment(alert.opened_at) }} ·
-              {{ alert.resolved_at ? `resolved ${formatMoment(alert.resolved_at)}` : 'still open' }}
-            </small>
-          </li>
-        </ul>
-        <p v-else class="source-note" data-testid="correlation-alerts-empty">
-          No alert was raised under this correlation id.
-        </p>
+          <!-- Alerts ---------------------------------------------------------- -->
+          <h3>Alerts</h3>
+          <ul v-if="bundle?.alerts?.length" class="sample-list" data-testid="correlation-alerts">
+            <li v-for="alert in bundle.alerts" :key="alert.id">
+              <span class="status-badge" :class="severityTone(alert.severity)">{{
+                severityWord(alert.severity)
+              }}</span>
+              <span>{{ alert.summary }}</span>
+              <small
+                >opened {{ formatMoment(alert.opened_at) }} ·
+                {{
+                  alert.resolved_at ? `resolved ${formatMoment(alert.resolved_at)}` : 'still open'
+                }}
+              </small>
+            </li>
+          </ul>
+          <p v-else class="source-note" data-testid="correlation-alerts-empty">
+            No alert was raised under this correlation id.
+          </p>
 
-        <!-- Audit ----------------------------------------------------------- -->
-        <h3>Audit entries</h3>
-        <ul v-if="bundle?.audit?.length" class="sample-list" data-testid="correlation-audit">
-          <li v-for="entry in bundle.audit" :key="entry.id">
-            <span class="mono">{{ entry.action }}</span>
-            <span class="mono">{{
-              [entry.entity_type, entry.entity_id].filter(Boolean).join(' ')
-            }}</span>
-            <small>{{ formatMoment(entry.created_at) }}</small>
-          </li>
-        </ul>
-        <p v-else class="source-note" data-testid="correlation-audit-empty">
-          No operator action was recorded under this correlation id.
-        </p>
+          <!-- Audit ----------------------------------------------------------- -->
+          <h3>Audit entries</h3>
+          <ul v-if="bundle?.audit?.length" class="sample-list" data-testid="correlation-audit">
+            <li v-for="entry in bundle.audit" :key="entry.id">
+              <span class="mono">{{ entry.action }}</span>
+              <span class="mono">{{
+                [entry.entity_type, entry.entity_id].filter(Boolean).join(' ')
+              }}</span>
+              <small>{{ formatMoment(entry.created_at) }}</small>
+            </li>
+          </ul>
+          <p v-else class="source-note" data-testid="correlation-audit-empty">
+            No operator action was recorded under this correlation id.
+          </p>
 
-        <!--
+          <!--
           THE LOG CAVEAT. Rendered from the API's own `note`, above the log
           section rather than below it, because it is the thing that makes an
           empty log section readable.
         -->
-        <h3>Structured logs</h3>
-        <p class="warn-notice" role="note" data-testid="correlation-log-caveat">
-          <strong>Logs are process-local and do not survive a restart.</strong> An older incident
-          will often have events and audit entries here with no log lines at all — that is the
-          buffer having wrapped or the process having restarted, not proof that nothing was logged.
-          <span class="mono" data-testid="correlation-note">{{ bundle?.note }}</span>
-        </p>
+          <h3>Structured logs</h3>
+          <p class="warn-notice" role="note" data-testid="correlation-log-caveat">
+            <strong>Logs are process-local and do not survive a restart.</strong> An older incident
+            will often have events and audit entries here with no log lines at all — that is the
+            buffer having wrapped or the process having restarted, not proof that nothing was
+            logged.
+            <span class="mono" data-testid="correlation-note">{{ bundle?.note }}</span>
+          </p>
 
-        <ul v-if="logs.length" class="sample-list" data-testid="correlation-logs">
-          <li v-for="(line, index) in logs" :key="index">
-            <span class="status-badge muted">{{ line.level ?? 'unknown' }}</span>
-            <span>{{ line.message }}</span>
-            <small>{{ formatMoment(line.timestamp) }}</small>
-          </li>
-        </ul>
-        <p
-          v-else-if="logState === 'permission-denied'"
-          class="source-note"
-          data-testid="correlation-logs-forbidden"
-        >
-          Log lines were not requested: reading them needs the
-          <span class="mono">system.view</span> permission, which this account does not hold. The
-          events, alerts and audit entries above are complete regardless — this section being empty
-          says nothing about whether lines exist.
-        </p>
-        <p
-          v-else-if="logState === 'error'"
-          class="source-note"
-          data-testid="correlation-logs-error"
-        >
-          The log buffer could not be queried: {{ logError }}. Treat this section as unread rather
-          than empty.
-        </p>
-        <p
-          v-else-if="logState === 'loading'"
-          class="source-note"
-          data-testid="correlation-logs-loading"
-        >
-          Reading the log buffer…
-        </p>
-        <p v-else class="source-note" data-testid="correlation-logs-empty">
-          This API process holds no log line for this correlation id. Read that as “not retained
-          here”, not as “nothing happened” — see the caveat above. The Log Explorer shows how much
-          of the buffer has already been evicted.
-        </p>
-      </DataState>
-    </section>
+          <ul v-if="logs.length" class="sample-list" data-testid="correlation-logs">
+            <li v-for="(line, index) in logs" :key="index">
+              <span class="status-badge muted">{{ line.level ?? 'unknown' }}</span>
+              <span>{{ line.message }}</span>
+              <small>{{ formatMoment(line.timestamp) }}</small>
+            </li>
+          </ul>
+          <p
+            v-else-if="logState === 'permission-denied'"
+            class="source-note"
+            data-testid="correlation-logs-forbidden"
+          >
+            Log lines were not requested: reading them needs the
+            <span class="mono">system.view</span> permission, which this account does not hold. The
+            events, alerts and audit entries above are complete regardless — this section being
+            empty says nothing about whether lines exist.
+          </p>
+          <p
+            v-else-if="logState === 'error'"
+            class="source-note"
+            data-testid="correlation-logs-error"
+          >
+            The log buffer could not be queried: {{ logError }}. Treat this section as unread rather
+            than empty.
+          </p>
+          <p
+            v-else-if="logState === 'loading'"
+            class="source-note"
+            data-testid="correlation-logs-loading"
+          >
+            Reading the log buffer…
+          </p>
+          <p v-else class="source-note" data-testid="correlation-logs-empty">
+            This API process holds no log line for this correlation id. Read that as “not retained
+            here”, not as “nothing happened” — see the caveat above. The Log Explorer shows how much
+            of the buffer has already been evicted.
+          </p>
+        </DataState>
+      </div>
+    </DetailDrawer>
   </div>
 </template>
 

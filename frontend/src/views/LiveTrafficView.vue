@@ -84,7 +84,9 @@ const register = ref<SmscOption[]>([]);
 
 async function loadRegister() {
   try {
-    const page = await apiRequest<{ items?: Record<string, unknown>[] }>('/smscs?limit=500&offset=0');
+    const page = await apiRequest<{ items?: Record<string, unknown>[] }>(
+      '/smscs?limit=500&offset=0',
+    );
     register.value = smscOptionsFrom(Array.isArray(page?.items) ? page.items : []);
   } catch {
     // The matrix degrades to engine-only columns; the rates are the point of
@@ -153,9 +155,9 @@ const trendLabels = computed(() =>
 async function loadTrend() {
   trendState.value = 'loading';
   try {
-    const result = await apiRequest<{ points?: { at: string; outbound: number; inbound: number }[] }>(
-      `/performance/throughput?minutes=${TREND_WINDOW_MINUTES}`,
-    );
+    const result = await apiRequest<{
+      points?: { at: string; outbound: number; inbound: number }[];
+    }>(`/performance/throughput?minutes=${TREND_WINDOW_MINUTES}`);
     trendPoints.value = Array.isArray(result?.points) ? result.points : [];
     trendState.value = trendPoints.value.length ? 'live' : 'empty';
   } catch {

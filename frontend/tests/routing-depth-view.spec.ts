@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -119,9 +120,9 @@ describe('Advanced routing view', () => {
     stubApi();
     const wrapper = mount(RoutingDepthView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-row-route-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="route-row-route-1"]')).toBe(true),
     );
-    const row = wrapper.get('[data-testid="route-row-route-1"]').text();
+    const row = overlay(wrapper, '[data-testid="route-row-route-1"]').text();
     expect(row).toContain('weighted');
     expect(row).toContain('load-balance');
     expect(row).toContain('prefix 25677');
@@ -138,15 +139,15 @@ describe('Advanced routing view', () => {
     const fetchMock = stubApi();
     const wrapper = mount(RoutingDepthView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-row-route-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="route-row-route-1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="route-filter-type"]').setValue('prefix');
+    await overlay(wrapper, '[data-testid="route-filter-type"]').setValue('prefix');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.routeType=prefix')),
       ).toBe(true),
     );
-    await wrapper.get('[data-testid="route-filter-strategy"]').setValue('least-cost');
+    await overlay(wrapper, '[data-testid="route-filter-strategy"]').setValue('least-cost');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.strategy=least-cost')),
@@ -161,22 +162,20 @@ describe('Advanced routing view', () => {
   it('creates a weighted route with its targets and window in one payload', async () => {
     const fetchMock = stubApi();
     const wrapper = mount(RoutingDepthView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-create"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="route-create"]').trigger('click');
-    await wrapper.get('[data-testid="route-name"]').setValue('Split MTN');
-    await wrapper.get('[data-testid="route-priority"]').setValue('20');
-    await wrapper.get('[data-testid="route-type"]').setValue('weighted');
-    await wrapper.get('[data-testid="route-strategy"]').setValue('round-robin');
-    await wrapper.get('[data-testid="route-target"]').setValue(SMSC_A);
-    await wrapper.get('[data-testid="route-fallback"]').setValue(SMSC_B);
-    await wrapper.get('[data-testid="route-window-start"]').setValue('08:00');
-    await wrapper.get('[data-testid="route-window-end"]').setValue('20:00');
-    await wrapper.get('[data-testid="route-target-add"]').trigger('click');
-    await wrapper.get('[data-testid="route-target-smsc-0"]').setValue(SMSC_A);
-    await wrapper.get('[data-testid="route-target-weight-0"]').setValue('4');
-    await wrapper.get('[data-testid="route-save"]').trigger('click');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="route-create"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="route-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="route-name"]').setValue('Split MTN');
+    await overlay(wrapper, '[data-testid="route-priority"]').setValue('20');
+    await overlay(wrapper, '[data-testid="route-type"]').setValue('weighted');
+    await overlay(wrapper, '[data-testid="route-strategy"]').setValue('round-robin');
+    await overlay(wrapper, '[data-testid="route-target"]').setValue(SMSC_A);
+    await overlay(wrapper, '[data-testid="route-fallback"]').setValue(SMSC_B);
+    await overlay(wrapper, '[data-testid="route-window-start"]').setValue('08:00');
+    await overlay(wrapper, '[data-testid="route-window-end"]').setValue('20:00');
+    await overlay(wrapper, '[data-testid="route-target-add"]').trigger('click');
+    await overlay(wrapper, '[data-testid="route-target-smsc-0"]').setValue(SMSC_A);
+    await overlay(wrapper, '[data-testid="route-target-weight-0"]').setValue('4');
+    await overlay(wrapper, '[data-testid="route-save"]').trigger('click');
 
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
@@ -202,18 +201,16 @@ describe('Advanced routing view', () => {
   it('refuses a weighted route with no targets rather than letting the API 400', async () => {
     const fetchMock = stubApi();
     const wrapper = mount(RoutingDepthView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-create"]').exists()).toBe(true),
-    );
-    await wrapper.get('[data-testid="route-create"]').trigger('click');
-    await wrapper.get('[data-testid="route-name"]').setValue('No targets');
-    await wrapper.get('[data-testid="route-type"]').setValue('weighted');
-    await wrapper.get('[data-testid="route-target"]').setValue(SMSC_A);
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="route-create"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="route-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="route-name"]').setValue('No targets');
+    await overlay(wrapper, '[data-testid="route-type"]').setValue('weighted');
+    await overlay(wrapper, '[data-testid="route-target"]').setValue(SMSC_A);
     // Switching to weighted surfaces one empty target row; leaving it unset
     // must be caught here rather than by a 400 from the API.
-    expect(wrapper.find('[data-testid="route-target-0"]').exists()).toBe(true);
-    await wrapper.get('[data-testid="route-save"]').trigger('click');
-    expect(wrapper.get('[data-testid="route-form-error"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="route-target-0"]')).toBe(true);
+    await overlay(wrapper, '[data-testid="route-save"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="route-form-error"]').text()).toContain(
       'at least one target SMSC',
     );
     expect(
@@ -225,18 +222,22 @@ describe('Advanced routing view', () => {
   it('previews a route decision with its full explain trace', async () => {
     const fetchMock = stubApi();
     const wrapper = mount(RoutingDepthView);
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="resolve-run"]').exists()).toBe(true));
-    await wrapper.get('[data-testid="resolve-msisdn"]').setValue('+256700000000');
-    await wrapper.get('[data-testid="resolve-rotation"]').setValue('2');
-    await wrapper.get('[data-testid="resolve-run"]').trigger('click');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="resolve-run"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="resolve-msisdn"]').setValue('+256700000000');
+    await overlay(wrapper, '[data-testid="resolve-rotation"]').setValue('2');
+    await overlay(wrapper, '[data-testid="resolve-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="resolve-result"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="resolve-result"]')).toBe(true),
     );
     const post = fetchMock.mock.calls.find((call) => String(call[0]).includes('/routing/resolve'));
     expect(bodyOf(post)).toEqual({ msisdn: '+256700000000', rotation: 2 });
-    expect(wrapper.get('[data-testid="resolve-smsc"]').text()).toBe('Primary SMPP (primary-smpp)');
-    expect(wrapper.get('[data-testid="resolve-trace"]').text()).toContain('matched prefix 25677');
-    expect(wrapper.get('[data-testid="resolve-reason"]').text()).toContain('weighted split');
+    expect(overlay(wrapper, '[data-testid="resolve-smsc"]').text()).toBe(
+      'Primary SMPP (primary-smpp)',
+    );
+    expect(overlay(wrapper, '[data-testid="resolve-trace"]').text()).toContain(
+      'matched prefix 25677',
+    );
+    expect(overlay(wrapper, '[data-testid="resolve-reason"]').text()).toContain('weighted split');
     wrapper.unmount();
   });
 
@@ -244,16 +245,18 @@ describe('Advanced routing view', () => {
     stubApi();
     const wrapper = mount(RoutingDepthView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-versions-route-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="route-versions-route-1"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="route-versions-route-1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="route-versions-route-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-version-2"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="route-version-2"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="route-version-2"]').text()).toContain('weights rebalanced');
-    await wrapper.get('[data-testid="route-version-view-2"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="route-version-2"]').text()).toContain(
+      'weights rebalanced',
+    );
+    await overlay(wrapper, '[data-testid="route-version-view-2"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="route-version-definition"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="route-version-definition"]').text()).toContain(
         'UG weighted split',
       ),
     );
@@ -265,14 +268,16 @@ describe('Advanced routing view', () => {
     stubApi();
     const wrapper = mount(RoutingDepthView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="route-row-route-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="route-row-route-1"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="route-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="route-edit-route-1"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="route-archive-route-1"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="route-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="route-edit-route-1"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="route-archive-route-1"]')).toBe(false);
     // History and the resolve preview stay available on routes.view.
-    expect(wrapper.find('[data-testid="route-versions-route-1"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="routing-depth-readonly"]').text()).toContain('routes.manage');
+    expect(overlayHas(wrapper, '[data-testid="route-versions-route-1"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="routing-depth-readonly"]').text()).toContain(
+      'routes.manage',
+    );
     wrapper.unmount();
   });
 });

@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -89,15 +90,17 @@ describe('Roles & permissions view', () => {
   it('lists roles with their grants and the users who actually hold them', async () => {
     stubApi();
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    const admin = wrapper.get('[data-testid="role-row-r1"]').text();
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
+    const admin = overlay(wrapper, '[data-testid="role-row-r1"]').text();
     expect(admin).toContain('administrator');
     expect(admin).toContain('3 granted');
     expect(admin).toContain('users.manage');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="role-row-r1"]').text()).toContain('amina, joel'),
+      expect(overlay(wrapper, '[data-testid="role-row-r1"]').text()).toContain('amina, joel'),
     );
-    expect(wrapper.get('[data-testid="role-row-r2"]').text()).toContain('nobody holds this role');
+    expect(overlay(wrapper, '[data-testid="role-row-r2"]').text()).toContain(
+      'nobody holds this role',
+    );
     wrapper.unmount();
   });
 
@@ -105,19 +108,21 @@ describe('Roles & permissions view', () => {
     stubApi();
     const wrapper = await mountRoles();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="permission-row-smsc.view"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="permission-row-smsc.view"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="permission-group-users"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="permission-group-smsc"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="permission-group-users"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="permission-group-smsc"]')).toBe(true);
     // administrator grants users.manage; auditor does not.
     expect(
-      wrapper.get('[data-testid="permission-cell-administrator-users.manage"]').text(),
+      overlay(wrapper, '[data-testid="permission-cell-administrator-users.manage"]').text(),
     ).toContain('granted');
-    expect(wrapper.get('[data-testid="permission-cell-auditor-users.manage"]').text()).toBe('—');
+    expect(overlay(wrapper, '[data-testid="permission-cell-auditor-users.manage"]').text()).toBe(
+      '—',
+    );
 
-    await wrapper.get('[data-testid="permission-filter"]').setValue('smsc');
-    expect(wrapper.find('[data-testid="permission-row-users.manage"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="permission-row-smsc.view"]').exists()).toBe(true);
+    await overlay(wrapper, '[data-testid="permission-filter"]').setValue('smsc');
+    expect(overlayHas(wrapper, '[data-testid="permission-row-users.manage"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="permission-row-smsc.view"]')).toBe(true);
     wrapper.unmount();
   });
 
@@ -125,48 +130,52 @@ describe('Roles & permissions view', () => {
     stubApi();
     const wrapper = await mountRoles();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="permission-row-smsc.view"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="permission-row-smsc.view"]')).toBe(true),
     );
     // messages.send is on the session but on no role — exactly the seeding gap.
-    expect(wrapper.get('[data-testid="permission-orphans"]').text()).toContain('messages.send');
+    expect(overlay(wrapper, '[data-testid="permission-orphans"]').text()).toContain(
+      'messages.send',
+    );
     wrapper.unmount();
   });
 
   it('shows isSystem and userCount, and blocks the deletes the API would refuse', async () => {
     stubApi();
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
     // administrator: system role, 2 holders -> delete disabled twice over.
-    expect(wrapper.find('[data-testid="role-system-r1"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="role-user-count-r1"]').text()).toBe('2');
-    expect(wrapper.get('[data-testid="role-delete-r1"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-testid="role-delete-blocked-r1"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="role-system-r1"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="role-user-count-r1"]').text()).toBe('2');
+    expect(overlay(wrapper, '[data-testid="role-delete-r1"]').attributes('disabled')).toBeDefined();
+    expect(overlay(wrapper, '[data-testid="role-delete-blocked-r1"]').text()).toContain(
       'system role cannot be deleted',
     );
     // auditor: ordinary role with nobody holding it -> deletable.
-    expect(wrapper.find('[data-testid="role-system-r2"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="role-delete-r2"]').attributes('disabled')).toBeUndefined();
-    expect(wrapper.find('[data-testid="role-delete-blocked-r2"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="role-system-r2"]')).toBe(false);
+    expect(
+      overlay(wrapper, '[data-testid="role-delete-r2"]').attributes('disabled'),
+    ).toBeUndefined();
+    expect(overlayHas(wrapper, '[data-testid="role-delete-blocked-r2"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('creates a role with permissions picked from the catalogue, grouped by category', async () => {
     const fetchMock = stubApi();
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
 
-    await wrapper.get('[data-testid="role-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="role-create"]').trigger('click');
     // Grouping comes from the catalogue's own `category`, not the code prefix.
-    expect(wrapper.find('[data-testid="role-permission-group-users"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="role-permission-group-smsc"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="role-permission-smsc.manage"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="role-permission-group-users"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="role-permission-group-smsc"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="role-permission-smsc.manage"]').text()).toContain(
       'Change SMSC connections',
     );
 
-    await wrapper.get('[data-testid="role-name"]').setValue('noc-operator');
-    await wrapper.get('[data-testid="role-description"]').setValue('Day shift');
-    await wrapper.get('[data-testid="role-permission-smsc.view"] input').setValue(true);
-    await wrapper.get('[data-testid="role-save"]').trigger('click');
+    await overlay(wrapper, '[data-testid="role-name"]').setValue('noc-operator');
+    await overlay(wrapper, '[data-testid="role-description"]').setValue('Day shift');
+    await overlay(wrapper, '[data-testid="role-permission-smsc.view"] input').setValue(true);
+    await overlay(wrapper, '[data-testid="role-save"]').trigger('click');
 
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -188,17 +197,17 @@ describe('Roles & permissions view', () => {
   it('edits a system role without sending a rename, and sends the whole replacement set', async () => {
     const fetchMock = stubApi();
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
 
-    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
-    expect(wrapper.get('[data-testid="role-form-system-note"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="role-edit-r1"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="role-form-system-note"]').text()).toContain(
       'refuses a rename',
     );
-    expect(wrapper.get('[data-testid="role-name"]').attributes('disabled')).toBeDefined();
+    expect(overlay(wrapper, '[data-testid="role-name"]').attributes('disabled')).toBeDefined();
     // Untick smsc.view: PATCH replaces the whole set, so it must be absent.
-    await wrapper.get('[data-testid="role-permission-smsc.view"] input').setValue(false);
-    expect(wrapper.get('[data-testid="role-permission-diff"]').text()).toContain('smsc.view');
-    await wrapper.get('[data-testid="role-save"]').trigger('click');
+    await overlay(wrapper, '[data-testid="role-permission-smsc.view"] input').setValue(false);
+    expect(overlay(wrapper, '[data-testid="role-permission-diff"]').text()).toContain('smsc.view');
+    await overlay(wrapper, '[data-testid="role-save"]').trigger('click');
 
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -215,11 +224,11 @@ describe('Roles & permissions view', () => {
   it('warns before a change that would leave nobody holding users.manage', async () => {
     stubApi();
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
-    expect(wrapper.find('[data-testid="role-admin-warning"]').exists()).toBe(false);
-    await wrapper.get('[data-testid="role-permission-users.manage"] input').setValue(false);
-    expect(wrapper.get('[data-testid="role-admin-warning"]').text()).toContain('users.manage');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="role-edit-r1"]').trigger('click');
+    expect(overlayHas(wrapper, '[data-testid="role-admin-warning"]')).toBe(false);
+    await overlay(wrapper, '[data-testid="role-permission-users.manage"] input').setValue(false);
+    expect(overlay(wrapper, '[data-testid="role-admin-warning"]').text()).toContain('users.manage');
     wrapper.unmount();
   });
 
@@ -232,11 +241,11 @@ describe('Roles & permissions view', () => {
         : undefined,
     );
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    await wrapper.get('[data-testid="role-edit-r1"]').trigger('click');
-    await wrapper.get('[data-testid="role-save"]').trigger('click');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="role-edit-r1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="role-save"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="role-form-error"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="role-form-error"]').text()).toContain(
         'no user holding users.manage',
       ),
     );
@@ -252,16 +261,16 @@ describe('Roles & permissions view', () => {
         : undefined,
     );
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    await wrapper.get('[data-testid="role-create"]').trigger('click');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="role-create"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="permission-catalogue-error"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="permission-catalogue-error"]').text()).toContain(
         'GET /users/permissions',
       ),
     );
     // It falls back to the codes roles advertise, and never claims more.
-    expect(wrapper.find('[data-testid="role-permission-smsc.view"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="role-permission-smsc.manage"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="role-permission-smsc.view"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="role-permission-smsc.manage"]')).toBe(false);
     wrapper.unmount();
   });
 
@@ -276,11 +285,11 @@ describe('Roles & permissions view', () => {
       permissions: new Set(['users.view']),
     };
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="role-row-r1"]').exists()).toBe(true));
-    expect(wrapper.find('[data-testid="role-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="role-edit-r1"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="role-delete-r1"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="roles-readonly"]').text()).toContain('users.manage');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="role-row-r1"]')).toBe(true));
+    expect(overlayHas(wrapper, '[data-testid="role-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="role-edit-r1"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="role-delete-r1"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="roles-readonly"]').text()).toContain('users.manage');
     (store.session as { value: unknown }).value = original;
     wrapper.unmount();
   });
@@ -297,8 +306,8 @@ describe('Roles & permissions view', () => {
         ),
     );
     const wrapper = await mountRoles();
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="roles-error"]').exists()).toBe(true));
-    expect(wrapper.get('[data-testid="roles-error"]').text()).toContain('not available');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="roles-error"]')).toBe(true));
+    expect(overlay(wrapper, '[data-testid="roles-error"]').text()).toContain('not available');
     wrapper.unmount();
   });
 });

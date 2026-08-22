@@ -197,8 +197,8 @@ onMounted(() => {
       <p class="source-note">
         The ceiling is {{ text(policy.maxLatenessMinutes) }} minute(s), set by
         <span class="mono">{{ text(policy.configuredBy) }}</span> on this deployment. Read from the
-        server rather than written into this screen, so it cannot drift from what the release
-        worker actually does.
+        server rather than written into this screen, so it cannot drift from what the release worker
+        actually does.
       </p>
     </section>
 
@@ -319,9 +319,9 @@ onMounted(() => {
                       </button>
                     </div>
                     <p class="source-note">
-                      The same rules the send path applies: not in the past beyond a minute's
-                      grace, not more than a year out, and not after the message's own validity
-                      would have expired.
+                      The same rules the send path applies: not in the past beyond a minute's grace,
+                      not more than a year out, and not after the message's own validity would have
+                      expired.
                     </p>
                   </td>
                 </tr>
@@ -338,8 +338,8 @@ onMounted(() => {
         </label>
       </div>
       <p v-else class="source-note" data-testid="scheduled-readonly">
-        Cancelling and moving a hold need <span class="mono">messages.send</span>. The list above
-        is readable without it.
+        Cancelling and moving a hold need <span class="mono">messages.send</span>. The list above is
+        readable without it.
       </p>
     </section>
   </div>

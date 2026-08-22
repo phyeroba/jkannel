@@ -33,6 +33,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -1039,14 +1040,16 @@ onMounted(() => {
       </p>
     </section>
 
-    <!-- Rule editor ------------------------------------------------------------ -->
-    <section
-      v-if="showForm"
-      class="panel composer"
-      data-testid="content-rule-form"
-      aria-label="Content rule editor"
+    <!-- Rule editor ------------------------------------------------------------
+         A Dialog, per the design system: a form that makes a record is an
+         overlay, never a panel that unfolds below the register it adds to. -->
+    <ModalDialog
+      :open="showForm"
+      :title="editingId ? 'Edit content rule' : 'New content rule'"
+      testid="content-rule-form"
+      wide
+      @close="closeForm"
     >
-      <h2>{{ editingId ? 'Edit content rule' : 'New content rule' }}</h2>
       <label class="filter-select filter-search">
         <span>Name (unique, up to 200 characters)</span>
         <input v-model="draftName" data-testid="content-form-name" type="text" />
@@ -1145,7 +1148,10 @@ onMounted(() => {
       <p v-if="formError" class="form-error" role="alert" data-testid="content-form-error">
         {{ formError }}
       </p>
-      <div class="detail-actions">
+      <template #footer>
+        <button class="secondary-button" data-testid="content-form-cancel" @click="closeForm">
+          Cancel
+        </button>
         <button
           class="primary-button"
           data-testid="content-form-save"
@@ -1154,11 +1160,8 @@ onMounted(() => {
         >
           {{ busy ? 'Saving…' : 'Save rule' }}
         </button>
-        <button class="secondary-button" data-testid="content-form-cancel" @click="closeForm">
-          Cancel
-        </button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
   </div>
 </template>
 

@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
+import { overlay } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -207,9 +208,11 @@ describe('carriers register — the table', () => {
     await wrapper
       .get('[data-testid="carrier-delete-11111111-1111-4111-8111-111111111111"]')
       .trigger('click');
-    const dialog = wrapper.get('[data-testid="carrier-delete-confirm"]');
-    expect(dialog.attributes('role')).toBe('alertdialog');
-    expect(wrapper.get('[data-testid="carrier-delete-impact"]').text()).toContain('3');
+    // The confirmation is a Dialog, so it is teleported to the body rather than
+    // rendered under the register — see `tests/overlay.ts`.
+    const dialog = overlay(wrapper, '[data-testid="carrier-delete-confirm"]');
+    expect(dialog.find('[role="dialog"]').exists()).toBe(true);
+    expect(overlay(wrapper, '[data-testid="carrier-delete-impact"]').text()).toContain('3');
     expect(dialog.text()).toContain('keep carrying traffic');
   });
 

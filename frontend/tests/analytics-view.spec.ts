@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { overlay, overlayAll, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -153,9 +154,9 @@ describe('Analytics & Reports view', () => {
     vi.stubGlobal('fetch', liveMock());
     const wrapper = mount(AnalyticsView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="overview-cards"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="overview-cards"]')).toBe(true),
     );
-    const cards = wrapper.get('[data-testid="overview-cards"]').text();
+    const cards = overlay(wrapper, '[data-testid="overview-cards"]').text();
     expect(cards).toContain('Messages (24h)');
     expect(cards).toContain('1280 msg');
     expect(cards).toContain('Latest daily period 2026-07-08');
@@ -171,7 +172,7 @@ describe('Analytics & Reports view', () => {
       ),
     );
 
-    await wrapper.get('[data-testid="trend-range-7"]').trigger('click');
+    await overlay(wrapper, '[data-testid="trend-range-7"]').trigger('click');
     await vi.waitFor(() =>
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('traffic-trend?days=7'))).toBe(
         true,
@@ -182,8 +183,8 @@ describe('Analytics & Reports view', () => {
   it('lists report catalog categories and marks unavailable kinds as planned', async () => {
     vi.stubGlobal('fetch', liveMock());
     const wrapper = mount(AnalyticsView);
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="catalog"]').exists()).toBe(true));
-    const catalogText = wrapper.get('[data-testid="catalog-traffic"]').text();
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="catalog"]')).toBe(true));
+    const catalogText = overlay(wrapper, '[data-testid="catalog-traffic"]').text();
     expect(catalogText).toContain('Traffic reports');
     expect(catalogText).toContain('Volume snapshot');
     expect(catalogText).toContain('available');
@@ -196,10 +197,10 @@ describe('Analytics & Reports view', () => {
     const click = stubDownloads();
     const wrapper = mount(AnalyticsView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="volume-export-csv"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="volume-export-csv"]')).toBe(true),
     );
 
-    await wrapper.get('[data-testid="volume-export-csv"]').trigger('click');
+    await overlay(wrapper, '[data-testid="volume-export-csv"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
     expect(
       fetchMock.mock.calls.some((c) => String(c[0]).includes('/reports/volume/export.csv')),
@@ -228,16 +229,16 @@ describe('Analytics & Reports view', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = mount(AnalyticsView);
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="snapshot-v1"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="snapshot-v1"]')).toBe(true));
 
-    await wrapper.get('[data-testid="snapshot-v1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="snapshot-v1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="snapshot-panel"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="snapshot-panel"]')).toBe(true),
     );
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('smsc'),
+      expect(overlay(wrapper, '[data-testid="snapshot-related"]').text()).toContain('smsc'),
     );
-    expect(wrapper.get('[data-testid="snapshot-related"]').text()).toContain('80');
+    expect(overlay(wrapper, '[data-testid="snapshot-related"]').text()).toContain('80');
     expect(
       fetchMock.mock.calls.some((call) => /\/reports\/volume\/v1$/.test(String(call[0]))),
     ).toBe(true);
@@ -246,10 +247,8 @@ describe('Analytics & Reports view', () => {
   it('draws a chart for every table-heavy panel, in both themes and with a title', async () => {
     vi.stubGlobal('fetch', liveMock());
     const wrapper = mount(AnalyticsView);
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="trend-chart"]').exists()).toBe(true));
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="latency-chart"]').exists()).toBe(true),
-    );
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="trend-chart"]')).toBe(true));
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="latency-chart"]')).toBe(true));
 
     for (const id of [
       'trend-chart',
@@ -260,7 +259,7 @@ describe('Analytics & Reports view', () => {
       'route-performance-chart',
       'latency-chart',
     ]) {
-      const chart = wrapper.get(`[data-testid="${id}"]`);
+      const chart = overlay(wrapper, `[data-testid="${id}"]`);
       const svg = chart.get('svg');
       // Accessible: named for a screen reader, and the same name is the <title>.
       expect(svg.attributes('role')).toBe('img');
@@ -274,7 +273,7 @@ describe('Analytics & Reports view', () => {
     }
 
     // The success-rate panels keep their exact numbers alongside the bars.
-    expect(wrapper.get('[data-testid="smsc-success-table"]').text()).toContain('73.3%');
+    expect(overlay(wrapper, '[data-testid="smsc-success-table"]').text()).toContain('73.3%');
   });
 
   it('offers a range control only where the endpoint honours a window', async () => {
@@ -287,14 +286,14 @@ describe('Analytics & Reports view', () => {
       ),
     );
 
-    await wrapper.get('[data-testid="heatmap-range-30"]').trigger('click');
+    await overlay(wrapper, '[data-testid="heatmap-range-30"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((c) => String(c[0]).includes('hourly-heatmap?days=30')),
       ).toBe(true),
     );
 
-    await wrapper.get('[data-testid="latency-range-90"]').trigger('click');
+    await overlay(wrapper, '[data-testid="latency-range-90"]').trigger('click');
     await vi.waitFor(() =>
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('latency-sla?days=90'))).toBe(
         true,
@@ -304,8 +303,8 @@ describe('Analytics & Reports view', () => {
     // Snapshot-based reports take no window, so they get no control that would
     // silently do nothing.
     for (const id of ['smsc', 'route', 'smsc-success', 'route-performance', 'breakdown'])
-      expect(wrapper.find(`[data-testid="${id}-range-30"]`).exists()).toBe(false);
-    expect(wrapper.findAll('.range-select')).toHaveLength(3);
+      expect(overlayHas(wrapper, `[data-testid="${id}-range-30"]`)).toBe(false);
+    expect(overlayAll(wrapper, '.range-select')).toHaveLength(3);
   });
 
   it('exports every report the API can export, and names the ones it cannot', async () => {
@@ -313,11 +312,9 @@ describe('Analytics & Reports view', () => {
     vi.stubGlobal('fetch', fetchMock);
     const click = stubDownloads();
     const wrapper = mount(AnalyticsView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="exports-panel"]').exists()).toBe(true),
-    );
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="exports-panel"]')).toBe(true));
 
-    await wrapper.get('[data-testid="export-volume-pdf"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-volume-pdf"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((c) => String(c[0]).includes('/reports/volume/export.pdf')),
@@ -327,10 +324,10 @@ describe('Analytics & Reports view', () => {
     // Each export disables the panel while it runs; wait for it to settle.
     await vi.waitFor(() =>
       expect(
-        wrapper.get('[data-testid="export-delivery-csv"]').attributes('disabled'),
+        overlay(wrapper, '[data-testid="export-delivery-csv"]').attributes('disabled'),
       ).toBeUndefined(),
     );
-    await wrapper.get('[data-testid="export-delivery-csv"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-delivery-csv"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((c) => String(c[0]).includes('/reports/delivery/export.csv')),
@@ -339,10 +336,10 @@ describe('Analytics & Reports view', () => {
 
     await vi.waitFor(() =>
       expect(
-        wrapper.get('[data-testid="export-messages-pdf"]').attributes('disabled'),
+        overlay(wrapper, '[data-testid="export-messages-pdf"]').attributes('disabled'),
       ).toBeUndefined(),
     );
-    await wrapper.get('[data-testid="export-messages-pdf"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-messages-pdf"]').trigger('click');
     await vi.waitFor(() =>
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/messages/export.pdf'))).toBe(
         true,
@@ -350,9 +347,9 @@ describe('Analytics & Reports view', () => {
     );
 
     // Delivery receipts have no PDF route on the API, so no PDF button exists.
-    expect(wrapper.find('[data-testid="export-delivery-pdf"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="export-delivery"]').text()).toContain('CSV only');
-    expect(wrapper.get('[data-testid="exports-unavailable-note"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="export-delivery-pdf"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="export-delivery"]').text()).toContain('CSV only');
+    expect(overlay(wrapper, '[data-testid="exports-unavailable-note"]').text()).toContain(
       'Hourly traffic heatmap',
     );
     expect(click).toHaveBeenCalled();
@@ -365,9 +362,9 @@ describe('Analytics & Reports view', () => {
     vi.stubGlobal('fetch', liveMock());
     const wrapper = mount(AnalyticsView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="export-messages"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="export-messages"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="export-volume"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="export-volume"]')).toBe(true);
   });
 
   it('shows honest empty states when there are no snapshots yet', async () => {
@@ -393,15 +390,15 @@ describe('Analytics & Reports view', () => {
     vi.stubGlobal('fetch', emptyMock);
     const wrapper = mount(AnalyticsView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="overview-empty"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="overview-empty"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="overview-empty"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="overview-empty"]').text()).toContain(
       'No report snapshots have been generated yet',
     );
-    expect(wrapper.find('[data-testid="trend-empty"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="volume-empty"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="trend-empty"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="volume-empty"]')).toBe(true);
     // No fabricated numbers appear in an empty overview.
-    expect(wrapper.find('[data-testid="overview-cards"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="overview-cards"]')).toBe(false);
   });
   /**
    * Regression: the "Report type" menu offered every catalog kind flagged
@@ -446,9 +443,11 @@ describe('Analytics & Reports view', () => {
     const wrapper = mount(AnalyticsView);
     // Enabled only once the catalog has arrived and yielded definable kinds.
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="definition-new"]').attributes('disabled')).toBeUndefined(),
+      expect(
+        overlay(wrapper, '[data-testid="definition-new"]').attributes('disabled'),
+      ).toBeUndefined(),
     );
-    await wrapper.get('[data-testid="definition-new"]').trigger('click');
+    await overlay(wrapper, '[data-testid="definition-new"]').trigger('click');
 
     const options = wrapper
       .get('[data-testid="definition-type"]')
@@ -460,7 +459,7 @@ describe('Analytics & Reports view', () => {
     expect(options).not.toContain('smsc_success_rate');
     // Listed twice in the catalog, offered once here.
     expect(options.filter((key) => key === 'hourly_heatmap')).toHaveLength(1);
-    expect(wrapper.get('[data-testid="definition-type-note"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="definition-type-note"]').text()).toContain(
       'kinds the scheduler can run',
     );
   });

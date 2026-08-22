@@ -23,10 +23,7 @@ const point = (at: string, outbound: number, peak = outbound) => ({
 });
 
 const series = (overrides: Record<string, unknown> = {}) => ({
-  points: [
-    point('2026-08-21T09:00:00.000Z', 12),
-    point('2026-08-21T09:05:00.000Z', 20, 44),
-  ],
+  points: [point('2026-08-21T09:00:00.000Z', 12), point('2026-08-21T09:05:00.000Z', 20, 44)],
   bucketSeconds: 300,
   windowMinutes: 360,
   ceiling: {
@@ -45,7 +42,8 @@ const series = (overrides: Record<string, unknown> = {}) => ({
   },
   limits: {
     unavailable: ['submit latency (API accept to engine handoff)'],
-    reason: 'Kannel reports counters, never per-message timings. Carrier latency is on DLR Performance.',
+    reason:
+      'Kannel reports counters, never per-message timings. Carrier latency is on DLR Performance.',
   },
   ...overrides,
 });
@@ -149,14 +147,14 @@ describe('Performance — capacity is measured, latency is not', () => {
         },
       }),
     );
-    expect(wrapper.get('[data-testid="performance-ceiling-note"]').text()).toContain(
-      'lower bound',
-    );
+    expect(wrapper.get('[data-testid="performance-ceiling-note"]').text()).toContain('lower bound');
   });
 
   it('marks the chart stale only after several missed polls, not one', async () => {
     const fresh = await mountView(
-      series({ sampling: { intervalSeconds: 30, lastObservedAt: null, ageSeconds: 45, polls: 20 } }),
+      series({
+        sampling: { intervalSeconds: 30, lastObservedAt: null, ageSeconds: 45, polls: 20 },
+      }),
     );
     // One-and-a-half intervals is scheduler jitter; a banner here would be on
     // permanently and would teach people to ignore it.
@@ -167,9 +165,7 @@ describe('Performance — capacity is measured, latency is not', () => {
         sampling: { intervalSeconds: 30, lastObservedAt: null, ageSeconds: 300, polls: 20 },
       }),
     );
-    expect(stale.wrapper.get('[data-testid="performance-stale"]').text()).toContain(
-      'not current',
-    );
+    expect(stale.wrapper.get('[data-testid="performance-stale"]').text()).toContain('not current');
     expect(stale.wrapper.get('[data-testid="performance-state"]').attributes('data-state')).toBe(
       'stale',
     );
