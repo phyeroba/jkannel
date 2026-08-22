@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
@@ -1417,9 +1418,12 @@ onMounted(() => void refreshAll());
             <tr
               v-for="row in volumeRows"
               :key="text(row.id)"
-              class="clickable-row"
+              class="selectable"
               :data-testid="`snapshot-${text(row.id)}`"
+              tabindex="0"
               @click="openSnapshot(row)"
+              @keydown.enter="openSnapshot(row)"
+              @keydown.space.prevent="openSnapshot(row)"
             >
               <td>{{ text(row.period_start ?? row.periodStart) }}</td>
               <td>{{ text(row.period_type ?? row.periodType) }}</td>
@@ -1608,88 +1612,85 @@ onMounted(() => void refreshAll());
       </div>
     </section>
 
-    <section
-      v-if="runsOpen"
-      class="panel detail-panel"
-      data-testid="runs-panel"
-      aria-label="Report definition runs"
+    <!-- A record opened from a register goes in a sheet, so the register
+         stays visible behind it. See `DetailDrawer.vue`. -->
+    <DetailDrawer
+      :open="runsOpen"
+      title="Runs"
+      :subtitle="selectedDefName"
+      eyebrow="Report definition"
+      wide
+      @close="closeRuns"
     >
-      <header class="panel-header">
-        <div>
-          <h2>Runs — {{ selectedDefName }}</h2>
+      <div data-testid="runs-panel">
+        <p v-if="runsLoading" class="chart-empty" data-testid="runs-loading">Loading…</p>
+        <p v-else-if="runsError" class="chart-empty" role="alert" data-testid="runs-error">
+          {{ runsError }}
+        </p>
+        <div v-else class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                <th scope="col">Rows</th>
+                <th scope="col">Started</th>
+                <th scope="col">Completed</th>
+                <th scope="col">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(run, index) in runsRows" :key="text(run.id, String(index))">
+                <td>{{ text(run.status) }}</td>
+                <td>{{ text(run.row_count ?? run.rowCount, '0') }}</td>
+                <td>
+                  {{ text(run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt) }}
+                </td>
+                <td>{{ text(run.completed_at ?? run.completedAt) }}</td>
+                <td>{{ text(run.detail ?? run.error) }}</td>
+              </tr>
+              <tr v-if="!runsRows.length">
+                <td colspan="5" class="empty-cell" data-testid="runs-empty">
+                  No runs recorded for this definition yet.
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <button class="secondary-button" data-testid="runs-close" @click="closeRuns">Close</button>
-      </header>
-      <p v-if="runsLoading" class="chart-empty" data-testid="runs-loading">Loading…</p>
-      <p v-else-if="runsError" class="chart-empty" role="alert" data-testid="runs-error">
-        {{ runsError }}
-      </p>
-      <div v-else class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Status</th>
-              <th scope="col">Rows</th>
-              <th scope="col">Started</th>
-              <th scope="col">Completed</th>
-              <th scope="col">Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(run, index) in runsRows" :key="text(run.id, String(index))">
-              <td>{{ text(run.status) }}</td>
-              <td>{{ text(run.row_count ?? run.rowCount, '0') }}</td>
-              <td>
-                {{ text(run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt) }}
-              </td>
-              <td>{{ text(run.completed_at ?? run.completedAt) }}</td>
-              <td>{{ text(run.detail ?? run.error) }}</td>
-            </tr>
-            <tr v-if="!runsRows.length">
-              <td colspan="5" class="empty-cell" data-testid="runs-empty">
-                No runs recorded for this definition yet.
-              </td>
-            </tr>
-          </tbody>
-        </table>
       </div>
-    </section>
+    </DetailDrawer>
 
-    <section
-      v-if="snapshotOpen"
-      class="panel detail-panel"
-      data-testid="snapshot-panel"
-      aria-label="Volume snapshot detail"
+    <DetailDrawer
+      :open="snapshotOpen"
+      title="Volume snapshot detail"
+      eyebrow="Snapshot"
+      wide
+      @close="closeSnapshot"
     >
-      <header class="panel-header">
-        <div>
-          <h2>Volume snapshot detail</h2>
-        </div>
-        <button class="secondary-button" data-testid="snapshot-close" @click="closeSnapshot">
-          Close
-        </button>
-      </header>
-      <p v-if="snapshotLoading" class="chart-empty" data-testid="snapshot-loading">Loading…</p>
-      <p v-else-if="snapshotError" class="chart-empty" role="alert" data-testid="snapshot-error">
-        {{ snapshotError }}
-      </p>
-      <template v-else-if="snapshotDetail">
-        <h3>Snapshot</h3>
-        <pre class="json-block" data-testid="snapshot-summary">{{
-          prettyJson(snapshotDetail.snapshot)
-        }}</pre>
-        <h3>Related breakdown</h3>
-        <ul class="sample-list" data-testid="snapshot-related">
-          <li v-for="(item, index) in snapshotRelated" :key="index">
-            {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
-            {{ text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0') }}
-            messages
-            <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
-          </li>
-          <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
-        </ul>
-      </template>
-    </section>
+      <div data-testid="snapshot-panel">
+        <p v-if="snapshotLoading" class="chart-empty" data-testid="snapshot-loading">Loading…</p>
+        <p v-else-if="snapshotError" class="chart-empty" role="alert" data-testid="snapshot-error">
+          {{ snapshotError }}
+        </p>
+        <template v-else-if="snapshotDetail">
+          <h3>Snapshot</h3>
+          <pre class="json-block" data-testid="snapshot-summary">{{
+            prettyJson(snapshotDetail.snapshot)
+          }}</pre>
+          <h3>Related breakdown</h3>
+          <ul class="sample-list" data-testid="snapshot-related">
+            <li v-for="(item, index) in snapshotRelated" :key="index">
+              {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
+              {{
+                text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0')
+              }}
+              messages
+              <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
+            </li>
+            <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
+          </ul>
+        </template>
+      </div>
+    </DetailDrawer>
   </div>
 </template>
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -698,8 +699,15 @@ onMounted(() => {
         {{ policyNotice }}
       </p>
 
-      <div v-if="showPolicyForm" class="composer" data-testid="policy-form">
-        <h3>{{ editingPolicyId ? 'Edit escalation policy' : 'New escalation policy' }}</h3>
+      <!-- A Dialog, per the design system: a form that makes a record is an
+           overlay, not a block that unfolds above the register it adds to. -->
+      <ModalDialog
+        :open="showPolicyForm"
+        :title="editingPolicyId ? 'Edit escalation policy' : 'New escalation policy'"
+        testid="policy-form"
+        wide
+        @close="closePolicyForm"
+      >
         <label class="filter-select">
           <span>Name</span>
           <input
@@ -788,9 +796,16 @@ onMounted(() => {
         <p v-if="policyFormError" class="form-error" role="alert" data-testid="policy-form-error">
           {{ policyFormError }}
         </p>
+        <!-- "Add step" edits the form; it does not submit it, so it stays in
+             the body rather than joining the two footer verbs. -->
         <div class="detail-actions">
           <button class="secondary-button" data-testid="policy-add-step" @click="addStep">
             Add step
+          </button>
+        </div>
+        <template #footer>
+          <button class="secondary-button" data-testid="policy-cancel" @click="closePolicyForm">
+            Cancel
           </button>
           <button
             class="primary-button"
@@ -800,11 +815,8 @@ onMounted(() => {
           >
             {{ policyBusy ? 'Saving…' : 'Save policy' }}
           </button>
-          <button class="secondary-button" data-testid="policy-cancel" @click="closePolicyForm">
-            Cancel
-          </button>
-        </div>
-      </div>
+        </template>
+      </ModalDialog>
 
       <p v-if="policyState === 'error'" class="chart-empty" role="alert" data-testid="policy-error">
         {{
@@ -921,8 +933,13 @@ onMounted(() => {
         {{ windowNotice }}
       </p>
 
-      <div v-if="showWindowForm" class="composer" data-testid="maintenance-form">
-        <h3>{{ editingWindowId ? 'Edit maintenance window' : 'Schedule maintenance window' }}</h3>
+      <ModalDialog
+        :open="showWindowForm"
+        :title="editingWindowId ? 'Edit maintenance window' : 'Schedule maintenance window'"
+        testid="maintenance-form"
+        wide
+        @close="closeWindowForm"
+      >
         <label class="filter-select filter-search">
           <span>Name</span>
           <input
@@ -977,7 +994,14 @@ onMounted(() => {
         >
           {{ windowFormError }}
         </p>
-        <div class="detail-actions">
+        <template #footer>
+          <button
+            class="secondary-button"
+            data-testid="maintenance-cancel"
+            @click="closeWindowForm"
+          >
+            Cancel
+          </button>
           <button
             class="primary-button"
             data-testid="maintenance-save"
@@ -986,15 +1010,8 @@ onMounted(() => {
           >
             {{ windowBusy ? 'Saving…' : 'Save window' }}
           </button>
-          <button
-            class="secondary-button"
-            data-testid="maintenance-cancel"
-            @click="closeWindowForm"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
+        </template>
+      </ModalDialog>
 
       <p
         v-if="windowState === 'error'"

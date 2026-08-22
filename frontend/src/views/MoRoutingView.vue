@@ -28,6 +28,8 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import DetailDrawer from '../components/DetailDrawer.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -498,6 +500,13 @@ const destinations = computed<RecordValue[]>(() =>
     : [],
 );
 const destinationsFull = computed(() => destinations.value.length >= MAX_DESTINATIONS);
+/** The sheet's subtitle: which rule, and how much of its budget is spent. */
+const destinationsSubtitle = computed(
+  () =>
+    `${text(detailRule.value?.name, detailRuleId.value)} — ${destinations.value.length} of ` +
+    `${MAX_DESTINATIONS} destination(s). Each one is its own job, so they succeed and fail ` +
+    'independently.',
+);
 
 async function openRuleDetail(id: string) {
   if (!id) return;
@@ -1355,14 +1364,15 @@ onMounted(() => {
       </p>
     </section>
 
-    <!-- Rule editor -------------------------------------------------------------- -->
-    <section
-      v-if="showRuleForm"
-      class="panel composer"
-      data-testid="mo-rule-form"
-      aria-label="MO rule editor"
+    <!-- Rule editor --------------------------------------------------------------
+         A Dialog, per the design system. -->
+    <ModalDialog
+      :open="showRuleForm"
+      :title="editingRuleId ? 'Edit inbound rule' : 'New inbound rule'"
+      testid="mo-rule-form"
+      wide
+      @close="closeRuleForm"
     >
-      <h2>{{ editingRuleId ? 'Edit inbound rule' : 'New inbound rule' }}</h2>
       <label class="filter-select filter-search">
         <span>Name (unique, up to 200 characters)</span>
         <input v-model="draftName" data-testid="mo-form-name" type="text" />
@@ -1444,7 +1454,14 @@ onMounted(() => {
       <p v-if="ruleFormError" class="form-error" role="alert" data-testid="mo-form-error">
         {{ ruleFormError }}
       </p>
-      <div class="detail-actions">
+      <p class="source-note">
+        A rule is created without destinations; add them below once it exists. There is no way to
+        create a rule and its destinations in one call.
+      </p>
+      <template #footer>
+        <button class="secondary-button" data-testid="mo-form-cancel" @click="closeRuleForm">
+          Cancel
+        </button>
         <button
           class="primary-button"
           data-testid="mo-form-save"
@@ -1453,186 +1470,169 @@ onMounted(() => {
         >
           {{ ruleBusy ? 'Saving…' : 'Save rule' }}
         </button>
-        <button class="secondary-button" data-testid="mo-form-cancel" @click="closeRuleForm">
-          Cancel
-        </button>
-      </div>
-      <p class="source-note">
-        A rule is created without destinations; add them below once it exists. There is no way to
-        create a rule and its destinations in one call.
-      </p>
-    </section>
-
-    <!-- Destinations --------------------------------------------------------------- -->
-    <section
-      v-if="detailRuleId"
-      class="panel detail-panel"
-      data-testid="mo-destinations-panel"
-      aria-label="Rule destinations"
-    >
-      <header class="panel-header">
-        <div>
-          <h2>Destinations — {{ text(detailRule?.name, detailRuleId) }}</h2>
-          <p aria-live="polite">
-            {{ destinations.length }} of {{ MAX_DESTINATIONS }} destination(s). Each one is its own
-            job, so they succeed and fail independently.
-          </p>
-        </div>
-        <button
-          class="secondary-button"
-          data-testid="mo-destinations-close"
-          @click="closeRuleDetail"
-        >
-          Close
-        </button>
-      </header>
-      <p v-if="detailNotice" class="notice" role="status" data-testid="mo-destination-notice">
-        {{ detailNotice }}
-      </p>
-      <p v-if="detailError" class="form-error" role="alert" data-testid="mo-destination-error">
-        {{ detailError }}
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Kind</th>
-              <th scope="col">Target</th>
-              <th scope="col">State</th>
-              <th scope="col">Max attempts</th>
-              <th scope="col">Added</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="destination in destinations"
-              :key="text(destination.id)"
-              :data-testid="`mo-destination-${text(destination.id)}`"
-            >
-              <td>
-                <span class="status-badge">{{ text(destination.kind) }}</span>
-              </td>
-              <td class="mono">{{ text(destination.target) }}</td>
-              <td>
-                <span class="status-badge" :class="destination.enabled === false ? '' : 'good'">{{
-                  destination.enabled === false ? 'disabled' : 'enabled'
-                }}</span>
-              </td>
-              <td class="mono">{{ text(destination.max_attempts, '5') }}</td>
-              <td>{{ text(destination.created_at) }}</td>
-              <td class="row-actions">
-                <button
-                  v-if="canManage"
-                  class="secondary-button danger-button"
-                  :data-testid="`mo-destination-remove-${text(destination.id)}`"
-                  :disabled="detailLoading"
-                  @click="removeDestination(destination)"
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!destinations.length">
-              <td colspan="6" class="empty-cell" data-testid="mo-destination-empty">
-                This rule has no destinations, so a message that matches it is recorded and then
-                forwarded nowhere.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <template v-if="canManage">
-        <h3>Add a destination</h3>
-        <div class="grid-toolbar">
-          <label class="filter-select">
-            <span>Kind</span>
-            <select v-model="destKind" data-testid="mo-destination-kind">
-              <option v-for="kind in DELIVERY_KINDS" :key="kind" :value="kind">{{ kind }}</option>
-            </select>
-          </label>
-          <label class="filter-select filter-search">
-            <span>{{
-              destKind === 'webhook'
-                ? 'Webhook URL'
-                : destKind === 'email'
-                  ? 'Email address'
-                  : 'MSISDN'
-            }}</span>
-            <input
-              v-model="destTarget"
-              data-testid="mo-destination-target"
-              type="text"
-              :placeholder="
-                destKind === 'webhook'
-                  ? 'https://example.com/hooks/mo'
-                  : destKind === 'email'
-                    ? 'ops@example.com'
-                    : '+256700000000'
-              "
-            />
-          </label>
-          <label v-if="destKind === 'webhook'" class="filter-select">
-            <span>Method</span>
-            <select v-model="destMethod" data-testid="mo-destination-method">
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-            </select>
-          </label>
-          <label v-if="destKind === 'webhook'" class="filter-select">
-            <span>Shared secret (optional)</span>
-            <input v-model="destSecret" data-testid="mo-destination-secret" type="text" />
-          </label>
-          <label v-if="destKind === 'email'" class="filter-select">
-            <span>Subject (optional)</span>
-            <input v-model="destSubject" data-testid="mo-destination-subject" type="text" />
-          </label>
-          <label v-if="destKind === 'sms'" class="filter-select">
-            <span>Sender ID (optional)</span>
-            <input v-model="destSender" data-testid="mo-destination-sender" type="text" />
-          </label>
-          <label class="filter-select">
-            <span>Max attempts (1–20)</span>
-            <input
-              v-model.number="destMaxAttempts"
-              data-testid="mo-destination-attempts"
-              type="number"
-              min="1"
-              max="20"
-            />
-          </label>
-          <button
-            class="primary-button"
-            data-testid="mo-destination-add"
-            :disabled="detailLoading || destinationsFull"
-            @click="addDestination"
-          >
-            {{ destinationsFull ? 'Limit reached' : 'Add destination' }}
-          </button>
-        </div>
-        <p
-          v-if="destKind === 'webhook'"
-          class="warn-notice"
-          role="note"
-          data-testid="mo-webhook-ssrf-note"
-        >
-          A webhook URL is checked against SSRF twice: once when it is saved and again on every
-          delivery attempt. Loopback, link-local (including
-          <span class="mono">169.254.169.254</span>, the cloud metadata address) and RFC1918 private
-          addresses are refused, as is any scheme other than http or https. If a URL is rejected the
-          API’s own sentence is shown above this form verbatim — it names the host and why. The
-          secret is sent as the <span class="mono">x-jkannel-signature</span> header as-is; it is
-          not an HMAC of the payload, so treat it as a shared bearer token.
-        </p>
-        <p class="source-note">
-          Re-adding the same kind and target edits that destination instead of creating a second
-          one. Destinations have no explicit order — they are listed oldest first and all fire
-          together.
-        </p>
       </template>
-    </section>
+    </ModalDialog>
+
+    <!-- Destinations ---------------------------------------------------------------
+         A sheet: the rule register above it is what the operator is working
+         from, and a panel here pushed it off the screen. -->
+    <DetailDrawer
+      :open="Boolean(detailRuleId)"
+      title="Destinations"
+      eyebrow="Inbound rule"
+      :subtitle="destinationsSubtitle"
+      wide
+      @close="closeRuleDetail"
+    >
+      <div data-testid="mo-destinations-panel">
+        <p v-if="detailNotice" class="notice" role="status" data-testid="mo-destination-notice">
+          {{ detailNotice }}
+        </p>
+        <p v-if="detailError" class="form-error" role="alert" data-testid="mo-destination-error">
+          {{ detailError }}
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Kind</th>
+                <th scope="col">Target</th>
+                <th scope="col">State</th>
+                <th scope="col">Max attempts</th>
+                <th scope="col">Added</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="destination in destinations"
+                :key="text(destination.id)"
+                :data-testid="`mo-destination-${text(destination.id)}`"
+              >
+                <td>
+                  <span class="status-badge">{{ text(destination.kind) }}</span>
+                </td>
+                <td class="mono">{{ text(destination.target) }}</td>
+                <td>
+                  <span class="status-badge" :class="destination.enabled === false ? '' : 'good'">{{
+                    destination.enabled === false ? 'disabled' : 'enabled'
+                  }}</span>
+                </td>
+                <td class="mono">{{ text(destination.max_attempts, '5') }}</td>
+                <td>{{ text(destination.created_at) }}</td>
+                <td class="row-actions">
+                  <button
+                    v-if="canManage"
+                    class="secondary-button danger-button"
+                    :data-testid="`mo-destination-remove-${text(destination.id)}`"
+                    :disabled="detailLoading"
+                    @click="removeDestination(destination)"
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="!destinations.length">
+                <td colspan="6" class="empty-cell" data-testid="mo-destination-empty">
+                  This rule has no destinations, so a message that matches it is recorded and then
+                  forwarded nowhere.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <template v-if="canManage">
+          <h3>Add a destination</h3>
+          <div class="grid-toolbar">
+            <label class="filter-select">
+              <span>Kind</span>
+              <select v-model="destKind" data-testid="mo-destination-kind">
+                <option v-for="kind in DELIVERY_KINDS" :key="kind" :value="kind">{{ kind }}</option>
+              </select>
+            </label>
+            <label class="filter-select filter-search">
+              <span>{{
+                destKind === 'webhook'
+                  ? 'Webhook URL'
+                  : destKind === 'email'
+                    ? 'Email address'
+                    : 'MSISDN'
+              }}</span>
+              <input
+                v-model="destTarget"
+                data-testid="mo-destination-target"
+                type="text"
+                :placeholder="
+                  destKind === 'webhook'
+                    ? 'https://example.com/hooks/mo'
+                    : destKind === 'email'
+                      ? 'ops@example.com'
+                      : '+256700000000'
+                "
+              />
+            </label>
+            <label v-if="destKind === 'webhook'" class="filter-select">
+              <span>Method</span>
+              <select v-model="destMethod" data-testid="mo-destination-method">
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+              </select>
+            </label>
+            <label v-if="destKind === 'webhook'" class="filter-select">
+              <span>Shared secret (optional)</span>
+              <input v-model="destSecret" data-testid="mo-destination-secret" type="text" />
+            </label>
+            <label v-if="destKind === 'email'" class="filter-select">
+              <span>Subject (optional)</span>
+              <input v-model="destSubject" data-testid="mo-destination-subject" type="text" />
+            </label>
+            <label v-if="destKind === 'sms'" class="filter-select">
+              <span>Sender ID (optional)</span>
+              <input v-model="destSender" data-testid="mo-destination-sender" type="text" />
+            </label>
+            <label class="filter-select">
+              <span>Max attempts (1–20)</span>
+              <input
+                v-model.number="destMaxAttempts"
+                data-testid="mo-destination-attempts"
+                type="number"
+                min="1"
+                max="20"
+              />
+            </label>
+            <button
+              class="primary-button"
+              data-testid="mo-destination-add"
+              :disabled="detailLoading || destinationsFull"
+              @click="addDestination"
+            >
+              {{ destinationsFull ? 'Limit reached' : 'Add destination' }}
+            </button>
+          </div>
+          <p
+            v-if="destKind === 'webhook'"
+            class="warn-notice"
+            role="note"
+            data-testid="mo-webhook-ssrf-note"
+          >
+            A webhook URL is checked against SSRF twice: once when it is saved and again on every
+            delivery attempt. Loopback, link-local (including
+            <span class="mono">169.254.169.254</span>, the cloud metadata address) and RFC1918
+            private addresses are refused, as is any scheme other than http or https. If a URL is
+            rejected the API’s own sentence is shown above this form verbatim — it names the host
+            and why. The secret is sent as the <span class="mono">x-jkannel-signature</span> header
+            as-is; it is not an HMAC of the payload, so treat it as a shared bearer token.
+          </p>
+          <p class="source-note">
+            Re-adding the same kind and target edits that destination instead of creating a second
+            one. Destinations have no explicit order — they are listed oldest first and all fire
+            together.
+          </p>
+        </template>
+      </div>
+    </DetailDrawer>
 
     <!-- Inbound messages -------------------------------------------------------- -->
     <section class="panel" data-testid="mo-messages-panel" aria-label="Inbound messages">
@@ -1777,8 +1777,7 @@ onMounted(() => {
                     v-if="openMessage_"
                     class="json-block"
                     :data-testid="`mo-message-detail-${text(message.id)}`"
-                    >{{ JSON.stringify(openMessage_, null, 2) }}</pre
-                  >
+                    >{{ JSON.stringify(openMessage_, null, 2) }}</pre>
                   <p v-else class="source-note">Reading the message…</p>
                 </td>
               </tr>

@@ -185,7 +185,9 @@ const ceilingCaveat = computed(() => {
 async function load() {
   state.value = 'loading';
   try {
-    const result = await apiRequest<ThroughputSeries>(`/performance/throughput?minutes=${minutes.value}`);
+    const result = await apiRequest<ThroughputSeries>(
+      `/performance/throughput?minutes=${minutes.value}`,
+    );
     series.value = result;
     error.value = '';
     // `partial` when the window holds no poll at all: the ceiling is still a
@@ -261,7 +263,11 @@ onMounted(load);
         component speaks about one SMSC connection and its `instances` collapse,
         which is a different claim from "the engine reports no timings at all".
       -->
-      <div v-if="series?.limits" class="panel limits-panel" data-testid="performance-latency-limits">
+      <div
+        v-if="series?.limits"
+        class="panel limits-panel"
+        data-testid="performance-latency-limits"
+      >
         <h3>What this engine cannot report about gateway latency</h3>
         <p class="limits-reason" data-testid="performance-latency-reason">
           {{ series.limits.reason }}
@@ -284,7 +290,11 @@ onMounted(load);
     </section>
 
     <!-- CAPACITY ----------------------------------------------------------- -->
-    <section class="panel" data-testid="performance-capacity" aria-labelledby="perf-capacity-heading">
+    <section
+      class="panel"
+      data-testid="performance-capacity"
+      aria-labelledby="perf-capacity-heading"
+    >
       <header class="panel-header">
         <div>
           <h2 id="perf-capacity-heading">Capacity</h2>

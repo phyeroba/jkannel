@@ -850,16 +850,13 @@ async function reprioritiseSelected() {
   spoolActionError.value = '';
   spoolResults.value = [];
   try {
-    const result = await apiRequest<Record<string, unknown>>(
-      '/queue-console/spool/reprioritize',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          sqlIds: idPayload(spoolSelection.value),
-          priority: reprioritiseTo.value,
-        }),
-      },
-    );
+    const result = await apiRequest<Record<string, unknown>>('/queue-console/spool/reprioritize', {
+      method: 'POST',
+      body: JSON.stringify({
+        sqlIds: idPayload(spoolSelection.value),
+        priority: reprioritiseTo.value,
+      }),
+    });
     const skipped = num(result.skipped);
     spoolNotice.value =
       `${num(result.reprioritized ?? result.updated)} of ${num(result.requested)} pending message(s) moved to ` +

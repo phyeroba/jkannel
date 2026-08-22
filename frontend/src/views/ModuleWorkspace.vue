@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
@@ -63,6 +63,7 @@ const DIRECTIVE_OWNERS: Array<{
   },
 ];
 import DetailDrawer from '../components/DetailDrawer.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
 import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
@@ -1548,12 +1549,31 @@ const customRender = computed(() => isCursor.value || isDocker.value || isSystem
 const searchIsLive = computed(
   () => !isDocker.value && !isSystem.value && key.value !== 'monitoring',
 );
+/**
+ * Modules whose rows open the record in a sheet.
+ *
+ * The test is whether the API has a per-record read. `plugins` and
+ * `notifications` are here because `GET /plugins/{id}` and
+ * `GET /notifications/{id}` exist and nothing in the console was calling
+ * them — the register showed a name and a status button and there was no way
+ * to see the rest of the record.
+ *
+ * Deliberately NOT here, and each for the same reason — the API has no
+ * per-record read, so a sheet would have nothing to put in it beyond the row
+ * the operator is already looking at:
+ *   api-gateway  /api-gateway/clients/{id} is PATCH and DELETE only
+ *   backup       /backups/{id} has restore and verify, no GET
+ *   sessions     /sessions/{id} has revoke, no GET
+ * Their rows carry the actions instead, which is what the register is for.
+ */
 const detailModule = computed(
   () =>
     key.value === 'users' ||
     key.value === 'smsc' ||
     key.value === 'logs-audit' ||
-    key.value === 'customers',
+    key.value === 'customers' ||
+    key.value === 'plugins' ||
+    key.value === 'notifications',
 );
 const settingGroups = computed(() => {
   const groups: Record<string, RecordValue[]> = {};
@@ -2146,9 +2166,18 @@ async function openDetail(row: Row) {
           ? `/smscs/${row.id}`
           : key.value === 'customers'
             ? `/customers/${row.id}`
-            : `/audit-events/${row.id}`;
+            : key.value === 'plugins'
+              ? `/plugins/${row.id}`
+              : key.value === 'notifications'
+                ? `/notifications/${row.id}`
+                : `/audit-events/${row.id}`;
     const record = await apiRequest<RecordValue>(endpoint);
     detail.value = record;
+    // Reading a notification WRITES: `GET /notifications/:id` sets read_at.
+    // The register behind the sheet would otherwise keep showing it unread
+    // until something else reloaded, which is a screen disagreeing with the
+    // database it just changed.
+    if (key.value === 'notifications') void load(true);
     if (key.value === 'customers') {
       editCustName.value = text(record.name, '') === '—' ? '' : String(record.name ?? '');
       editCustEmail.value =
@@ -2208,6 +2237,16 @@ const DETAIL_HEADINGS: Record<string, { eyebrow: string; title: string; subtitle
     title: 'Audit event',
     subtitle: 'Who did what, and the value before and after',
   },
+  plugins: {
+    eyebrow: 'Plugin',
+    title: 'Plugin detail',
+    subtitle: 'Manifest, declared permissions and subscribed events',
+  },
+  notifications: {
+    eyebrow: 'Notification',
+    title: 'Notification',
+    subtitle: 'The full notice and the payload behind it',
+  },
 };
 const detailHeading = computed(
   () =>
@@ -2240,8 +2279,22 @@ function closeDetail() {
   editing.value = false;
 }
 
+/**
+ * Which registers open something when a row is clicked.
+ *
+ * `alerts` is here because the row already carries a Lifecycle link to that
+ * alert's own page — the record existed and only the row-sized target for it
+ * was missing. The rest of the modules on this component are action registers:
+ * their rows carry Enable/Revoke/Restore controls and there is no per-record
+ * endpoint behind them, so a row click has nothing honest to open and does
+ * nothing rather than pretending.
+ */
 const clickableRow = computed(
-  () => detailModule.value || key.value === 'messages' || key.value === 'reports',
+  () =>
+    detailModule.value ||
+    key.value === 'messages' ||
+    key.value === 'reports' ||
+    key.value === 'alerts',
 );
 const messageTraceEvents = computed<RecordValue[]>(() => {
   const events = messageTrace.value?.events;
@@ -2251,9 +2304,11 @@ const snapshotRelated = computed<RecordValue[]>(() => {
   const related = snapshotDetail.value?.related;
   return Array.isArray(related) ? (related as RecordValue[]) : [];
 });
+const router = useRouter();
 function onRowClick(row: Row) {
   if (key.value === 'messages') void openMessageTrace(row);
   else if (key.value === 'reports') void openSnapshot(row);
+  else if (key.value === 'alerts') void router.push(`/alert-lifecycle?alert=${row.id}`);
   else if (detailModule.value) void openDetail(row);
 }
 
@@ -4396,8 +4451,13 @@ onUnmounted(() => {
         Creating schedules and running the retention sweep requires the system.manage permission.
       </p>
 
-      <div v-if="showScheduleForm" class="composer" data-testid="schedule-form">
-        <h3>New backup schedule</h3>
+      <ModalDialog
+        :open="showScheduleForm"
+        title="New backup schedule"
+        testid="schedule-form"
+        wide
+        @close="showScheduleForm = false"
+      >
         <label class="filter-select filter-search">
           <span>Name</span>
           <input v-model="scheduleName" data-testid="schedule-name" placeholder="Nightly full" />
@@ -4444,7 +4504,14 @@ onUnmounted(() => {
         <p v-if="scheduleError" class="form-error" role="alert" data-testid="schedule-error">
           {{ scheduleError }}
         </p>
-        <div class="detail-actions">
+        <template #footer>
+          <button
+            class="secondary-button"
+            data-testid="schedule-cancel"
+            @click="showScheduleForm = false"
+          >
+            Cancel
+          </button>
           <button
             class="primary-button"
             data-testid="schedule-submit"
@@ -4453,15 +4520,8 @@ onUnmounted(() => {
           >
             Create schedule
           </button>
-          <button
-            class="secondary-button"
-            data-testid="schedule-cancel"
-            @click="showScheduleForm = false"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
+        </template>
+      </ModalDialog>
 
       <p
         v-if="backupSchedulesError"
@@ -4650,13 +4710,12 @@ onUnmounted(() => {
       </ul>
     </section>
 
-    <section
-      v-if="showCreateUser"
-      class="panel composer"
-      aria-label="Create user"
-      data-testid="create-user-form"
+    <ModalDialog
+      :open="showCreateUser"
+      title="Create user"
+      testid="create-user-form"
+      @close="showCreateUser = false"
     >
-      <h2>Create user</h2>
       <label>
         Username
         <input v-model="newUsername" data-testid="new-username" />
@@ -4684,7 +4743,8 @@ onUnmounted(() => {
         </label>
         <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
       </fieldset>
-      <div>
+      <template #footer>
+        <button class="secondary-button" @click="showCreateUser = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="create-user-submit"
@@ -4693,23 +4753,22 @@ onUnmounted(() => {
         >
           Create user
         </button>
-        <button class="secondary-button" @click="showCreateUser = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section
-      v-if="showApiClientForm"
-      class="panel composer"
-      aria-label="Create API client"
-      data-testid="api-client-form"
+    <ModalDialog
+      :open="showApiClientForm"
+      title="Create API client"
+      testid="api-client-form"
+      @close="showApiClientForm = false"
     >
-      <h2>Create API client</h2>
       <label>
         Name
         <input v-model="apiClientName" data-testid="api-client-name" />
       </label>
       <ScopePicker v-model="apiClientScopes" />
-      <div>
+      <template #footer>
+        <button class="secondary-button" @click="showApiClientForm = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="api-client-submit"
@@ -4718,17 +4777,15 @@ onUnmounted(() => {
         >
           Create client
         </button>
-        <button class="secondary-button" @click="showApiClientForm = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section
-      v-if="restoreRow"
-      class="panel composer"
-      aria-label="Restore backup"
-      data-testid="restore-form"
+    <ModalDialog
+      :open="Boolean(restoreRow)"
+      :title="restoreRow ? `Restore from ${restoreRow.name}` : ''"
+      testid="restore-form"
+      @close="restoreRow = null"
     >
-      <h2>Restore from {{ restoreRow.name }}</h2>
       <p class="form-hint">
         The backup is restored into an isolated verify database, not the live system. Provide a
         reason for the audit trail.
@@ -4737,7 +4794,8 @@ onUnmounted(() => {
         Reason
         <input v-model="restoreReason" data-testid="restore-reason" />
       </label>
-      <div>
+      <template #footer>
+        <button class="secondary-button" @click="restoreRow = null">Cancel</button>
         <button
           class="primary-button danger-button"
           data-testid="restore-submit"
@@ -4746,19 +4804,15 @@ onUnmounted(() => {
         >
           Request restore
         </button>
-        <button class="secondary-button" @click="restoreRow = null">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section
-      v-if="showBackupModal"
-      class="panel composer backup-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create backup"
-      data-testid="backup-modal"
+    <ModalDialog
+      :open="showBackupModal"
+      title="Create backup"
+      testid="backup-modal"
+      @close="showBackupModal = false"
     >
-      <h2>Create backup</h2>
       <label>
         Backup name (label)
         <input
@@ -4817,7 +4871,8 @@ onUnmounted(() => {
         </label>
       </fieldset>
       <p class="form-hint">Application code is not included — it lives in version control.</p>
-      <div>
+      <template #footer>
+        <button class="secondary-button" @click="showBackupModal = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="backup-submit"
@@ -4826,54 +4881,65 @@ onUnmounted(() => {
         >
           Create backup
         </button>
-        <button class="secondary-button" @click="showBackupModal = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section
-      v-if="showCreateCustomer"
-      class="panel composer"
-      aria-label="Create customer"
-      data-testid="create-customer-form"
+    <ModalDialog
+      :open="showCreateCustomer"
+      title="Create customer"
+      testid="create-customer-form"
+      wide
+      @close="showCreateCustomer = false"
     >
-      <h2>Create customer</h2>
-      <label>
-        Name
-        <input v-model="custName" data-testid="customer-name" />
-      </label>
-      <label>
-        Code
-        <input v-model="custCode" data-testid="customer-code" placeholder="Optional short code" />
-      </label>
-      <label>
-        Contact email
-        <input v-model="custEmail" type="email" data-testid="customer-email" />
-      </label>
-      <label>
-        Daily quota
-        <input v-model.number="custQuotaDaily" type="number" min="0" data-testid="customer-quota" />
-      </label>
-      <label>
-        Rate limit / min
-        <input v-model.number="custRateLimit" type="number" min="0" data-testid="customer-rate" />
-      </label>
-      <label>
-        Allowed sender IDs (comma-separated)
-        <input v-model="custSenderIds" data-testid="customer-senders" placeholder="JKANNEL, INFO" />
-      </label>
-      <label>
-        Notes
-        <input v-model="custNotes" data-testid="customer-notes" />
-      </label>
-      <label>
-        Status
-        <select v-model="custStatus" data-testid="customer-status">
-          <option value="active">active</option>
-          <option value="suspended">suspended</option>
-          <option value="archived">archived</option>
-        </select>
-      </label>
-      <div>
+      <div class="dialog-grid">
+        <label>
+          Name
+          <input v-model="custName" data-testid="customer-name" />
+        </label>
+        <label>
+          Code
+          <input v-model="custCode" data-testid="customer-code" placeholder="Optional short code" />
+        </label>
+        <label>
+          Contact email
+          <input v-model="custEmail" type="email" data-testid="customer-email" />
+        </label>
+        <label>
+          Daily quota
+          <input
+            v-model.number="custQuotaDaily"
+            type="number"
+            min="0"
+            data-testid="customer-quota"
+          />
+        </label>
+        <label>
+          Rate limit / min
+          <input v-model.number="custRateLimit" type="number" min="0" data-testid="customer-rate" />
+        </label>
+        <label class="dialog-span">
+          Allowed sender IDs (comma-separated)
+          <input
+            v-model="custSenderIds"
+            data-testid="customer-senders"
+            placeholder="JKANNEL, INFO"
+          />
+        </label>
+        <label class="dialog-span">
+          Notes
+          <input v-model="custNotes" data-testid="customer-notes" />
+        </label>
+        <label>
+          Status
+          <select v-model="custStatus" data-testid="customer-status">
+            <option value="active">active</option>
+            <option value="suspended">suspended</option>
+            <option value="archived">archived</option>
+          </select>
+        </label>
+      </div>
+      <template #footer>
+        <button class="secondary-button" @click="showCreateCustomer = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="customer-submit"
@@ -4882,227 +4948,232 @@ onUnmounted(() => {
         >
           Create customer
         </button>
-        <button class="secondary-button" @click="showCreateCustomer = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section
-      v-if="messageOpen"
-      class="panel detail-panel"
-      data-testid="message-trace-panel"
-      aria-label="Message trace"
+    <!--
+      A MESSAGE OPENED FROM THE REGISTER IS A DRAWER, NOT A PANEL BELOW IT.
+
+      This was a `.detail-panel` that appeared underneath the message list, so
+      clicking a row scrolled the list away and the operator lost the row they
+      came from. The design system opens a record from a register in a sheet
+      precisely so the list stays behind it — see `DetailDrawer.vue`.
+
+      `wide`, because the trace holds an events list and a JSON block of what
+      would be re-sent, which are unreadable at the 50vw default.
+    -->
+    <DetailDrawer
+      :open="messageOpen"
+      title="Message trace"
+      eyebrow="Message"
+      :subtitle="messageRow ? text(messageRow.id ?? messageRow.messageId) : undefined"
+      wide
+      @close="closeMessageTrace"
     >
-      <header>
-        <h2>Message trace</h2>
-        <button
-          class="secondary-button"
-          data-testid="message-trace-close"
-          @click="closeMessageTrace"
-        >
-          Close
-        </button>
-      </header>
-      <p v-if="messageLoading" class="form-hint" data-testid="message-trace-loading">Loading…</p>
-      <p v-else-if="messageError" class="form-error" role="alert">{{ messageError }}</p>
-      <template v-else>
-        <dl v-if="messageRow" class="detail-grid">
-          <dt>Message ID</dt>
-          <dd class="mono">{{ text(messageRow.id ?? messageRow.messageId) }}</dd>
-          <dt>Direction</dt>
-          <dd>{{ text(messageRow.direction) }}</dd>
-          <dt>Status</dt>
-          <dd>{{ text(messageRow.status ?? messageRow.state) }}</dd>
-          <dt>Sender</dt>
-          <dd>{{ text(messageRow.sender ?? messageRow.from) }}</dd>
-          <dt>Receiver</dt>
-          <dd>{{ text(messageRow.receiver ?? messageRow.recipient ?? messageRow.to) }}</dd>
-          <dt>SMSC</dt>
-          <dd>{{ text(messageRow.smsc ?? messageRow.smsc_id ?? messageRow.smscId) }}</dd>
-          <dt>Created</dt>
-          <dd>{{ text(messageRow.created_at ?? messageRow.createdAt ?? messageRow.timestamp) }}</dd>
-          <dt>Updated</dt>
-          <dd>{{ text(messageRow.updated_at ?? messageRow.updatedAt) }}</dd>
-          <!--
+      <div data-testid="message-trace-panel">
+        <p v-if="messageLoading" class="form-hint" data-testid="message-trace-loading">Loading…</p>
+        <p v-else-if="messageError" class="form-error" role="alert">{{ messageError }}</p>
+        <template v-else>
+          <dl v-if="messageRow" class="detail-grid">
+            <dt>Message ID</dt>
+            <dd class="mono">{{ text(messageRow.id ?? messageRow.messageId) }}</dd>
+            <dt>Direction</dt>
+            <dd>{{ text(messageRow.direction) }}</dd>
+            <dt>Status</dt>
+            <dd>{{ text(messageRow.status ?? messageRow.state) }}</dd>
+            <dt>Sender</dt>
+            <dd>{{ text(messageRow.sender ?? messageRow.from) }}</dd>
+            <dt>Receiver</dt>
+            <dd>{{ text(messageRow.receiver ?? messageRow.recipient ?? messageRow.to) }}</dd>
+            <dt>SMSC</dt>
+            <dd>{{ text(messageRow.smsc ?? messageRow.smsc_id ?? messageRow.smscId) }}</dd>
+            <dt>Created</dt>
+            <dd>
+              {{ text(messageRow.created_at ?? messageRow.createdAt ?? messageRow.timestamp) }}
+            </dd>
+            <dt>Updated</dt>
+            <dd>{{ text(messageRow.updated_at ?? messageRow.updatedAt) }}</dd>
+            <!--
             Encoding / segmentation / scheduling / billing. These columns have
             always existed in the engine's store but were invisible in the
             console, so "why did one SMS bill as three?" had no answer here.
           -->
-          <dt>Segments</dt>
-          <dd data-testid="message-segments">{{ segmentCount(messageRow) }}</dd>
-          <dt>Encoding</dt>
-          <dd data-testid="message-encoding">{{ codingLabel(messageRow) }}</dd>
-          <dt>UDH</dt>
-          <dd class="mono">{{ text(messageRow.udhData) }}</dd>
-          <dt>Validity</dt>
-          <dd>{{ text(messageRow.validity) }}</dd>
-          <dt>Deferred</dt>
-          <dd>{{ text(messageRow.deferred) }}</dd>
-          <dt>Message class</dt>
-          <dd>{{ text(messageRow.mclass) }}</dd>
-          <dt>PID</dt>
-          <dd>{{ text(messageRow.pid) }}</dd>
-          <dt>Billing info</dt>
-          <dd class="mono">{{ text(messageRow.binfo) }}</dd>
-          <dt>Metadata</dt>
-          <dd class="mono">{{ text(messageRow.metaData) }}</dd>
-        </dl>
-        <p v-if="messageTrace?.summary" class="form-hint" data-testid="message-trace-summary">
-          {{ prettyJson(messageTrace.summary) }}
-        </p>
-        <h3>Trace events</h3>
-        <ul class="sample-list" data-testid="message-trace-events">
-          <li v-for="(event, index) in messageTraceEvents" :key="index">
-            <span class="dot" :class="healthDotClass(event.status ?? event.state)"></span>
-            {{ text(event.type ?? event.event ?? event.status ?? event.state) }} —
-            {{ text(event.detail ?? event.description ?? event.message) }}
-            <small>{{
-              text(event.at ?? event.timestamp ?? event.created_at ?? event.observed_at)
-            }}</small>
-          </li>
-          <li v-if="!messageTraceEvents.length">No trace events recorded for this message.</li>
-        </ul>
-
-        <template v-if="canManageConfig">
-          <h3>Message operations</h3>
-          <p class="form-hint">
-            Re-submit this message through the engine. Each action creates a new, independently
-            traceable message.
+            <dt>Segments</dt>
+            <dd data-testid="message-segments">{{ segmentCount(messageRow) }}</dd>
+            <dt>Encoding</dt>
+            <dd data-testid="message-encoding">{{ codingLabel(messageRow) }}</dd>
+            <dt>UDH</dt>
+            <dd class="mono">{{ text(messageRow.udhData) }}</dd>
+            <dt>Validity</dt>
+            <dd>{{ text(messageRow.validity) }}</dd>
+            <dt>Deferred</dt>
+            <dd>{{ text(messageRow.deferred) }}</dd>
+            <dt>Message class</dt>
+            <dd>{{ text(messageRow.mclass) }}</dd>
+            <dt>PID</dt>
+            <dd>{{ text(messageRow.pid) }}</dd>
+            <dt>Billing info</dt>
+            <dd class="mono">{{ text(messageRow.binfo) }}</dd>
+            <dt>Metadata</dt>
+            <dd class="mono">{{ text(messageRow.metaData) }}</dd>
+          </dl>
+          <p v-if="messageTrace?.summary" class="form-hint" data-testid="message-trace-summary">
+            {{ prettyJson(messageTrace.summary) }}
           </p>
+          <h3>Trace events</h3>
+          <ul class="sample-list" data-testid="message-trace-events">
+            <li v-for="(event, index) in messageTraceEvents" :key="index">
+              <span class="dot" :class="healthDotClass(event.status ?? event.state)"></span>
+              {{ text(event.type ?? event.event ?? event.status ?? event.state) }} —
+              {{ text(event.detail ?? event.description ?? event.message) }}
+              <small>{{
+                text(event.at ?? event.timestamp ?? event.created_at ?? event.observed_at)
+              }}</small>
+            </li>
+            <li v-if="!messageTraceEvents.length">No trace events recorded for this message.</li>
+          </ul>
 
-          <!--
+          <template v-if="canManageConfig">
+            <h3>Message operations</h3>
+            <p class="form-hint">
+              Re-submit this message through the engine. Each action creates a new, independently
+              traceable message.
+            </p>
+
+            <!--
             What a replay would actually put on the wire, before it does.
             Clone lets fields be overridden and requeue does not, so an operator
             about to press either needs to see the body and the addressing they
             are re-sending — not the trace of what happened to the original.
           -->
-          <div class="detail-actions">
-            <button
-              class="secondary-button"
-              type="button"
-              data-testid="message-source"
-              :disabled="opBusy"
-              @click="loadMessageSource"
-            >
-              {{ messageSource ? 'Refresh what would be sent' : 'Show what would be sent' }}
-            </button>
-          </div>
-          <pre v-if="messageSource" class="json-block" data-testid="message-source-json">{{
-            JSON.stringify(messageSource, null, 2)
-          }}</pre>
-          <p v-if="messageSourceError" class="form-error" role="alert">
-            {{ messageSourceError }}
-          </p>
-
-          <div class="detail-actions" data-testid="message-ops">
-            <button
-              class="secondary-button"
-              data-testid="message-replay"
-              :disabled="opBusy"
-              @click="messageOp('replay')"
-            >
-              Replay
-            </button>
-            <button
-              class="secondary-button"
-              data-testid="message-clone"
-              :disabled="opBusy"
-              @click="openCloneForm"
-            >
-              Clone…
-            </button>
-            <button
-              class="secondary-button"
-              data-testid="message-requeue"
-              :disabled="opBusy"
-              @click="messageOp('requeue')"
-            >
-              Requeue
-            </button>
-          </div>
-          <div v-if="showCloneForm" class="composer" data-testid="message-clone-form">
-            <p class="form-hint">Leave a field blank to keep the original value.</p>
-            <label>
-              Sender override
-              <input
-                v-model="cloneSender"
-                data-testid="clone-sender"
-                placeholder="Original sender"
-              />
-            </label>
-            <label>
-              Recipient override
-              <input
-                v-model="cloneReceiver"
-                data-testid="clone-receiver"
-                placeholder="Original recipient"
-              />
-            </label>
-            <label>
-              Message text override
-              <input v-model="cloneText" data-testid="clone-text" placeholder="Original text" />
-            </label>
-            <div>
+            <div class="detail-actions">
               <button
-                class="primary-button"
-                data-testid="clone-submit"
+                class="secondary-button"
+                type="button"
+                data-testid="message-source"
                 :disabled="opBusy"
-                @click="submitClone"
+                @click="loadMessageSource"
               >
-                Submit clone
+                {{ messageSource ? 'Refresh what would be sent' : 'Show what would be sent' }}
               </button>
-              <button class="secondary-button" @click="showCloneForm = false">Cancel</button>
             </div>
-          </div>
-          <p v-if="opError" class="form-error" role="alert" data-testid="message-op-error">
-            {{ opError }}
-          </p>
-          <div v-if="opResult" class="baseline-info" data-testid="message-op-result">
-            <p class="form-hint">
-              {{ text(opResult.action, 'operation') }} accepted — new SQLBox id
-              <strong>{{
-                text(
-                  (opResult.queued as RecordValue | undefined)?.sqlId ??
-                    (opResult.queued as RecordValue | undefined)?.sql_id,
-                )
-              }}</strong>
-              (foreign id {{ text(opResult.foreignId) }}).
+            <pre v-if="messageSource" class="json-block" data-testid="message-source-json">{{
+              JSON.stringify(messageSource, null, 2)
+            }}</pre>
+            <p v-if="messageSourceError" class="form-error" role="alert">
+              {{ messageSourceError }}
             </p>
-          </div>
-        </template>
-      </template>
-    </section>
 
-    <section
-      v-if="snapshotOpen"
-      class="panel detail-panel"
-      data-testid="snapshot-panel"
-      aria-label="Volume snapshot detail"
+            <div class="detail-actions" data-testid="message-ops">
+              <button
+                class="secondary-button"
+                data-testid="message-replay"
+                :disabled="opBusy"
+                @click="messageOp('replay')"
+              >
+                Replay
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="message-clone"
+                :disabled="opBusy"
+                @click="openCloneForm"
+              >
+                Clone…
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="message-requeue"
+                :disabled="opBusy"
+                @click="messageOp('requeue')"
+              >
+                Requeue
+              </button>
+            </div>
+            <div v-if="showCloneForm" class="composer" data-testid="message-clone-form">
+              <p class="form-hint">Leave a field blank to keep the original value.</p>
+              <label>
+                Sender override
+                <input
+                  v-model="cloneSender"
+                  data-testid="clone-sender"
+                  placeholder="Original sender"
+                />
+              </label>
+              <label>
+                Recipient override
+                <input
+                  v-model="cloneReceiver"
+                  data-testid="clone-receiver"
+                  placeholder="Original recipient"
+                />
+              </label>
+              <label>
+                Message text override
+                <input v-model="cloneText" data-testid="clone-text" placeholder="Original text" />
+              </label>
+              <div>
+                <button
+                  class="primary-button"
+                  data-testid="clone-submit"
+                  :disabled="opBusy"
+                  @click="submitClone"
+                >
+                  Submit clone
+                </button>
+                <button class="secondary-button" @click="showCloneForm = false">Cancel</button>
+              </div>
+            </div>
+            <p v-if="opError" class="form-error" role="alert" data-testid="message-op-error">
+              {{ opError }}
+            </p>
+            <div v-if="opResult" class="baseline-info" data-testid="message-op-result">
+              <p class="form-hint">
+                {{ text(opResult.action, 'operation') }} accepted — new SQLBox id
+                <strong>{{
+                  text(
+                    (opResult.queued as RecordValue | undefined)?.sqlId ??
+                      (opResult.queued as RecordValue | undefined)?.sql_id,
+                  )
+                }}</strong>
+                (foreign id {{ text(opResult.foreignId) }}).
+              </p>
+            </div>
+          </template>
+        </template>
+      </div>
+    </DetailDrawer>
+
+    <DetailDrawer
+      :open="snapshotOpen"
+      title="Volume snapshot detail"
+      eyebrow="Snapshot"
+      wide
+      @close="closeSnapshot"
     >
-      <header>
-        <h2>Volume snapshot detail</h2>
-        <button class="secondary-button" data-testid="snapshot-close" @click="closeSnapshot">
-          Close
-        </button>
-      </header>
-      <p v-if="snapshotLoading" class="form-hint" data-testid="snapshot-loading">Loading…</p>
-      <p v-else-if="snapshotError" class="form-error" role="alert">{{ snapshotError }}</p>
-      <template v-else-if="snapshotDetail">
-        <h3>Snapshot</h3>
-        <pre class="json-block" data-testid="snapshot-summary">{{
-          prettyJson(snapshotDetail.snapshot)
-        }}</pre>
-        <h3>Related breakdown</h3>
-        <ul class="sample-list" data-testid="snapshot-related">
-          <li v-for="(item, index) in snapshotRelated" :key="index">
-            {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
-            {{ text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0') }}
-            messages
-            <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
-          </li>
-          <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
-        </ul>
-      </template>
-    </section>
+      <div data-testid="snapshot-panel">
+        <p v-if="snapshotLoading" class="form-hint" data-testid="snapshot-loading">Loading…</p>
+        <p v-else-if="snapshotError" class="form-error" role="alert">{{ snapshotError }}</p>
+        <template v-else-if="snapshotDetail">
+          <h3>Snapshot</h3>
+          <pre class="json-block" data-testid="snapshot-summary">{{
+            prettyJson(snapshotDetail.snapshot)
+          }}</pre>
+          <h3>Related breakdown</h3>
+          <ul class="sample-list" data-testid="snapshot-related">
+            <li v-for="(item, index) in snapshotRelated" :key="index">
+              {{ text(item.scope ?? item.label ?? item.smsc ?? item.route ?? item.type) }} —
+              {{
+                text(item.message_count ?? item.messageCount ?? item.messages ?? item.total, '0')
+              }}
+              messages
+              <small>{{ text(item.dlr_count ?? item.dlrCount ?? item.dlrs, '') }}</small>
+            </li>
+            <li v-if="!snapshotRelated.length">No related breakdown for this period.</li>
+          </ul>
+        </template>
+      </div>
+    </DetailDrawer>
 
     <!--
       Record detail as a SHEET, not a panel appended after the register.
@@ -5411,6 +5482,84 @@ onUnmounted(() => {
             </div>
           </template>
 
+          <template v-else-if="key === 'plugins'">
+            <dl class="detail-grid">
+              <dt>Plugin</dt>
+              <dd class="mono" data-testid="plugin-detail-id">{{ text(detail.plugin_id) }}</dd>
+              <dt>Name</dt>
+              <dd>{{ text(detail.name) }}</dd>
+              <dt>Version</dt>
+              <dd class="mono">{{ text(detail.version) }}</dd>
+              <dt>Publisher</dt>
+              <dd>{{ text(detail.publisher) }}</dd>
+              <dt>Status</dt>
+              <dd data-testid="plugin-detail-status">{{ text(detail.status) }}</dd>
+              <dt>Installed by</dt>
+              <dd class="mono">{{ text(detail.installed_by ?? detail.installedBy) }}</dd>
+              <dt>Installed</dt>
+              <dd>{{ text(detail.installed_at ?? detail.installedAt) }}</dd>
+              <dt>Detail</dt>
+              <dd>{{ text(detail.detail) }}</dd>
+            </dl>
+            <!--
+              Permissions and events are the whole reason to open a plugin: a
+              plugin receives ONLY the events it declares and holds ONLY the
+              permissions it declares, so this is the list that says what it can
+              reach. It was in the API and on no screen.
+            -->
+            <h3>Declared permissions</h3>
+            <span class="chip-list" data-testid="plugin-detail-permissions">
+              <span v-for="code in stringArray('permissions')" :key="code" class="chip mono">{{
+                code
+              }}</span>
+              <span v-if="!stringArray('permissions').length" class="chip muted"
+                >none declared</span
+              >
+            </span>
+            <h3>Subscribed events</h3>
+            <span class="chip-list" data-testid="plugin-detail-events">
+              <span v-for="name in stringArray('events')" :key="name" class="chip mono">{{
+                name
+              }}</span>
+              <span v-if="!stringArray('events').length" class="chip muted">none declared</span>
+            </span>
+            <p class="source-note">
+              Straight from <span class="mono">GET /plugins/{{ text(detail.id, '') }}</span
+              >. There is no uninstall endpoint in this build, so a plugin can be disabled here but
+              not removed.
+            </p>
+          </template>
+
+          <template v-else-if="key === 'notifications'">
+            <dl class="detail-grid">
+              <dt>Category</dt>
+              <dd data-testid="notification-detail-category">{{ text(detail.category) }}</dd>
+              <dt>Title</dt>
+              <dd>{{ text(detail.title) }}</dd>
+              <dt>Raised</dt>
+              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+              <dt>Read</dt>
+              <dd data-testid="notification-detail-read">
+                {{ text(detail.read_at ?? detail.readAt) }}
+              </dd>
+            </dl>
+            <h3>Body</h3>
+            <p data-testid="notification-detail-body">{{ text(detail.body) }}</p>
+            <!-- The payload is the part the list cannot show: it carries the
+                 ids that say WHICH connection or message the notice is about. -->
+            <h3>Payload</h3>
+            <pre class="json-block" data-testid="notification-detail-data">{{
+              prettyJson(detail.data)
+            }}</pre>
+            <p class="source-note">
+              Opening a notification marks it read —
+              <span class="mono">GET /notifications/:id</span> sets
+              <span class="mono">read_at</span> as part of the read. That is the endpoint's
+              behaviour, not something this screen adds, and it is stated here because a read that
+              writes is not what a reader expects.
+            </p>
+          </template>
+
           <template v-else>
             <dl class="detail-grid">
               <dt>When</dt>
@@ -5444,8 +5593,13 @@ onUnmounted(() => {
       </div>
     </DetailDrawer>
 
-    <section v-if="showSendForm" class="panel composer" aria-label="Send message">
-      <h2>Send message</h2>
+    <ModalDialog
+      :open="showSendForm"
+      title="Send message"
+      testid="send-form"
+      wide
+      @close="showSendForm = false"
+    >
       <label>
         SMSC connection
         <select v-model="sendSmscId" data-testid="send-smsc" required>
@@ -5486,7 +5640,8 @@ onUnmounted(() => {
         :busy="loading"
       />
 
-      <div>
+      <template #footer>
+        <button class="secondary-button" @click="showSendForm = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="send-submit"
@@ -5495,124 +5650,154 @@ onUnmounted(() => {
         >
           Send
         </button>
-        <button class="secondary-button" @click="showSendForm = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
-    <section v-if="showComposer" class="panel composer" :aria-label="`Create ${workspace.noun}`">
-      <h2>Create {{ workspace.noun }}</h2>
-      <label>
-        {{
-          workspace.createKind === 'invitation'
-            ? 'Email'
-            : workspace.createKind === 'configuration'
-              ? 'Scope'
-              : 'Name'
-        }}
-        <input
-          v-model="draftName"
-          data-testid="draft-name"
-          :type="workspace.createKind === 'invitation' ? 'email' : 'text'"
-          @keyup.enter="createRecord"
-        />
-      </label>
+    <!--
+      THE SHARED CREATE FORM, AS A DIALOG.
 
-      <label v-if="workspace.createKind === 'route'">
-        Target SMSC
-        <select v-model="draftTarget" data-testid="draft-target">
-          <option value="" disabled>Select a target SMSC</option>
-          <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <template v-if="workspace.createKind === 'route'">
-        <p v-if="routeSmscError" class="form-hint" role="alert" data-testid="route-smsc-error">
-          {{ routeSmscError }}
-        </p>
-        <label>
-          Destination prefix
-          <input v-model="routeDestinationPrefix" placeholder="+256" />
+      One composer serves five workspaces — SMSC, route, customer, user
+      invitation and configuration — so this single change is what turns "Add
+      SMSC", "Create route", "Add customer", "Invite user" and "Create
+      configuration" into the pop-up the design system specifies. It used to
+      unfold as a panel below the register, which on a screen listing every
+      connection on the gateway meant the form opened below the fold and the
+      button appeared to do nothing at all.
+
+      `wide`, because these are two-column field grids like the kit's own Add
+      SMSC dialog.
+    -->
+    <ModalDialog
+      :open="showComposer"
+      :title="`Create ${workspace.noun}`"
+      testid="workspace-composer"
+      wide
+      @close="showComposer = false"
+    >
+      <div class="dialog-grid">
+        <label class="dialog-span">
+          {{
+            workspace.createKind === 'invitation'
+              ? 'Email'
+              : workspace.createKind === 'configuration'
+                ? 'Scope'
+                : 'Name'
+          }}
+          <input
+            v-model="draftName"
+            data-testid="draft-name"
+            :type="workspace.createKind === 'invitation' ? 'email' : 'text'"
+            @keyup.enter="createRecord"
+          />
         </label>
-        <label>
-          Sender ID
-          <input v-model="routeSender" placeholder="Optional sender match" />
-        </label>
-        <label>
-          Fallback SMSC
-          <select v-model="routeFallback" data-testid="draft-fallback">
-            <option value="">None</option>
+
+        <label v-if="workspace.createKind === 'route'">
+          Target SMSC
+          <select v-model="draftTarget" data-testid="draft-target">
+            <option value="" disabled>Select a target SMSC</option>
             <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
         </label>
-        <p class="form-hint">
-          Routes are validated and dry-run before deployment; duplicate priorities within a scope
-          are rejected.
-        </p>
-      </template>
-
-      <template v-if="workspace.createKind === 'smsc'">
-        <label>
-          Protocol
-          <select v-model="smscType">
-            <option value="fake">Fake SMSC</option>
-            <option value="smpp">SMPP client</option>
-            <option value="http">HTTP SMS</option>
-            <option value="at">AT modem</option>
-          </select>
-        </label>
-        <label v-if="smscType !== 'fake'">
-          Host
-          <input v-model="smscHost" />
-        </label>
-        <label v-if="smscType !== 'fake'">
-          Port
-          <input v-model.number="smscPort" type="number" min="1" max="65535" />
-        </label>
-        <label>
-          TPS limit
-          <input v-model.number="smscTps" type="number" min="1" max="100000" />
-        </label>
-        <p class="form-hint">
-          Credentials use secret references; plaintext passwords are never stored here.
-        </p>
-      </template>
-
-      <template v-if="workspace.createKind === 'configuration'">
-        <div v-if="configBaseline" class="baseline-info" data-testid="configuration-baseline-info">
-          <p class="form-hint">{{ text(configBaseline.description) }}</p>
-          <ul v-if="Array.isArray(configBaseline.notes) && configBaseline.notes.length">
-            <li v-for="(note, index) in configBaseline.notes as unknown[]" :key="index">
-              {{ String(note) }}
-            </li>
-          </ul>
-          <pre class="json-block" data-testid="configuration-baseline-content">{{
-            prettyJson(configPrefillContent)
-          }}</pre>
-        </div>
-        <template v-if="!configPrefillContent">
+        <template v-if="workspace.createKind === 'route'">
+          <p
+            v-if="routeSmscError"
+            class="form-hint dialog-span"
+            role="alert"
+            data-testid="route-smsc-error"
+          >
+            {{ routeSmscError }}
+          </p>
           <label>
-            Admin port
-            <input v-model.number="configAdminPort" type="number" min="1" max="65535" />
+            Destination prefix
+            <input v-model="routeDestinationPrefix" placeholder="+256" />
           </label>
           <label>
-            Bearerbox/SMSBox port
-            <input v-model.number="configSmsboxPort" type="number" min="1" max="65535" />
+            Sender ID
+            <input v-model="routeSender" placeholder="Optional sender match" />
           </label>
-          <label class="checkbox-row">
-            <input v-model="configSqlbox" type="checkbox" />
-            Enable PostgreSQL SQLBox integration
+          <label>
+            Fallback SMSC
+            <select v-model="routeFallback" data-testid="draft-fallback">
+              <option value="">None</option>
+              <option v-for="option in routeSmscOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
           </label>
-          <p class="form-hint">
-            JKANNEL validates and renders deterministic Kamex configuration with environment-only
-            secrets.
+          <p class="form-hint dialog-span">
+            Routes are validated and dry-run before deployment; duplicate priorities within a scope
+            are rejected.
           </p>
         </template>
-      </template>
 
-      <div>
+        <template v-if="workspace.createKind === 'smsc'">
+          <label>
+            Protocol
+            <select v-model="smscType">
+              <option value="fake">Fake SMSC</option>
+              <option value="smpp">SMPP client</option>
+              <option value="http">HTTP SMS</option>
+              <option value="at">AT modem</option>
+            </select>
+          </label>
+          <label v-if="smscType !== 'fake'">
+            Host
+            <input v-model="smscHost" />
+          </label>
+          <label v-if="smscType !== 'fake'">
+            Port
+            <input v-model.number="smscPort" type="number" min="1" max="65535" />
+          </label>
+          <label>
+            TPS limit
+            <input v-model.number="smscTps" type="number" min="1" max="100000" />
+          </label>
+          <p class="form-hint dialog-span">
+            Credentials use secret references; plaintext passwords are never stored here.
+          </p>
+        </template>
+
+        <template v-if="workspace.createKind === 'configuration'">
+          <div
+            v-if="configBaseline"
+            class="baseline-info dialog-span"
+            data-testid="configuration-baseline-info"
+          >
+            <p class="form-hint">{{ text(configBaseline.description) }}</p>
+            <ul v-if="Array.isArray(configBaseline.notes) && configBaseline.notes.length">
+              <li v-for="(note, index) in configBaseline.notes as unknown[]" :key="index">
+                {{ String(note) }}
+              </li>
+            </ul>
+            <pre class="json-block" data-testid="configuration-baseline-content">{{
+              prettyJson(configPrefillContent)
+            }}</pre>
+          </div>
+          <template v-if="!configPrefillContent">
+            <label>
+              Admin port
+              <input v-model.number="configAdminPort" type="number" min="1" max="65535" />
+            </label>
+            <label>
+              Bearerbox/SMSBox port
+              <input v-model.number="configSmsboxPort" type="number" min="1" max="65535" />
+            </label>
+            <label class="checkbox-row dialog-span">
+              <input v-model="configSqlbox" type="checkbox" />
+              Enable PostgreSQL SQLBox integration
+            </label>
+            <p class="form-hint dialog-span">
+              JKANNEL validates and renders deterministic Kamex configuration with environment-only
+              secrets.
+            </p>
+          </template>
+        </template>
+      </div>
+
+      <template #footer>
+        <button class="secondary-button" @click="showComposer = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="save-draft"
@@ -5626,9 +5811,8 @@ onUnmounted(() => {
         >
           Create
         </button>
-        <button class="secondary-button" @click="showComposer = false">Cancel</button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
     <section v-if="key === 'routing' && !error" class="panel composer" aria-label="Route simulator">
       <h2>Route simulator</h2>
@@ -5878,8 +6062,8 @@ onUnmounted(() => {
 
       <p v-if="!canManageConfig" class="source-note" data-testid="generated-config-denied">
         Rendering the configuration needs the <span class="mono">configuration.manage</span>
-        permission. It resolves secret references while it renders, which is why reading it is
-        gated with the permission that deploys it rather than the one that lists versions.
+        permission. It resolves secret references while it renders, which is why reading it is gated
+        with the permission that deploys it rather than the one that lists versions.
       </p>
 
       <p
@@ -5908,8 +6092,8 @@ onUnmounted(() => {
       </template>
 
       <p v-else class="chart-empty" data-testid="generated-config-idle">
-        Not rendered yet. This is the only read on this screen that resolves secrets, so it is
-        asked for rather than fetched on arrival.
+        Not rendered yet. This is the only read on this screen that resolves secrets, so it is asked
+        for rather than fetched on arrival.
       </p>
     </section>
 
@@ -5940,10 +6124,16 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!-- The row shows the template, which is what View does. -->
             <tr
               v-for="tpl in configTemplates"
               :key="String(tpl.id)"
+              class="selectable"
+              tabindex="0"
               :data-testid="`template-${tpl.id}`"
+              @click="viewTemplate(tpl)"
+              @keydown.enter="viewTemplate(tpl)"
+              @keydown.space.prevent="viewTemplate(tpl)"
             >
               <td>
                 <strong>{{ text(tpl.name) }}</strong>
@@ -5961,7 +6151,7 @@ onUnmounted(() => {
                 <button
                   class="secondary-button"
                   :data-testid="`template-view-${tpl.id}`"
-                  @click="viewTemplate(tpl)"
+                  @click.stop="viewTemplate(tpl)"
                 >
                   View
                 </button>
@@ -5970,7 +6160,7 @@ onUnmounted(() => {
                   class="secondary-button"
                   :data-testid="`template-instantiate-${tpl.id}`"
                   :disabled="loading"
-                  @click="instantiateTemplate(tpl)"
+                  @click.stop="instantiateTemplate(tpl)"
                 >
                   Instantiate
                 </button>
@@ -5985,33 +6175,31 @@ onUnmounted(() => {
         </table>
       </div>
 
-      <div v-if="templateView" class="baseline-info" data-testid="template-view">
-        <header class="panel-header">
-          <div>
-            <h3>{{ text(templateView.name) }} — content</h3>
-          </div>
-          <button
-            class="secondary-button"
-            data-testid="template-view-close"
-            @click="closeTemplateView"
-          >
-            Close
-          </button>
-        </header>
-        <p v-if="templateViewLoading" class="form-hint">Loading…</p>
-        <template v-else>
-          <pre class="json-block" data-testid="template-view-content">{{
-            prettyJson(templateView.content)
-          }}</pre>
-          <button
-            class="secondary-button"
-            data-testid="template-view-copy"
-            @click="copyText(prettyJson(templateView.content))"
-          >
-            Copy content
-          </button>
-        </template>
-      </div>
+      <!-- A sheet: the template list stays behind it, and an 80-column config
+           sample is unreadable in a block wedged under the table. -->
+      <DetailDrawer
+        :open="Boolean(templateView)"
+        :title="`${text(templateView?.name)} — content`"
+        eyebrow="Configuration template"
+        wide
+        @close="closeTemplateView"
+      >
+        <div v-if="templateView" data-testid="template-view">
+          <p v-if="templateViewLoading" class="form-hint">Loading…</p>
+          <template v-else>
+            <pre class="json-block" data-testid="template-view-content">{{
+              prettyJson(templateView.content)
+            }}</pre>
+            <button
+              class="secondary-button"
+              data-testid="template-view-copy"
+              @click="copyText(prettyJson(templateView.content))"
+            >
+              Copy content
+            </button>
+          </template>
+        </div>
+      </DetailDrawer>
 
       <div v-if="instantiateResult" class="baseline-info" data-testid="instantiate-result">
         <header class="panel-header">
@@ -6103,12 +6291,23 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!--
+              `selectable` is the design system's class for a row that opens
+              something (`SmscsScreen.jsx` uses it on exactly this table), and
+              it brings a focus ring with it — which is the half `clickable-row`
+              never had. `tabindex` and the Enter/Space handlers are what make
+              the row reachable at all without a mouse; a register that can only
+              be opened by clicking is not operable from the keyboard.
+            -->
             <tr
               v-for="row in visibleRows"
               :key="row.id"
               :data-testid="`record-${row.id}`"
-              :class="{ 'clickable-row': clickableRow }"
+              :class="{ selectable: clickableRow }"
+              :tabindex="clickableRow ? 0 : undefined"
               @click="onRowClick(row)"
+              @keydown.enter="clickableRow && onRowClick(row)"
+              @keydown.space.prevent="clickableRow && onRowClick(row)"
             >
               <template v-if="columns">
                 <td v-for="column in columns" :key="column.header" :class="{ mono: column.mono }">
@@ -6581,9 +6780,12 @@ onUnmounted(() => {
             <tr
               v-for="(item, index) in cursorItems"
               :key="String(item.id ?? index)"
-              class="clickable-row"
+              class="selectable"
               :data-testid="`dlr-row-${index}`"
+              tabindex="0"
               @click="openDlrDetail(item)"
+              @keydown.enter="openDlrDetail(item)"
+              @keydown.space.prevent="openDlrDetail(item)"
             >
               <td v-for="column in dlrColumns" :key="column.key" :class="{ mono: column.mono }">
                 <span
@@ -6645,19 +6847,14 @@ onUnmounted(() => {
       </footer>
     </section>
 
-    <section
-      v-if="dlrOpen && dlrRecord"
-      class="panel detail-panel"
-      data-testid="dlr-detail-panel"
-      aria-label="Delivery report detail"
+    <DetailDrawer
+      :open="dlrOpen && Boolean(dlrRecord)"
+      title="Delivery report detail"
+      eyebrow="Delivery report"
+      wide
+      @close="closeDlrDetail"
     >
-      <header>
-        <h2>Delivery report detail</h2>
-        <button class="secondary-button" data-testid="dlr-detail-close" @click="closeDlrDetail">
-          Close
-        </button>
-      </header>
-      <dl class="detail-grid">
+      <dl v-if="dlrRecord" class="detail-grid" data-testid="dlr-detail-panel">
         <dt>Record ID</dt>
         <dd class="mono">
           {{ text(dlrRecord.id ?? dlrRecord.message_id ?? dlrRecord.messageId) }}
@@ -6722,7 +6919,7 @@ onUnmounted(() => {
         Fields the SQLBox message store did not supply for this receipt read “—”; nothing here is
         inferred. There is no per-receipt endpoint — this is the complete row the report returned.
       </p>
-    </section>
+    </DetailDrawer>
 
     <section v-if="isDocker && !error" class="panel" data-testid="docker-panel">
       <header class="panel-header">

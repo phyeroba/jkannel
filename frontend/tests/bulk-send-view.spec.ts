@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
+import { overlay, overlayAll, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -104,9 +105,7 @@ async function mountView(fetchMock: ReturnType<typeof vi.fn>) {
   await router.push('/bulk-send');
   await router.isReady();
   const wrapper = mount(BulkSendView, { global: { plugins: [router] } });
-  await vi.waitFor(() =>
-    expect(wrapper.find('[data-testid="bulk-job-job-1"]').exists()).toBe(true),
-  );
+  await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="bulk-job-job-1"]')).toBe(true));
   return wrapper;
 }
 
@@ -131,25 +130,25 @@ const stubDownloads = () => {
 describe('Bulk Send view', () => {
   it('counts segments live as the campaign body is typed', async () => {
     const wrapper = await mountView(liveMock());
-    const body = wrapper.get('[data-testid="bulk-message"]');
+    const body = overlay(wrapper, '[data-testid="bulk-message"]');
 
     await body.setValue('Short reminder');
-    expect(wrapper.get('[data-testid="bulk-segment-segments"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="bulk-segment-alphabet"]').text()).toBe('GSM-7');
-    expect(wrapper.get('[data-testid="bulk-segment-remaining"]').text()).toBe('146');
-    expect(wrapper.find('[data-testid="bulk-segment-multipart-warning"]').exists()).toBe(false);
+    expect(overlay(wrapper, '[data-testid="bulk-segment-segments"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="bulk-segment-alphabet"]').text()).toBe('GSM-7');
+    expect(overlay(wrapper, '[data-testid="bulk-segment-remaining"]').text()).toBe('146');
+    expect(overlayHas(wrapper, '[data-testid="bulk-segment-multipart-warning"]')).toBe(false);
 
     // 161 GSM-7 septets tips into a second segment and warns.
     await body.setValue('a'.repeat(161));
-    expect(wrapper.get('[data-testid="bulk-segment-segments"]').text()).toBe('2');
-    expect(wrapper.get('[data-testid="bulk-segment-multipart-warning"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-segment-segments"]').text()).toBe('2');
+    expect(overlay(wrapper, '[data-testid="bulk-segment-multipart-warning"]').text()).toContain(
       '2 segments',
     );
 
     // One curly apostrophe collapses the limit from 160 to 70.
     await body.setValue(`${'a'.repeat(80)}’`);
-    const ucs2 = wrapper.get('[data-testid="bulk-segment-ucs2-warning"]').text();
-    expect(wrapper.get('[data-testid="bulk-segment-alphabet"]').text()).toBe('UCS-2');
+    const ucs2 = overlay(wrapper, '[data-testid="bulk-segment-ucs2-warning"]').text();
+    expect(overlay(wrapper, '[data-testid="bulk-segment-alphabet"]').text()).toBe('UCS-2');
     expect(ucs2).toContain('UCS-2 encoding forced');
     expect(ucs2).toContain('160 to 70');
     expect(ucs2).toContain('’');
@@ -157,20 +156,22 @@ describe('Bulk Send view', () => {
 
   it('projects the campaign cost as segments × recipients', async () => {
     const wrapper = await mountView(liveMock());
-    await wrapper.get('[data-testid="bulk-message"]').setValue('a'.repeat(161));
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('+256700000001\n+256700000002');
-    expect(wrapper.get('[data-testid="bulk-total-cost"]').text()).toBe('4');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('a'.repeat(161));
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue(
+      '+256700000001\n+256700000002',
+    );
+    expect(overlay(wrapper, '[data-testid="bulk-total-cost"]').text()).toBe('4');
   });
 
   it('sends now by default, posting no schedule field at all', async () => {
     const fetchMock = liveMock();
     const wrapper = await mountView(fetchMock);
-    expect(wrapper.find('[data-testid="bulk-schedule-datetime"]').exists()).toBe(false);
-    await wrapper.get('[data-testid="bulk-name"]').setValue('July reminder');
-    await wrapper.get('[data-testid="bulk-smsc"]').setValue('smsc-primary');
-    await wrapper.get('[data-testid="bulk-message"]').setValue('Balance due');
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('+256700000001');
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    expect(overlayHas(wrapper, '[data-testid="bulk-schedule-datetime"]')).toBe(false);
+    await overlay(wrapper, '[data-testid="bulk-name"]').setValue('July reminder');
+    await overlay(wrapper, '[data-testid="bulk-smsc"]').setValue('smsc-primary');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('Balance due');
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
 
     await vi.waitFor(() =>
       expect(
@@ -193,28 +194,30 @@ describe('Bulk Send view', () => {
   it('schedules a campaign as scheduledAt + validityMinutes, rejecting a past time', async () => {
     const fetchMock = liveMock();
     const wrapper = await mountView(fetchMock);
-    await wrapper.get('[data-testid="bulk-name"]').setValue('July reminder');
-    await wrapper.get('[data-testid="bulk-smsc"]').setValue('smsc-primary');
-    await wrapper.get('[data-testid="bulk-message"]').setValue('Balance due');
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="bulk-name"]').setValue('July reminder');
+    await overlay(wrapper, '[data-testid="bulk-smsc"]').setValue('smsc-primary');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('Balance due');
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue('+256700000001');
 
-    await wrapper.get('[data-testid="bulk-schedule-later"]').trigger('click');
-    expect(wrapper.get('[data-testid="bulk-submit"]').attributes('disabled')).toBeDefined();
+    await overlay(wrapper, '[data-testid="bulk-schedule-later"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="bulk-submit"]').attributes('disabled')).toBeDefined();
 
-    await wrapper.get('[data-testid="bulk-schedule-datetime"]').setValue(localAt(-60 * 60 * 1000));
-    expect(wrapper.get('[data-testid="bulk-schedule-error"]').text()).toContain('in the past');
-    expect(wrapper.get('[data-testid="bulk-submit"]').attributes('disabled')).toBeDefined();
+    await overlay(wrapper, '[data-testid="bulk-schedule-datetime"]').setValue(
+      localAt(-60 * 60 * 1000),
+    );
+    expect(overlay(wrapper, '[data-testid="bulk-schedule-error"]').text()).toContain('in the past');
+    expect(overlay(wrapper, '[data-testid="bulk-submit"]').attributes('disabled')).toBeDefined();
 
     const future = localAt(3 * 60 * 60 * 1000);
-    await wrapper.get('[data-testid="bulk-schedule-datetime"]').setValue(future);
-    await wrapper.get('[data-testid="bulk-schedule-validity"]').setValue('600');
-    expect(wrapper.find('[data-testid="bulk-schedule-error"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="bulk-schedule-iso"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="bulk-schedule-datetime"]').setValue(future);
+    await overlay(wrapper, '[data-testid="bulk-schedule-validity"]').setValue('600');
+    expect(overlayHas(wrapper, '[data-testid="bulk-schedule-error"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="bulk-schedule-iso"]').text()).toContain(
       new Date(future).toISOString(),
     );
-    expect(wrapper.get('[data-testid="bulk-submit"]').text()).toContain('Schedule campaign');
+    expect(overlay(wrapper, '[data-testid="bulk-submit"]').text()).toContain('Schedule campaign');
 
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -237,28 +240,30 @@ describe('Bulk Send view', () => {
 
   it('refuses a validity that would expire before the scheduled delivery', async () => {
     const wrapper = await mountView(liveMock());
-    await wrapper.get('[data-testid="bulk-schedule-later"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-schedule-later"]').trigger('click');
     await wrapper
       .get('[data-testid="bulk-schedule-datetime"]')
       .setValue(localAt(4 * 60 * 60 * 1000));
-    await wrapper.get('[data-testid="bulk-schedule-validity"]').setValue('30');
-    expect(wrapper.get('[data-testid="bulk-schedule-error"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="bulk-schedule-validity"]').setValue('30');
+    expect(overlay(wrapper, '[data-testid="bulk-schedule-error"]').text()).toContain(
       'must be longer than',
     );
   });
 
   it('tells the operator where the traffic will appear, with links', async () => {
     const wrapper = await mountView(liveMock());
-    await wrapper.get('[data-testid="bulk-name"]').setValue('July reminder');
-    await wrapper.get('[data-testid="bulk-smsc"]').setValue('smsc-primary');
-    await wrapper.get('[data-testid="bulk-message"]').setValue('Balance due');
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('+256700000001\n+256700000002');
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-name"]').setValue('July reminder');
+    await overlay(wrapper, '[data-testid="bulk-smsc"]').setValue('smsc-primary');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('Balance due');
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue(
+      '+256700000001\n+256700000002',
+    );
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
 
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="bulk-send-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="bulk-send-notice"]')).toBe(true),
     );
-    const panel = wrapper.get('[data-testid="bulk-send-notice-panel"]');
+    const panel = overlay(wrapper, '[data-testid="bulk-send-notice-panel"]');
     expect(panel.text()).toContain('2 recipient(s) × 1 segment(s) = 2 SMS');
     expect(panel.text()).toContain('does not sit in the Live Queue spool');
     expect(panel.get('[data-testid="followup-messages"]').attributes('href')).toBe('/messages');
@@ -276,13 +281,13 @@ describe('Bulk Send view', () => {
       return apiResponse({ items: [job('job-1', 'April notice')], total: 1 });
     });
     const wrapper = await mountView(fetchMock);
-    await wrapper.get('[data-testid="bulk-name"]').setValue('Bad campaign');
-    await wrapper.get('[data-testid="bulk-smsc"]').setValue('smsc-primary');
-    await wrapper.get('[data-testid="bulk-message"]').setValue('Hi');
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('nope');
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-name"]').setValue('Bad campaign');
+    await overlay(wrapper, '[data-testid="bulk-smsc"]').setValue('smsc-primary');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('Hi');
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue('nope');
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="bulk-form-error"]').text()).toBe(
+      expect(overlay(wrapper, '[data-testid="bulk-form-error"]').text()).toBe(
         'recipients[0] must be a valid MSISDN',
       ),
     );
@@ -304,20 +309,20 @@ describe('Bulk Send view', () => {
     expect(lastJobsUrl()).toContain('paginate=cursor');
     expect(lastJobsUrl()).toContain('limit=50');
 
-    await wrapper.get('[data-testid="bulk-jobs-search"]').setValue('April');
-    await wrapper.get('[data-testid="bulk-jobs-search"]').trigger('change');
+    await overlay(wrapper, '[data-testid="bulk-jobs-search"]').setValue('April');
+    await overlay(wrapper, '[data-testid="bulk-jobs-search"]').trigger('change');
     await vi.waitFor(() => expect(lastJobsUrl()).toContain('search=April'));
 
-    await wrapper.get('[data-testid="bulk-jobs-status"]').setValue('failed');
+    await overlay(wrapper, '[data-testid="bulk-jobs-status"]').setValue('failed');
     await vi.waitFor(() => expect(lastJobsUrl()).toContain('filter.status=failed'));
 
-    await wrapper.get('[data-testid="bulk-jobs-limit"]').setValue('200');
+    await overlay(wrapper, '[data-testid="bulk-jobs-limit"]').setValue('200');
     await vi.waitFor(() => expect(lastJobsUrl()).toContain('limit=200'));
 
     // Sort is a server parameter, ascending first, then descending.
-    await wrapper.get('[data-testid="bulk-jobs-sort-name"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-jobs-sort-name"]').trigger('click');
     await vi.waitFor(() => expect(lastJobsUrl()).toContain('sort=name'));
-    await wrapper.get('[data-testid="bulk-jobs-sort-name"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-jobs-sort-name"]').trigger('click');
     await vi.waitFor(() => expect(lastJobsUrl()).toContain('sort=-name'));
   });
 
@@ -332,9 +337,9 @@ describe('Bulk Send view', () => {
       });
     });
     const wrapper = await mountView(fetchMock);
-    expect(wrapper.get('[data-testid="bulk-jobs-prev"]').attributes('disabled')).toBeDefined();
+    expect(overlay(wrapper, '[data-testid="bulk-jobs-prev"]').attributes('disabled')).toBeDefined();
 
-    await wrapper.get('[data-testid="bulk-jobs-next"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-jobs-next"]').trigger('click');
     await vi.waitFor(() =>
       expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('cursor=page-2'))).toBe(
         true,
@@ -344,16 +349,18 @@ describe('Bulk Send view', () => {
     // Keyset, not offset — that is the point of the change.
     expect(String(paged[0])).not.toContain('offset=');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="bulk-jobs-pager-label"]').text()).toContain('Page 2'),
+      expect(overlay(wrapper, '[data-testid="bulk-jobs-pager-label"]').text()).toContain('Page 2'),
     );
 
     // Going back replays the previous cursor.
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="bulk-jobs-prev"]').attributes('disabled')).toBeUndefined(),
+      expect(
+        overlay(wrapper, '[data-testid="bulk-jobs-prev"]').attributes('disabled'),
+      ).toBeUndefined(),
     );
-    await wrapper.get('[data-testid="bulk-jobs-prev"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-jobs-prev"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="bulk-jobs-pager-label"]').text()).toContain('Page 1'),
+      expect(overlay(wrapper, '[data-testid="bulk-jobs-pager-label"]').text()).toContain('Page 1'),
     );
   });
 
@@ -375,13 +382,13 @@ describe('Bulk Send view', () => {
       return apiResponse({ items: [job('job-1', 'April notice')], nextCursor: null });
     });
     const wrapper = await mountView(fetchMock);
-    await wrapper.get('[data-testid="bulk-jobs-status"]').setValue('failed');
+    await overlay(wrapper, '[data-testid="bulk-jobs-status"]').setValue('failed');
     await vi.waitFor(() =>
       expect(
-        wrapper.get('[data-testid="bulk-jobs-export"]').attributes('disabled'),
+        overlay(wrapper, '[data-testid="bulk-jobs-export"]').attributes('disabled'),
       ).toBeUndefined(),
     );
-    await wrapper.get('[data-testid="bulk-jobs-export"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-jobs-export"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
 
     const exportUrl = String(
@@ -395,7 +402,7 @@ describe('Bulk Send view', () => {
     expect(exportUrl).not.toContain('cursor=');
     expect(exportUrl).not.toContain('paginate=');
     expect(exportUrl).not.toContain('limit=');
-    expect(wrapper.get('[data-testid="bulk-send-notice"]').text()).toContain('Exported 17');
+    expect(overlay(wrapper, '[data-testid="bulk-send-notice"]').text()).toContain('Exported 17');
   });
 
   it('searches, filters, sorts, pages and exports the recipients grid', async () => {
@@ -423,9 +430,9 @@ describe('Bulk Send view', () => {
       return apiResponse({ items: [job('job-1', 'April notice')], nextCursor: null });
     });
     const wrapper = await mountView(fetchMock);
-    await wrapper.get('[data-testid="bulk-job-job-1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-job-job-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="bulk-recipient-0"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="bulk-recipient-0"]')).toBe(true),
     );
     const lastRecipientsUrl = () =>
       String(
@@ -435,22 +442,22 @@ describe('Bulk Send view', () => {
           .at(-1),
       );
 
-    await wrapper.get('[data-testid="bulk-recipients-status"]').setValue('failed');
+    await overlay(wrapper, '[data-testid="bulk-recipients-status"]').setValue('failed');
     await vi.waitFor(() => expect(lastRecipientsUrl()).toContain('filter.status=failed'));
     expect(lastRecipientsUrl()).toContain('paginate=cursor');
 
-    await wrapper.get('[data-testid="bulk-recipients-search"]').setValue('+2567');
-    await wrapper.get('[data-testid="bulk-recipients-search"]').trigger('change');
+    await overlay(wrapper, '[data-testid="bulk-recipients-search"]').setValue('+2567');
+    await overlay(wrapper, '[data-testid="bulk-recipients-search"]').trigger('change');
     await vi.waitFor(() => expect(lastRecipientsUrl()).toContain('search='));
 
-    await wrapper.get('[data-testid="bulk-recipients-sort-receiver"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-recipients-sort-receiver"]').trigger('click');
     await vi.waitFor(() => expect(lastRecipientsUrl()).toContain('sort=receiver'));
 
-    await wrapper.get('[data-testid="bulk-recipients-next"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-recipients-next"]').trigger('click');
     await vi.waitFor(() => expect(lastRecipientsUrl()).toContain('cursor=r-2'));
     expect(lastRecipientsUrl()).not.toContain('offset=');
 
-    await wrapper.get('[data-testid="bulk-recipients-export"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-recipients-export"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
     const exportUrl = String(
       fetchMock.mock.calls.find((call) => String(call[0]).includes('/recipients/export.csv'))?.[0],
@@ -458,22 +465,26 @@ describe('Bulk Send view', () => {
     expect(exportUrl).toContain('filter.status=failed');
     expect(exportUrl).not.toContain('cursor=');
     expect(exportUrl).not.toContain('limit=');
-    expect(wrapper.get('[data-testid="bulk-detail-notice"]').text()).toContain('Exported 42');
+    expect(overlay(wrapper, '[data-testid="bulk-detail-notice"]').text()).toContain('Exported 42');
 
     // `error` is in BULK_RECIPIENT_GRID.searchColumns but not sortColumns, so
     // it must not offer a sort control — and must not read as one that broke.
-    expect(wrapper.find('[data-testid="bulk-recipients-sort-error"]').exists()).toBe(false);
-    const errorHeader = wrapper.findAll('th').find((header) => header.text().startsWith('Error'))!;
+    expect(overlayHas(wrapper, '[data-testid="bulk-recipients-sort-error"]')).toBe(false);
+    const errorHeader = overlayAll(wrapper, 'th').find((header) =>
+      header.text().startsWith('Error'),
+    )!;
     expect(errorHeader.get('.column-static').attributes('title')).toContain('not sortable');
     expect(errorHeader.attributes('aria-sort')).toBeUndefined();
-    expect(wrapper.get('[data-testid="bulk-recipients-sort-note"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-recipients-sort-note"]').text()).toContain(
       'not in the sort whitelist',
     );
 
     // Both bulk exports are CSV-only, and say so rather than leaving a reader
     // hunting for a PDF button that no route backs.
-    expect(wrapper.get('[data-testid="bulk-recipients-csv-only"]').text()).toContain('CSV only');
-    expect(wrapper.get('[data-testid="bulk-jobs-csv-only"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-recipients-csv-only"]').text()).toContain(
+      'CSV only',
+    );
+    expect(overlay(wrapper, '[data-testid="bulk-jobs-csv-only"]').text()).toContain(
       'no PDF route for this export',
     );
   });

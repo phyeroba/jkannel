@@ -32,6 +32,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import DetailDrawer from '../components/DetailDrawer.vue';
 import { canAccess, session } from '../stores/session';
 import { type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
@@ -96,10 +97,16 @@ const stalled = computed(() =>
   ),
 );
 
+function closeJob() {
+  expanded.value = '';
+  detail.value = null;
+}
+
 async function openJob(id: string) {
+  // Clicking the open row again closes it, which is how the control's own label
+  // reads ("Close") and how the row toggle behaved before this became a sheet.
   if (expanded.value === id) {
-    expanded.value = '';
-    detail.value = null;
+    closeJob();
     return;
   }
   expanded.value = id;
@@ -139,9 +146,11 @@ async function loadTypes() {
     const raw = Array.isArray(payload)
       ? payload
       : ((payload as RecordValue)?.types ?? (payload as RecordValue)?.items);
-    types.value = (Array.isArray(raw) ? raw : []).map((entry) =>
-      typeof entry === 'string' ? entry : text((entry as RecordValue)?.type ?? entry, ''),
-    ).filter(Boolean);
+    types.value = (Array.isArray(raw) ? raw : [])
+      .map((entry) =>
+        typeof entry === 'string' ? entry : text((entry as RecordValue)?.type ?? entry, ''),
+      )
+      .filter(Boolean);
   } catch {
     types.value = [];
   }
@@ -209,8 +218,8 @@ onMounted(() => {
       data-testid="jobs-stalled-banner"
     >
       <strong>{{ stalled.length }} job(s) stopped without completing.</strong>
-      A dead-lettered job exhausted its retries — the work it represents did not happen, and
-      nothing will attempt it again.
+      A dead-lettered job exhausted its retries — the work it represents did not happen, and nothing
+      will attempt it again.
     </p>
 
     <section class="panel" data-testid="jobs-list" aria-labelledby="jobs-heading">
@@ -218,8 +227,8 @@ onMounted(() => {
         <div>
           <h2 id="jobs-heading">Background jobs</h2>
           <p>
-            Scheduled sends, MO fan-out, delivery retries, reports and backups all run here.
-            Newest first.
+            Scheduled sends, MO fan-out, delivery retries, reports and backups all run here. Newest
+            first.
           </p>
         </div>
         <label class="filter-select">
@@ -263,7 +272,15 @@ onMounted(() => {
             </thead>
             <tbody>
               <template v-for="job in jobs" :key="text(job.id)">
-                <tr :data-testid="`job-${text(job.id)}`">
+                <tr
+                  class="selectable"
+                  :data-testid="`job-${text(job.id)}`"
+                  tabindex="0"
+                  :aria-label="`Open job ${text(job.type)}`"
+                  @click="openJob(text(job.id, ''))"
+                  @keydown.enter.prevent="openJob(text(job.id, ''))"
+                  @keydown.space.prevent="openJob(text(job.id, ''))"
+                >
                   <td class="mono cell-tight">
                     {{ formatMoment(text(job.created_at ?? job.createdAt, '')) }}
                   </td>
@@ -279,9 +296,9 @@ onMounted(() => {
                       class="secondary-button"
                       type="button"
                       :data-testid="`job-open-${text(job.id)}`"
-                      @click="openJob(text(job.id, ''))"
+                      @click.stop="openJob(text(job.id, ''))"
                     >
-                      {{ expanded === text(job.id) ? 'Hide' : 'Expand' }}
+                      {{ expanded === text(job.id) ? 'Close' : 'Open' }}
                     </button>
                     <!--
                       Only where cancelling can still change the outcome. A
@@ -290,24 +307,17 @@ onMounted(() => {
                     -->
                     <button
                       v-if="
-                        canManage && ['queued', 'running'].includes(text(job.status, '').toLowerCase())
+                        canManage &&
+                        ['queued', 'running'].includes(text(job.status, '').toLowerCase())
                       "
                       class="secondary-button danger-button"
                       type="button"
                       :disabled="Boolean(busy)"
                       :data-testid="`job-cancel-${text(job.id)}`"
-                      @click="cancelJob(text(job.id, ''))"
+                      @click.stop="cancelJob(text(job.id, ''))"
                     >
                       Cancel
                     </button>
-                  </td>
-                </tr>
-                <tr v-if="expanded === text(job.id)">
-                  <td colspan="5">
-                    <pre v-if="detail" class="json-block" :data-testid="`job-detail-${text(job.id)}`">{{
-                      JSON.stringify(detail, null, 2)
-                    }}</pre>
-                    <p v-else class="source-note">Reading the job…</p>
                   </td>
                 </tr>
               </template>
@@ -317,8 +327,38 @@ onMounted(() => {
       </DataState>
     </section>
 
+    <!-- THE JOB ITSELF ------------------------------------------------------
+         A record opened from a register goes in a sheet, not in an extra table
+         row underneath the one that was clicked. The expander pushed every job
+         below it down the page, and on a hundred-row queue the detail could
+         land off-screen entirely. The queue stays visible behind the sheet. -->
+    <DetailDrawer
+      :open="Boolean(expanded)"
+      title="Job"
+      eyebrow="Queue"
+      :subtitle="expanded"
+      wide
+      @close="closeJob"
+    >
+      <pre v-if="detail" class="json-block" :data-testid="`job-detail-${expanded}`">{{
+        JSON.stringify(detail, null, 2)
+      }}</pre>
+      <p v-else class="source-note">Reading the job…</p>
+      <p class="source-note">
+        The whole record as <span class="mono">GET /jobs/{{ expanded }}</span> returns it. It is
+        shown raw because the job payload has no fixed shape — each job type defines its own input
+        and result — so a field list here would have to guess, and would silently drop whatever it
+        did not know about.
+      </p>
+    </DetailDrawer>
+
     <!-- SUBMIT ------------------------------------------------------------- -->
-    <section v-if="canManage" class="panel" data-testid="jobs-submit" aria-labelledby="jobs-submit-heading">
+    <section
+      v-if="canManage"
+      class="panel"
+      data-testid="jobs-submit"
+      aria-labelledby="jobs-submit-heading"
+    >
       <header class="panel-header">
         <div>
           <h2 id="jobs-submit-heading">Run a job</h2>
@@ -328,8 +368,8 @@ onMounted(() => {
             would let somebody queue work that can never run.
           -->
           <p>
-            Only the types this deployment has an executor for. Submitting anything else is
-            rejected rather than queued forever.
+            Only the types this deployment has an executor for. Submitting anything else is rejected
+            rather than queued forever.
           </p>
         </div>
       </header>

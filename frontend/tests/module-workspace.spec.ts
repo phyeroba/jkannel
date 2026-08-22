@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
+import { overlay, overlayAll, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -73,22 +74,22 @@ describe('module workspace behavior', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/customers', 'Customers');
-    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
+    await vi.waitFor(() => expect(overlayAll(wrapper, 'tbody tr')).toHaveLength(2));
 
     // The pager exists at all, and knows there are more than one page of rows.
-    expect(wrapper.get('[data-testid="grid-range"]').text()).toContain('120');
+    expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toContain('120');
     // Sort and filter controls are offered because the API honours them.
-    expect(wrapper.get('[data-testid="grid-sort"]').findAll('option').length).toBe(4);
-    expect(wrapper.find('[data-testid="grid-filter-status"]').exists()).toBe(true);
+    expect(overlay(wrapper, '[data-testid="grid-sort"]').findAll('option').length).toBe(4);
+    expect(overlayHas(wrapper, '[data-testid="grid-filter-status"]')).toBe(true);
 
-    await wrapper.get('[data-testid="workspace-search"]').setValue('no-such-customer');
+    await overlay(wrapper, '[data-testid="workspace-search"]').setValue('no-such-customer');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('search=no-such-customer')),
       ).toBe(true),
     );
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="empty-state"]').text()).toBe(
+      expect(overlay(wrapper, '[data-testid="empty-state"]').text()).toBe(
         'No records match these filters.',
       ),
     );
@@ -108,21 +109,21 @@ describe('module workspace behavior', () => {
     const fetchMock = vi.fn().mockImplementation(() => apiResponse(records));
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
-    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
+    await vi.waitFor(() => expect(overlayAll(wrapper, 'tbody tr')).toHaveLength(2));
 
-    await wrapper.get('[data-testid="workspace-search"]').setValue('+256700000000');
+    await overlay(wrapper, '[data-testid="workspace-search"]').setValue('+256700000000');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) => String(call[0]).includes('query=%2B256700000000')),
       ).toBe(true),
     );
     // The server answered with rows; none of them may be filtered back out here.
-    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
+    await vi.waitFor(() => expect(overlayAll(wrapper, 'tbody tr')).toHaveLength(2));
 
     // And the coarse client-side Status dropdown is gone: Messages has a real
     // server-side "Delivery status" filter, and two Status controls with
     // different vocabularies on one screen contradicted each other.
-    expect(wrapper.find('[data-testid="status-filter"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="status-filter"]')).toBe(false);
     wrapper.unmount();
   });
 
@@ -138,20 +139,22 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/routing', 'Routing');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="primary-action"]').trigger('click');
-    expect(wrapper.get('section[aria-label="Create route"] h2').text()).toBe('Create route');
+    await overlay(wrapper, '[data-testid="primary-action"]').trigger('click');
+    // The composer is a Dialog now, so it is a `[role="dialog"]` teleported to
+    // the body rather than a `<section>` under the register.
+    expect(overlay(wrapper, '[data-testid="workspace-composer"] h2').text()).toBe('Create route');
 
     // Target/fallback are dropdowns populated from GET /smscs (value = SMSC id).
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="draft-target"]').findAll('option').length).toBe(3),
+      expect(overlay(wrapper, '[data-testid="draft-target"]').findAll('option').length).toBe(3),
     );
-    expect(wrapper.get('[data-testid="draft-fallback"]').findAll('option').length).toBe(3);
-    expect(wrapper.get('[data-testid="draft-target"]').text()).toContain('primary-smpp');
+    expect(overlay(wrapper, '[data-testid="draft-fallback"]').findAll('option').length).toBe(3);
+    expect(overlay(wrapper, '[data-testid="draft-target"]').text()).toContain('primary-smpp');
 
-    await wrapper.get('[data-testid="draft-name"]').setValue('East Africa fallback');
-    await wrapper.get('[data-testid="draft-target"]').setValue('smsc-1');
-    await wrapper.get('[data-testid="draft-fallback"]').setValue('smsc-2');
-    await wrapper.get('[data-testid="save-draft"]').trigger('click');
+    await overlay(wrapper, '[data-testid="draft-name"]').setValue('East Africa fallback');
+    await overlay(wrapper, '[data-testid="draft-target"]').setValue('smsc-1');
+    await overlay(wrapper, '[data-testid="draft-fallback"]').setValue('smsc-2');
+    await overlay(wrapper, '[data-testid="save-draft"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) => String(call[0]).endsWith('/routes') && call[1]?.method === 'POST',
@@ -164,7 +167,7 @@ describe('module workspace behavior', () => {
         fallbackSmscId: 'smsc-2',
       });
     });
-    expect(wrapper.get('th').attributes('scope')).toBe('col');
+    expect(overlay(wrapper, 'th').attributes('scope')).toBe('col');
   });
 
   it('refreshes a read-only workspace through its primary action', async () => {
@@ -203,13 +206,13 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/messages', 'Messages');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="export-messages"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-messages"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(wrapper.text()).toContain('Exported 1 SQLBox rows.'));
 
-    await wrapper.get('[data-testid="retention-dry-run"]').trigger('click');
+    await overlay(wrapper, '[data-testid="retention-dry-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="retention-result"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="retention-result"]').text()).toContain(
         '2 of 10 SQLBox rows',
       ),
     );
@@ -255,32 +258,32 @@ describe('module workspace behavior', () => {
 
     // Initial load applies the module default sort and page bounds.
     expect(fetchMock.mock.calls[0][0]).toContain('/alerts?sort=-openedAt&limit=50&offset=0');
-    expect(wrapper.get('[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 120');
+    expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 120');
 
     // The search input is debounced before it reaches the server.
-    await wrapper.get('[data-testid="workspace-search"]').setValue('gateway');
+    await overlay(wrapper, '[data-testid="workspace-search"]').setValue('gateway');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(fetchMock.mock.calls[1][0]).toContain('search=gateway');
     expect(fetchMock.mock.calls[1][0]).toContain('sort=-openedAt');
 
     // Sort field and direction changes reload immediately.
-    await wrapper.get('[data-testid="grid-sort"]').setValue('severity');
+    await overlay(wrapper, '[data-testid="grid-sort"]').setValue('severity');
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(fetchMock.mock.calls[2][0]).toContain('sort=-severity');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="grid-sort-direction"]').trigger('click');
+    await overlay(wrapper, '[data-testid="grid-sort-direction"]').trigger('click');
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     expect(fetchMock.mock.calls[3][0]).toContain('sort=severity');
 
     // Enum filters render as dropdowns and produce filter.<field> params.
-    await wrapper.get('[data-testid="grid-filter-status"]').setValue('open');
+    await overlay(wrapper, '[data-testid="grid-filter-status"]').setValue('open');
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     expect(fetchMock.mock.calls[4][0]).toContain('filter.status=open');
 
     // Pagination advances the offset and keeps every other parameter.
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="grid-next"]').trigger('click');
+    await overlay(wrapper, '[data-testid="grid-next"]').trigger('click');
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
     expect(fetchMock.mock.calls[5][0]).toContain('offset=50');
     expect(fetchMock.mock.calls[5][0]).toContain('filter.status=open');
@@ -290,8 +293,8 @@ describe('module workspace behavior', () => {
     const fetchMock = vi.fn().mockImplementationOnce(() => apiResponse(records));
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
-    await vi.waitFor(() => expect(wrapper.findAll('tbody tr')).toHaveLength(2));
-    expect(wrapper.get('[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 2');
+    await vi.waitFor(() => expect(overlayAll(wrapper, 'tbody tr')).toHaveLength(2));
+    expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 2');
   });
 
   it('exports grid workspaces as CSV and PDF with the active filters', async () => {
@@ -324,14 +327,14 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="export-csv"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-csv"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalledTimes(1));
     const csvCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes('/smscs/export.csv'),
     );
     expect(csvCall?.[0]).toContain('limit=500');
 
-    await wrapper.get('[data-testid="export-pdf"]').trigger('click');
+    await overlay(wrapper, '[data-testid="export-pdf"]').trigger('click');
     await vi.waitFor(() => expect(click).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(wrapper.text()).toContain('Exported 2 rows as PDF.'));
     click.mockRestore();
@@ -369,15 +372,15 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/reports', 'Reports');
     await vi.waitFor(() => expect(wrapper.text()).toContain('120'));
     expect(fetchMock.mock.calls[0][0]).toContain('/reports/volume?sort=-periodStart');
-    expect(wrapper.find('[data-testid="grid-filter-periodType"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="grid-filter-scope"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="grid-filter-periodType"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="grid-filter-scope"]')).toBe(true);
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="delivery-summary"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="delivery-summary"]').text()).toContain(
         '3 delivery receipts',
       ),
     );
 
-    await wrapper.get('[data-testid="generate-reports"]').trigger('click');
+    await overlay(wrapper, '[data-testid="generate-reports"]').trigger('click');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -412,7 +415,7 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/logs-audit', 'Logs & Audit');
     await vi.waitFor(() => expect(wrapper.text()).toContain('route.deploy'));
     expect(fetchMock.mock.calls[0][0]).toContain('/audit-events?sort=-createdAt');
-    const headers = wrapper.findAll('th').map((th) => th.text());
+    const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining([
         'When',
@@ -424,12 +427,12 @@ describe('module workspace behavior', () => {
         'Source IP',
       ]),
     );
-    const row = wrapper.get('[data-testid="record-evt-1"]').text();
+    const row = overlay(wrapper, '[data-testid="record-evt-1"]').text();
     expect(row).toContain('user-7');
     expect(row).toContain('corr-42');
     expect(row).toContain('10.0.0.9');
-    expect(wrapper.find('[data-testid="export-csv"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="export-pdf"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="export-csv"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="export-pdf"]')).toBe(true);
   });
 
   it('lists notifications and marks a single one as read', async () => {
@@ -457,13 +460,11 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/notifications', 'Notifications');
     await vi.waitFor(() => expect(wrapper.text()).toContain('Daily volume report ready'));
-    expect(wrapper.get('[data-testid="record-n1"]').text()).toContain('unread');
+    expect(overlay(wrapper, '[data-testid="record-n1"]').text()).toContain('unread');
 
-    await wrapper.get('[data-testid="mark-read-n1"]').trigger('click');
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mark-read-n1"]').exists()).toBe(false),
-    );
-    expect(wrapper.get('[data-testid="record-n1"]').text()).toContain('read');
+    await overlay(wrapper, '[data-testid="mark-read-n1"]').trigger('click');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="mark-read-n1"]')).toBe(false));
+    expect(overlay(wrapper, '[data-testid="record-n1"]').text()).toContain('read');
   });
 
   it('requires an SMSC engine id before submitting a message', async () => {
@@ -481,18 +482,18 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/messages', 'Messages');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
+    await overlay(wrapper, '[data-testid="open-send-message"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="send-smsc"]').findAll('option')).toHaveLength(2),
+      expect(overlay(wrapper, '[data-testid="send-smsc"]').findAll('option')).toHaveLength(2),
     );
-    await wrapper.get('[data-testid="send-sender"]').setValue('JKANNEL');
-    await wrapper.get('[data-testid="send-receiver"]').setValue('+256700000001');
-    await wrapper.get('[data-testid="send-text"]').setValue('Hello from the console');
-    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
+    await overlay(wrapper, '[data-testid="send-sender"]').setValue('JKANNEL');
+    await overlay(wrapper, '[data-testid="send-receiver"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="send-text"]').setValue('Hello from the console');
+    expect(overlay(wrapper, '[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
 
-    await wrapper.get('[data-testid="send-smsc"]').setValue('primary-smpp');
-    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeUndefined();
-    await wrapper.get('[data-testid="send-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-smsc"]').setValue('primary-smpp');
+    expect(overlay(wrapper, '[data-testid="send-submit"]').attributes('disabled')).toBeUndefined();
+    await overlay(wrapper, '[data-testid="send-submit"]').trigger('click');
     await vi.waitFor(() => {
       const submit = fetchMock.mock.calls.find(
         (call) =>
@@ -522,24 +523,26 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', sendMock());
     const wrapper = await mountWorkspace('/messages', 'Messages');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
+    await overlay(wrapper, '[data-testid="open-send-message"]').trigger('click');
 
-    const body = wrapper.get('[data-testid="send-text"]');
+    const body = overlay(wrapper, '[data-testid="send-text"]');
     await body.setValue('a'.repeat(160));
-    expect(wrapper.get('[data-testid="send-segment-segments"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="send-segment-remaining"]').text()).toBe('0');
-    expect(wrapper.find('[data-testid="send-segment-multipart-warning"]').exists()).toBe(false);
+    expect(overlay(wrapper, '[data-testid="send-segment-segments"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="send-segment-remaining"]').text()).toBe('0');
+    expect(overlayHas(wrapper, '[data-testid="send-segment-multipart-warning"]')).toBe(false);
 
     await body.setValue('a'.repeat(161));
-    expect(wrapper.get('[data-testid="send-segment-segments"]').text()).toBe('2');
-    expect(wrapper.find('[data-testid="send-segment-multipart-warning"]').exists()).toBe(true);
+    expect(overlay(wrapper, '[data-testid="send-segment-segments"]').text()).toBe('2');
+    expect(overlayHas(wrapper, '[data-testid="send-segment-multipart-warning"]')).toBe(true);
 
     // A single emoji is one character, two UCS-2 units, and collapses the limit.
     await body.setValue('Thanks 🙂');
-    expect(wrapper.get('[data-testid="send-segment-characters"]').text()).toBe('8');
-    expect(wrapper.get('[data-testid="send-segment-alphabet"]').text()).toBe('UCS-2');
-    expect(wrapper.get('[data-testid="send-segment-remaining"]').text()).toBe('61');
-    expect(wrapper.get('[data-testid="send-segment-ucs2-warning"]').text()).toContain('160 to 70');
+    expect(overlay(wrapper, '[data-testid="send-segment-characters"]').text()).toBe('8');
+    expect(overlay(wrapper, '[data-testid="send-segment-alphabet"]').text()).toBe('UCS-2');
+    expect(overlay(wrapper, '[data-testid="send-segment-remaining"]').text()).toBe('61');
+    expect(overlay(wrapper, '[data-testid="send-segment-ucs2-warning"]').text()).toContain(
+      '160 to 70',
+    );
   });
 
   it('schedules a single message as scheduledAt + validityMinutes, rejecting the past', async () => {
@@ -547,21 +550,21 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/messages', 'Messages');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
-    await wrapper.get('[data-testid="send-sender"]').setValue('JKANNEL');
-    await wrapper.get('[data-testid="send-receiver"]').setValue('+256700000001');
-    await wrapper.get('[data-testid="send-text"]').setValue('Balance due');
-    await wrapper.get('[data-testid="send-smsc"]').setValue('primary-smpp');
+    await overlay(wrapper, '[data-testid="open-send-message"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-sender"]').setValue('JKANNEL');
+    await overlay(wrapper, '[data-testid="send-receiver"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="send-text"]').setValue('Balance due');
+    await overlay(wrapper, '[data-testid="send-smsc"]').setValue('primary-smpp');
 
     // Send now is the default and posts no schedule.
-    expect(wrapper.find('[data-testid="send-schedule-datetime"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="send-schedule-datetime"]')).toBe(false);
 
-    await wrapper.get('[data-testid="send-schedule-later"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-schedule-later"]').trigger('click');
     // Committing to Send later with no time chosen blocks submission.
-    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="send-schedule-error"]').text()).toContain(
       'Choose the date and time',
     );
-    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
+    expect(overlay(wrapper, '[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
 
     // A past instant is rejected in the UI, before any request is made.
     const past = new Date(Date.now() - 3 * 60 * 60 * 1000);
@@ -571,25 +574,25 @@ describe('module workspace behavior', () => {
       ).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(
         date.getMinutes(),
       ).padStart(2, '0')}`;
-    await wrapper.get('[data-testid="send-schedule-datetime"]').setValue(local(past));
-    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain('in the past');
-    expect(wrapper.get('[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
+    await overlay(wrapper, '[data-testid="send-schedule-datetime"]').setValue(local(past));
+    expect(overlay(wrapper, '[data-testid="send-schedule-error"]').text()).toContain('in the past');
+    expect(overlay(wrapper, '[data-testid="send-submit"]').attributes('disabled')).toBeDefined();
 
     const future = new Date(Date.now() + 2 * 60 * 60 * 1000);
-    await wrapper.get('[data-testid="send-schedule-datetime"]').setValue(local(future));
+    await overlay(wrapper, '[data-testid="send-schedule-datetime"]').setValue(local(future));
     // Validity must outlast the wait, or the message expires before delivery.
-    await wrapper.get('[data-testid="send-schedule-validity"]').setValue('5');
-    expect(wrapper.get('[data-testid="send-schedule-error"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="send-schedule-validity"]').setValue('5');
+    expect(overlay(wrapper, '[data-testid="send-schedule-error"]').text()).toContain(
       'must be longer than',
     );
-    await wrapper.get('[data-testid="send-schedule-validity"]').setValue('240');
-    expect(wrapper.find('[data-testid="send-schedule-error"]').exists()).toBe(false);
+    await overlay(wrapper, '[data-testid="send-schedule-validity"]').setValue('240');
+    expect(overlayHas(wrapper, '[data-testid="send-schedule-error"]')).toBe(false);
     // The honest caveat about what deferral actually is.
-    expect(wrapper.get('[data-testid="send-schedule-caveat"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="send-schedule-caveat"]').text()).toContain(
       'request to the carrier',
     );
 
-    await wrapper.get('[data-testid="send-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-submit"]').trigger('click');
     await vi.waitFor(() => {
       const submit = fetchMock.mock.calls.find(
         (call) =>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 import { smscHeadroom, smscOptionsFrom, type SmscOption } from '../utils/safe-control';
 import { bindTone, bindWord } from '../utils/connectivity';
@@ -879,14 +880,15 @@ onMounted(() => {
       Select a route above to see what happens to it if its target fails.
     </div>
 
-    <!-- Route editor ----------------------------------------------------------- -->
-    <section
-      v-if="showForm"
-      class="panel composer"
-      data-testid="route-form"
-      aria-label="Route editor"
+    <!-- Route editor -----------------------------------------------------------
+         A Dialog, per the design system. -->
+    <ModalDialog
+      :open="showForm"
+      :title="editingId ? 'Edit route' : 'New route'"
+      testid="route-form"
+      wide
+      @close="closeForm"
     >
-      <h2>{{ editingId ? 'Edit route' : 'New route' }}</h2>
       <label class="filter-select filter-search">
         <span>Name</span>
         <input v-model="draftName" data-testid="route-name" type="text" />
@@ -1084,7 +1086,10 @@ onMounted(() => {
       <p v-if="formError" class="form-error" role="alert" data-testid="route-form-error">
         {{ formError }}
       </p>
-      <div class="detail-actions">
+      <template #footer>
+        <button class="secondary-button" data-testid="route-cancel" @click="closeForm">
+          Cancel
+        </button>
         <button
           class="primary-button"
           data-testid="route-save"
@@ -1093,11 +1098,8 @@ onMounted(() => {
         >
           {{ busy ? 'Saving…' : 'Save route' }}
         </button>
-        <button class="secondary-button" data-testid="route-cancel" @click="closeForm">
-          Cancel
-        </button>
-      </div>
-    </section>
+      </template>
+    </ModalDialog>
 
     <!-- Version history --------------------------------------------------------- -->
     <section

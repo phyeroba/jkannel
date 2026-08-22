@@ -72,7 +72,11 @@ describe('the diagnostic summary', () => {
         lifecycle: {
           stages: [],
           totalMs: 420,
-          firstProblem: { kind: 'receipt', label: 'Delivery receipt', detail: 'Carrier reported failed.' },
+          firstProblem: {
+            kind: 'receipt',
+            label: 'Delivery receipt',
+            detail: 'Carrier reported failed.',
+          },
           inFlight: false,
         },
       }),

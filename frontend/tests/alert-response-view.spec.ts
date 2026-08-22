@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayAll, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -126,16 +127,16 @@ describe('Escalation & maintenance view', () => {
     stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="policy-row-pol-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="policy-row-pol-1"]')).toBe(true),
     );
-    const row = wrapper.get('[data-testid="policy-row-pol-1"]').text();
+    const row = overlay(wrapper, '[data-testid="policy-row-pol-1"]').text();
     expect(row).toContain('On-call tier 1');
     expect(row).toContain('+5m → email noc@example.com');
     expect(row).toContain('+30m → sms +256700000001');
-    expect(wrapper.get('[data-testid="maintenance-active-banner"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="maintenance-active-banner"]').text()).toContain(
       'Carrier SMPP upgrade',
     );
-    expect(wrapper.get('[data-testid="correlation-row-smsc:local-fake"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="correlation-row-smsc:local-fake"]').text()).toContain(
       'critical',
     );
     wrapper.unmount();
@@ -144,15 +145,15 @@ describe('Escalation & maintenance view', () => {
   it('creates an escalation policy from the step editor', async () => {
     const fetchMock = stubApi();
     const wrapper = mount(AlertResponseView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="policy-create"]').exists()).toBe(true),
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="policy-create"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="policy-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="policy-name"]').setValue('Weekend rota');
+    await overlay(wrapper, '[data-testid="policy-step-after-0"]').setValue('10');
+    await overlay(wrapper, '[data-testid="policy-step-channel-0"]').setValue('webhook');
+    await overlay(wrapper, '[data-testid="policy-step-target-0"]').setValue(
+      'https://hooks.example/x',
     );
-    await wrapper.get('[data-testid="policy-create"]').trigger('click');
-    await wrapper.get('[data-testid="policy-name"]').setValue('Weekend rota');
-    await wrapper.get('[data-testid="policy-step-after-0"]').setValue('10');
-    await wrapper.get('[data-testid="policy-step-channel-0"]').setValue('webhook');
-    await wrapper.get('[data-testid="policy-step-target-0"]').setValue('https://hooks.example/x');
-    await wrapper.get('[data-testid="policy-save"]').trigger('click');
+    await overlay(wrapper, '[data-testid="policy-save"]').trigger('click');
 
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
@@ -173,13 +174,13 @@ describe('Escalation & maintenance view', () => {
   it('refuses a step with no target rather than posting an invalid policy', async () => {
     const fetchMock = stubApi();
     const wrapper = mount(AlertResponseView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="policy-create"]').exists()).toBe(true),
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="policy-create"]')).toBe(true));
+    await overlay(wrapper, '[data-testid="policy-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="policy-name"]').setValue('Broken');
+    await overlay(wrapper, '[data-testid="policy-save"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="policy-form-error"]').text()).toContain(
+      'needs a target',
     );
-    await wrapper.get('[data-testid="policy-create"]').trigger('click');
-    await wrapper.get('[data-testid="policy-name"]').setValue('Broken');
-    await wrapper.get('[data-testid="policy-save"]').trigger('click');
-    expect(wrapper.get('[data-testid="policy-form-error"]').text()).toContain('needs a target');
     expect(
       fetchMock.mock.calls.some((call) => (call[1] as RequestInit | undefined)?.method === 'POST'),
     ).toBe(false);
@@ -190,13 +191,13 @@ describe('Escalation & maintenance view', () => {
     const fetchMock = stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="maintenance-create"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="maintenance-create"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="maintenance-create"]').trigger('click');
-    await wrapper.get('[data-testid="maintenance-name"]').setValue('Router swap');
-    await wrapper.get('[data-testid="maintenance-starts"]').setValue('2026-09-01T01:00');
-    await wrapper.get('[data-testid="maintenance-ends"]').setValue('2026-09-01T03:00');
-    await wrapper.get('[data-testid="maintenance-save"]').trigger('click');
+    await overlay(wrapper, '[data-testid="maintenance-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="maintenance-name"]').setValue('Router swap');
+    await overlay(wrapper, '[data-testid="maintenance-starts"]').setValue('2026-09-01T01:00');
+    await overlay(wrapper, '[data-testid="maintenance-ends"]').setValue('2026-09-01T03:00');
+    await overlay(wrapper, '[data-testid="maintenance-save"]').trigger('click');
 
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
@@ -218,14 +219,14 @@ describe('Escalation & maintenance view', () => {
     stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="maintenance-create"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="maintenance-create"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="maintenance-create"]').trigger('click');
-    await wrapper.get('[data-testid="maintenance-name"]').setValue('Backwards');
-    await wrapper.get('[data-testid="maintenance-starts"]').setValue('2026-09-01T05:00');
-    await wrapper.get('[data-testid="maintenance-ends"]').setValue('2026-09-01T04:00');
-    await wrapper.get('[data-testid="maintenance-save"]').trigger('click');
-    expect(wrapper.get('[data-testid="maintenance-form-error"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="maintenance-create"]').trigger('click');
+    await overlay(wrapper, '[data-testid="maintenance-name"]').setValue('Backwards');
+    await overlay(wrapper, '[data-testid="maintenance-starts"]').setValue('2026-09-01T05:00');
+    await overlay(wrapper, '[data-testid="maintenance-ends"]').setValue('2026-09-01T04:00');
+    await overlay(wrapper, '[data-testid="maintenance-save"]').trigger('click');
+    expect(overlay(wrapper, '[data-testid="maintenance-form-error"]').text()).toContain(
       'end time must be after',
     );
     wrapper.unmount();
@@ -236,12 +237,12 @@ describe('Escalation & maintenance view', () => {
     stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="policy-row-pol-1"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="policy-row-pol-1"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="policy-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="maintenance-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="policy-edit-pol-1"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="alert-response-readonly"]').text()).toContain(
+    expect(overlayHas(wrapper, '[data-testid="policy-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="maintenance-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="policy-edit-pol-1"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="alert-response-readonly"]').text()).toContain(
       'system.manage',
     );
     wrapper.unmount();
@@ -259,12 +260,10 @@ describe('Escalation & maintenance view', () => {
         ),
     );
     const wrapper = mount(AlertResponseView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="policy-error"]').exists()).toBe(true),
-    );
-    expect(wrapper.get('[data-testid="policy-error"]').text()).toContain('not available');
-    expect(wrapper.get('[data-testid="maintenance-error"]').text()).toContain('not available');
-    expect(wrapper.get('[data-testid="readiness-error"]').text()).toContain('not available');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="policy-error"]')).toBe(true));
+    expect(overlay(wrapper, '[data-testid="policy-error"]').text()).toContain('not available');
+    expect(overlay(wrapper, '[data-testid="maintenance-error"]').text()).toContain('not available');
+    expect(overlay(wrapper, '[data-testid="readiness-error"]').text()).toContain('not available');
     wrapper.unmount();
   });
 
@@ -272,30 +271,30 @@ describe('Escalation & maintenance view', () => {
     stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="readiness-channel-ch-2"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="readiness-channel-ch-2"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="readiness-channel-ch-1"]').text()).toContain('deliverable');
-    const email = wrapper.get('[data-testid="readiness-channel-ch-2"]').text();
+    expect(overlay(wrapper, '[data-testid="readiness-channel-ch-1"]').text()).toContain(
+      'deliverable',
+    );
+    const email = overlay(wrapper, '[data-testid="readiness-channel-ch-2"]').text();
     expect(email).toContain('cannot deliver');
     expect(email).toContain('SMTP_URL is not configured');
-    expect(wrapper.get('[data-testid="readiness-deliverable"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="readiness-undeliverable"]').text()).toBe('2');
+    expect(overlay(wrapper, '[data-testid="readiness-deliverable"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="readiness-undeliverable"]').text()).toBe('2');
     // The API's warning is the headline, not a rephrasing of it.
-    expect(wrapper.get('[data-testid="readiness-warning"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="readiness-warning"]').text()).toContain(
       'could not be delivered',
     );
-    expect(wrapper.find('[data-testid="readiness-ok"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="readiness-ok"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('confirms readiness when a channel can deliver and a policy is enabled', async () => {
     stubApi({ readiness: { ...readiness, undeliverableAlerts: 0, warning: null } });
     const wrapper = mount(AlertResponseView);
-    await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="readiness-ok"]').exists()).toBe(true),
-    );
-    expect(wrapper.get('[data-testid="readiness-ok"]').text()).toContain('reaches somebody');
-    expect(wrapper.find('[data-testid="readiness-warning"]').exists()).toBe(false);
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="readiness-ok"]')).toBe(true));
+    expect(overlay(wrapper, '[data-testid="readiness-ok"]').text()).toContain('reaches somebody');
+    expect(overlayHas(wrapper, '[data-testid="readiness-warning"]')).toBe(false);
     wrapper.unmount();
   });
 
@@ -303,9 +302,9 @@ describe('Escalation & maintenance view', () => {
     const fetchMock = stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="readiness-repair"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="readiness-repair"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="readiness-repair"]').trigger('click');
+    await overlay(wrapper, '[data-testid="readiness-repair"]').trigger('click');
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find((entry) =>
         String(entry[0]).includes('/monitoring/notifications/readiness/repair'),
@@ -313,7 +312,7 @@ describe('Escalation & maintenance view', () => {
       expect((call?.[1] as RequestInit | undefined)?.method).toBe('POST');
     });
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="readiness-notice"]').text()).toContain(
+      expect(overlay(wrapper, '[data-testid="readiness-notice"]').text()).toContain(
         'default dashboard channel',
       ),
     );
@@ -345,14 +344,14 @@ describe('Escalation & maintenance view', () => {
     await router.isReady();
     const wrapper = mount(AlertResponseView, { global: { plugins: [router] } });
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="maintenance-scope-note"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="maintenance-scope-note"]')).toBe(true),
     );
 
     const panel = wrapper.text();
     expect(panel).not.toContain('there is no per-alert');
     expect(panel).toContain('per-alert suppress action');
     expect(
-      wrapper.findAll('a').some((link) => link.attributes('href') === '/alert-lifecycle'),
+      overlayAll(wrapper, 'a').some((link) => link.attributes('href') === '/alert-lifecycle'),
     ).toBe(true);
     wrapper.unmount();
   });
@@ -367,18 +366,20 @@ describe('Escalation & maintenance view', () => {
     stubApi();
     const wrapper = mount(AlertResponseView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="maintenance-create"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="maintenance-create"]')).toBe(true),
     );
-    await wrapper.get('[data-testid="maintenance-create"]').trigger('click');
-    const scope = wrapper.get('[data-testid="maintenance-scope-all"]');
+    await overlay(wrapper, '[data-testid="maintenance-create"]').trigger('click');
+    const scope = overlay(wrapper, '[data-testid="maintenance-scope-all"]');
     await scope.setValue(scope.findAll('option')[1].element.value);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="maintenance-smscs"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="maintenance-smscs"]')).toBe(true),
     );
 
-    const option = wrapper.get('[data-testid="maintenance-smscs"]').get('input[type="checkbox"]');
+    const option = overlay(wrapper, '[data-testid="maintenance-smscs"]').get(
+      'input[type="checkbox"]',
+    );
     expect((option.element as HTMLInputElement).value).toBe('primary-smpp');
-    expect(wrapper.get('[data-testid="maintenance-smscs"]').text()).toContain('Primary SMPP');
+    expect(overlay(wrapper, '[data-testid="maintenance-smscs"]').text()).toContain('Primary SMPP');
     wrapper.unmount();
   });
 });

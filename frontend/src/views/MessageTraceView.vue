@@ -370,8 +370,13 @@ onMounted(() => {
             need to be copied anywhere.
           </p>
         </div>
-        <span v-if="matchState === 'live'" class="status-badge muted" data-testid="trace-match-count">
-          {{ matches.length }}{{ matchTotal !== null && matchTotal > matches.length ? ` of ${matchTotal}` : '' }}
+        <span
+          v-if="matchState === 'live'"
+          class="status-badge muted"
+          data-testid="trace-match-count"
+        >
+          {{ matches.length
+          }}{{ matchTotal !== null && matchTotal > matches.length ? ` of ${matchTotal}` : '' }}
         </span>
       </header>
 
@@ -456,13 +461,13 @@ onMounted(() => {
           ? 'What you typed is not itself a message id, but it matched the messages listed above. Select one to trace it.'
           : state === 'empty' && searched
             ? 'Nothing is recorded under that identifier — no routing decision in JKANNEL and no row in the engine store. That is not proof the message never existed: retention prunes old messages, and an id from a different environment will not be found here either.'
-          : state === 'empty'
-            ? 'Search above by message id, carrier reference, sender or destination number. An exact id traces straight through; anything else lists what matched.'
-            : state === 'error'
-              ? error
-              : state === 'partial'
-                ? (trace?.detail ?? undefined)
-                : undefined
+            : state === 'empty'
+              ? 'Search above by message id, carrier reference, sender or destination number. An exact id traces straight through; anything else lists what matched.'
+              : state === 'error'
+                ? error
+                : state === 'partial'
+                  ? (trace?.detail ?? undefined)
+                  : undefined
       "
       permission="messages.view"
       testid="trace-state"
@@ -697,7 +702,12 @@ onMounted(() => {
         </p>
       </template>
       <template #footer>
-        <button class="primary-button" type="button" data-testid="trace-summary-copy" @click="copySummary">
+        <button
+          class="primary-button"
+          type="button"
+          data-testid="trace-summary-copy"
+          @click="copySummary"
+        >
           {{ summaryCopied ? 'Copied' : 'Copy summary' }}
         </button>
       </template>

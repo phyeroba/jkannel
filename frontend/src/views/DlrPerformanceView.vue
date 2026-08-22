@@ -363,9 +363,9 @@ onMounted(load);
     -->
     <p v-if="state === 'empty'" class="notice" role="status" data-testid="dlr-empty-notice">
       <strong>No message was submitted in this window.</strong>
-      The panels below keep their shape so you can see what this screen reports; their counts are
-      a real zero and their rates read <span class="mono">unknown</span>, because a delivery rate
-      over no messages has no value. Widen the range in the top bar, or check
+      The panels below keep their shape so you can see what this screen reports; their counts are a
+      real zero and their rates read <span class="mono">unknown</span>, because a delivery rate over
+      no messages has no value. Widen the range in the top bar, or check
       <RouterLink class="text-link" to="/live-traffic">Live Traffic</RouterLink> to confirm traffic
       is flowing.
     </p>
@@ -576,8 +576,8 @@ onMounted(load);
         <p class="source-note" data-testid="dlr-carrier-throttle-note">
           There is no throttle column. A throttled submission is reported by the carrier as an SMPP
           <span class="mono">command_status</span>, which this engine does not record against the
-          message — so the rate cannot be counted here at all. SMPP Errors is where throttling
-          shows up.
+          message — so the rate cannot be counted here at all. SMPP Errors is where throttling shows
+          up.
         </p>
       </section>
 

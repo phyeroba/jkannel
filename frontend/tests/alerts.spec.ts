@@ -25,8 +25,7 @@ describe('alertCategory', () => {
 
   it('derives a rule alert’s category from the metric it watches', () => {
     // The rule's own name is user-authored and says nothing reliable.
-    const of = (metric: string) =>
-      alertCategory({ details: { kind: 'rule_threshold', metric } });
+    const of = (metric: string) => alertCategory({ details: { kind: 'rule_threshold', metric } });
     expect(of('smsc.queued')).toBe('Capacity');
     expect(of('smsc.throughput.outbound')).toBe('Capacity');
     expect(of('smsc.bind.up')).toBe('Availability');

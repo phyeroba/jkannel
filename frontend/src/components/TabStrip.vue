@@ -74,12 +74,7 @@ function onKeydown(event: KeyboardEvent, index: number) {
 </script>
 
 <template>
-  <div
-    class="range-select"
-    role="tablist"
-    :aria-label="label"
-    :data-testid="testid ?? 'tab-strip'"
-  >
+  <div class="range-select" role="tablist" :aria-label="label" :data-testid="testid ?? 'tab-strip'">
     <button
       v-for="(tab, index) in tabs"
       :id="`${testid ?? 'tab'}-${tab.id}`"

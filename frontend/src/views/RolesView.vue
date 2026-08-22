@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import ModalDialog from '../components/ModalDialog.vue';
 import TabStrip from '../components/TabStrip.vue';
 import { canAccess, session } from '../stores/session';
 
@@ -456,9 +457,17 @@ onMounted(() => {
         {{ roleNotice }}
       </p>
 
-      <!-- Create / edit form ------------------------------------------------- -->
-      <div v-if="showForm" class="composer" data-testid="role-form">
-        <h3>{{ editingId ? `Edit role “${formName}”` : 'New role' }}</h3>
+      <!-- Create / edit form -------------------------------------------------
+           A Dialog, per the design system. The permission matrix this form
+           holds is tall, so as an inline block it pushed the role register it
+           edits completely off the screen. -->
+      <ModalDialog
+        :open="showForm"
+        :title="editingId ? `Edit role “${formName}”` : 'New role'"
+        testid="role-form"
+        wide
+        @close="closeForm"
+      >
         <p v-if="editingIsSystem" class="warn-notice" data-testid="role-form-system-note">
           This is a system role. Its name is fixed by the seeded catalogue and the API refuses a
           rename, so the name field is disabled — its description and permission set stay fully
@@ -583,7 +592,10 @@ onMounted(() => {
         <p v-if="formError" class="form-error" role="alert" data-testid="role-form-error">
           {{ formError }}
         </p>
-        <div class="detail-actions">
+        <template #footer>
+          <button class="secondary-button" data-testid="role-cancel" @click="closeForm">
+            Cancel
+          </button>
           <button
             class="primary-button"
             data-testid="role-save"
@@ -592,11 +604,8 @@ onMounted(() => {
           >
             {{ formBusy ? 'Saving…' : editingId ? 'Save role' : 'Create role' }}
           </button>
-          <button class="secondary-button" data-testid="role-cancel" @click="closeForm">
-            Cancel
-          </button>
-        </div>
-      </div>
+        </template>
+      </ModalDialog>
 
       <p v-if="roleState === 'error'" class="chart-empty" role="alert" data-testid="roles-error">
         {{ roleMissing ? 'The roles API is not available in this deployment.' : roleError }}
@@ -614,10 +623,21 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!-- The row opens the role, as the design system's register rows
+                 do. A role's record IS its permission set, so "open" and
+                 "edit" are the same dialog; the Edit button stays because a
+                 named control is what makes the affordance discoverable. Only
+                 where the operator may actually change it — a row that opens a
+                 form they cannot submit would be a dead end. -->
             <tr
               v-for="role in roles"
               :key="text(role.id)"
+              :class="{ selectable: canManageUsers }"
+              :tabindex="canManageUsers ? 0 : undefined"
               :data-testid="`role-row-${text(role.id)}`"
+              @click="canManageUsers && openForm(role)"
+              @keydown.enter="canManageUsers && openForm(role)"
+              @keydown.space.prevent="canManageUsers && openForm(role)"
             >
               <td>
                 <strong>{{ text(role.name) }}</strong>
@@ -657,7 +677,7 @@ onMounted(() => {
                 <button
                   class="secondary-button"
                   :data-testid="`role-edit-${text(role.id)}`"
-                  @click="openForm(role)"
+                  @click.stop="openForm(role)"
                 >
                   Edit
                 </button>
@@ -666,7 +686,7 @@ onMounted(() => {
                   :data-testid="`role-delete-${text(role.id)}`"
                   :disabled="deleteBusyId === text(role.id) || Boolean(deleteBlockedReason(role))"
                   :title="deleteBlockedReason(role) || undefined"
-                  @click="deleteRole(role)"
+                  @click.stop="deleteRole(role)"
                 >
                   Delete
                 </button>

@@ -11,7 +11,13 @@ a.secondary-button {
   text-decoration: none;
 }
 
-/* Clickable detail rows. */
+/* Clickable detail rows are `tr.selectable` — the design system's own class,
+   styled in `components.css` and `design-authority.css` with a hover, a
+   selected state and a focus ring. `clickable-row` was a second name for the
+   same idea invented before the kit was being followed, and it had only the
+   hover; a row that reacted to the mouse and not to the keyboard was the
+   result. It is kept here purely as an alias so nothing that still carries the
+   old class loses its cursor, and it should not be used in new markup. */
 tr.clickable-row {
   cursor: pointer;
 }

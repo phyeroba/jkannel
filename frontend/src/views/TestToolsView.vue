@@ -266,8 +266,8 @@ const sentTrace = ref<TraceStep[]>([]);
 
 const sendSegments = computed(() => describeComposerText(sendBody.value));
 
-const canSubmitTest = computed(
-  () => Boolean(sendTo.value.trim() && sendFrom.value.trim() && sendBody.value.trim()),
+const canSubmitTest = computed(() =>
+  Boolean(sendTo.value.trim() && sendFrom.value.trim() && sendBody.value.trim()),
 );
 
 /**
@@ -874,7 +874,12 @@ onMounted(() => {
           </label>
           <label class="filter-select">
             <span>Sender</span>
-            <input v-model="sendFrom" type="text" data-testid="test-sms-from" placeholder="JKANNEL" />
+            <input
+              v-model="sendFrom"
+              type="text"
+              data-testid="test-sms-from"
+              placeholder="JKANNEL"
+            />
           </label>
           <label class="filter-select">
             <span>Pin to connection</span>
@@ -933,9 +938,11 @@ onMounted(() => {
         <h3 class="trace-heading">Trace — {{ sentReference }}</h3>
         <EventTimeline dense :items="sentTrace" data-testid="test-sms-trace" />
         <p class="source-note">
-          These are the stages JKANNEL recorded, not a carrier's account of the message. The
-          receipt step stays hollow until a DLR arrives, and some carriers never send one —
-          <RouterLink class="text-link" :to="`/message-trace?id=${encodeURIComponent(sentReference)}`"
+          These are the stages JKANNEL recorded, not a carrier's account of the message. The receipt
+          step stays hollow until a DLR arrives, and some carriers never send one —
+          <RouterLink
+            class="text-link"
+            :to="`/message-trace?id=${encodeURIComponent(sentReference)}`"
             >open the full trace</RouterLink
           >
           for the engine's own rows.

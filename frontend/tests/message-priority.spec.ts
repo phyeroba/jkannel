@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -122,12 +123,12 @@ describe('message priority contract', () => {
 describe('MessagePriority control', () => {
   it('defaults to the absent option and emits the raw choice string', async () => {
     const wrapper = mount(MessagePriority, { props: { modelValue: PRIORITY_UNSET } });
-    const select = wrapper.get('[data-testid="priority-select"]');
+    const select = overlay(wrapper, '[data-testid="priority-select"]');
     expect((select.element as HTMLSelectElement).value).toBe('');
-    expect(wrapper.get('[data-testid="priority-caveat"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="priority-caveat"]').text()).toContain(
       'only changes anything when a backlog exists',
     );
-    expect(wrapper.get('[data-testid="priority-unset-note"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="priority-unset-note"]').text()).toContain(
       'not the same as choosing 0',
     );
     await select.setValue('0');
@@ -172,14 +173,16 @@ describe('priority on the single-message composer', () => {
     return fetchMock;
   };
   const openComposer = async (wrapper: ReturnType<typeof mount>) => {
-    await wrapper.get('[data-testid="open-send-message"]').trigger('click');
+    await overlay(wrapper, '[data-testid="open-send-message"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="send-smsc"]').findAll('option').length).toBeGreaterThan(1),
+      expect(
+        overlay(wrapper, '[data-testid="send-smsc"]').findAll('option').length,
+      ).toBeGreaterThan(1),
     );
-    await wrapper.get('[data-testid="send-sender"]').setValue('JKANNEL');
-    await wrapper.get('[data-testid="send-receiver"]').setValue('+256700000001');
-    await wrapper.get('[data-testid="send-text"]').setValue('Hello');
-    await wrapper.get('[data-testid="send-smsc"]').setValue('primary-smpp');
+    await overlay(wrapper, '[data-testid="send-sender"]').setValue('JKANNEL');
+    await overlay(wrapper, '[data-testid="send-receiver"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="send-text"]').setValue('Hello');
+    await overlay(wrapper, '[data-testid="send-smsc"]').setValue('primary-smpp');
   };
   const postBody = (fetchMock: ReturnType<typeof vi.fn>) =>
     bodyOf(
@@ -195,7 +198,7 @@ describe('priority on the single-message composer', () => {
     const wrapper = await mountWorkspace();
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
     await openComposer(wrapper);
-    await wrapper.get('[data-testid="send-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-submit"]').trigger('click');
     await vi.waitFor(() => expect(postBody(fetchMock)).toBeTruthy());
     const body = postBody(fetchMock);
     expect('priority' in body).toBe(false);
@@ -207,8 +210,8 @@ describe('priority on the single-message composer', () => {
     const wrapper = await mountWorkspace();
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
     await openComposer(wrapper);
-    await wrapper.get('[data-testid="send-priority-select"]').setValue('0');
-    await wrapper.get('[data-testid="send-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="send-priority-select"]').setValue('0');
+    await overlay(wrapper, '[data-testid="send-submit"]').trigger('click');
     await vi.waitFor(() => expect(postBody(fetchMock)).toBeTruthy());
     expect(postBody(fetchMock).priority).toBe(0);
     wrapper.unmount();
@@ -245,12 +248,14 @@ describe('priority on the bulk campaign form', () => {
   };
   const fill = async (wrapper: ReturnType<typeof mount>) => {
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="bulk-smsc"]').findAll('option').length).toBeGreaterThan(1),
+      expect(
+        overlay(wrapper, '[data-testid="bulk-smsc"]').findAll('option').length,
+      ).toBeGreaterThan(1),
     );
-    await wrapper.get('[data-testid="bulk-name"]').setValue('July reminder');
-    await wrapper.get('[data-testid="bulk-smsc"]').setValue('smsc-primary');
-    await wrapper.get('[data-testid="bulk-message"]').setValue('Balance due');
-    await wrapper.get('[data-testid="bulk-recipients"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="bulk-name"]').setValue('July reminder');
+    await overlay(wrapper, '[data-testid="bulk-smsc"]').setValue('smsc-primary');
+    await overlay(wrapper, '[data-testid="bulk-message"]').setValue('Balance due');
+    await overlay(wrapper, '[data-testid="bulk-recipients"]').setValue('+256700000001');
   };
   const postBody = (fetchMock: ReturnType<typeof vi.fn>) =>
     bodyOf(
@@ -265,7 +270,7 @@ describe('priority on the bulk campaign form', () => {
     stub();
     const wrapper = await mountBulk();
     await fill(wrapper);
-    const caveat = wrapper.get('[data-testid="bulk-priority-caveat"]').text();
+    const caveat = overlay(wrapper, '[data-testid="bulk-priority-caveat"]').text();
     expect(caveat).toContain('A campaign is how a backlog forms');
     expect(caveat).toContain('cannot preempt a segment already handed to the SMPP link');
     wrapper.unmount();
@@ -275,12 +280,12 @@ describe('priority on the bulk campaign form', () => {
     const fetchMock = stub();
     const wrapper = await mountBulk();
     await fill(wrapper);
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="bulk-send-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="bulk-send-notice"]')).toBe(true),
     );
     expect('priority' in postBody(fetchMock)).toBe(false);
-    expect(wrapper.get('[data-testid="bulk-send-notice"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-send-notice"]').text()).toContain(
       'No send priority was requested',
     );
     wrapper.unmount();
@@ -290,13 +295,13 @@ describe('priority on the bulk campaign form', () => {
     const fetchMock = stub();
     const wrapper = await mountBulk();
     await fill(wrapper);
-    await wrapper.get('[data-testid="bulk-priority-select"]').setValue('0');
-    await wrapper.get('[data-testid="bulk-submit"]').trigger('click');
+    await overlay(wrapper, '[data-testid="bulk-priority-select"]').setValue('0');
+    await overlay(wrapper, '[data-testid="bulk-submit"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="bulk-send-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="bulk-send-notice"]')).toBe(true),
     );
     expect(postBody(fetchMock).priority).toBe(0);
-    expect(wrapper.get('[data-testid="bulk-send-notice"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-send-notice"]').text()).toContain(
       'Every recipient inherits priority 0',
     );
     wrapper.unmount();
@@ -306,9 +311,9 @@ describe('priority on the bulk campaign form', () => {
     stub();
     const wrapper = await mountBulk();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="bulk-jobs-csv-only"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="bulk-jobs-csv-only"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="bulk-jobs-csv-only"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="bulk-jobs-csv-only"]').text()).toContain(
       'does not include priority',
     );
     wrapper.unmount();
@@ -351,9 +356,11 @@ describe('priority on the Live Queue replay', () => {
     const router = await stubRouter('/live-queue');
     const wrapper = mount(LiveQueueView, { global: { plugins: [router] } });
     await vi.waitFor(() => {
-      expect(wrapper.find('[data-testid="spool-priority-11"]').exists()).toBe(true);
-      expect(wrapper.find('[data-testid="log-row-1"]').exists()).toBe(true);
-      expect(wrapper.get('[data-testid="log-resend-target"]').findAll('option').length).toBe(2);
+      expect(overlayHas(wrapper, '[data-testid="spool-priority-11"]')).toBe(true);
+      expect(overlayHas(wrapper, '[data-testid="log-row-1"]')).toBe(true);
+      expect(overlay(wrapper, '[data-testid="log-resend-target"]').findAll('option').length).toBe(
+        2,
+      );
     });
     return wrapper;
   };
@@ -361,19 +368,19 @@ describe('priority on the Live Queue replay', () => {
   it('distinguishes a queued priority 0 from a queued unset priority in the spool', async () => {
     stub();
     const wrapper = await mountSettled();
-    expect(wrapper.get('[data-testid="spool-priority-11"]').text()).toBe('0');
-    expect(wrapper.get('[data-testid="spool-priority-12"]').text()).toBe('unset');
+    expect(overlay(wrapper, '[data-testid="spool-priority-11"]').text()).toBe('0');
+    expect(overlay(wrapper, '[data-testid="spool-priority-12"]').text()).toBe('unset');
     wrapper.unmount();
   });
 
   it('omits priority from a replay unless one was chosen, and reports what the API wrote', async () => {
     const fetchMock = stub();
     const wrapper = await mountSettled();
-    await wrapper.get('[data-testid="log-resend-target"]').setValue('primary-smpp');
-    await wrapper.get('[data-testid="log-select-1"]').setValue(true);
-    await wrapper.get('[data-testid="log-resend"]').trigger('click');
+    await overlay(wrapper, '[data-testid="log-resend-target"]').setValue('primary-smpp');
+    await overlay(wrapper, '[data-testid="log-select-1"]').setValue(true);
+    await overlay(wrapper, '[data-testid="log-resend"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="log-resend-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="log-resend-notice"]')).toBe(true),
     );
     const post = fetchMock.mock.calls.find(
       (call) =>
@@ -381,7 +388,7 @@ describe('priority on the Live Queue replay', () => {
         (call[1] as RequestInit | undefined)?.method === 'POST',
     );
     expect('priority' in bodyOf(post)).toBe(false);
-    expect(wrapper.get('[data-testid="log-resend-notice"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="log-resend-notice"]').text()).toContain(
       'No send priority was requested',
     );
     wrapper.unmount();
@@ -390,10 +397,10 @@ describe('priority on the Live Queue replay', () => {
   it('sends an explicit replay priority of 0', async () => {
     const fetchMock = stub();
     const wrapper = await mountSettled();
-    await wrapper.get('[data-testid="log-resend-target"]').setValue('primary-smpp');
-    await wrapper.get('[data-testid="log-resend-priority-select"]').setValue('0');
-    await wrapper.get('[data-testid="log-select-1"]').setValue(true);
-    await wrapper.get('[data-testid="log-resend"]').trigger('click');
+    await overlay(wrapper, '[data-testid="log-resend-target"]').setValue('primary-smpp');
+    await overlay(wrapper, '[data-testid="log-resend-priority-select"]').setValue('0');
+    await overlay(wrapper, '[data-testid="log-select-1"]').setValue(true);
+    await overlay(wrapper, '[data-testid="log-resend"]').trigger('click');
     await vi.waitFor(() => {
       const post = fetchMock.mock.calls.find(
         (call) =>

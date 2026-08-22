@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 vi.mock('../src/stores/session', () => ({
   session: ref({
@@ -151,9 +152,7 @@ function stubApi(overrides: Record<string, unknown> = {}) {
 
 const mountView = async (fetchMock = stubApi()) => {
   const wrapper = mount(MoRoutingView);
-  await vi.waitFor(() =>
-    expect(wrapper.find('[data-testid="mo-rule-rule-1"]').exists()).toBe(true),
-  );
+  await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="mo-rule-rule-1"]')).toBe(true));
   return { wrapper, fetchMock };
 };
 
@@ -166,17 +165,17 @@ describe('inbound (MO) routing view', () => {
 
   it('states which ingest path is active without claiming the push path is wired', async () => {
     const { wrapper } = await mountView();
-    const sweep = wrapper.get('[data-testid="mo-ingest-sweep-claim"]').text();
+    const sweep = overlay(wrapper, '[data-testid="mo-ingest-sweep-claim"]').text();
     expect(sweep).toContain('the path that works on the topology deployed today');
     expect(sweep).toContain('needs no Kannel change');
     expect(sweep).toContain('4821');
 
-    const push = wrapper.get('[data-testid="mo-ingest-push-claim"]').text();
+    const push = overlay(wrapper, '[data-testid="mo-ingest-push-claim"]').text();
     expect(push).toContain('cannot be confirmed from here');
     expect(push).toContain('none of them describes the push path');
     expect(push).toContain('cannot tell those two apart');
 
-    const shipped = wrapper.get('[data-testid="mo-ingest-shipped-default"]').text();
+    const shipped = overlay(wrapper, '[data-testid="mo-ingest-shipped-default"]').text();
     expect(shipped).toContain('No service specified');
     expect(shipped).toContain('forwards nothing to JKANNEL');
     wrapper.unmount();
@@ -185,9 +184,9 @@ describe('inbound (MO) routing view', () => {
   it('reports observed per-path counts rather than guessing zero', async () => {
     const { wrapper } = await mountView(stubApi({ httpTotal: 0, sqlboxTotal: 12 }));
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="mo-source-sqlbox"]').text()).toBe('12'),
+      expect(overlay(wrapper, '[data-testid="mo-source-sqlbox"]').text()).toBe('12'),
     );
-    expect(wrapper.get('[data-testid="mo-source-http"]').text()).toBe('0');
+    expect(overlay(wrapper, '[data-testid="mo-source-http"]').text()).toBe('0');
     wrapper.unmount();
   });
 
@@ -204,9 +203,9 @@ describe('inbound (MO) routing view', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = mount(MoRoutingView);
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-source-http"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-source-http"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="mo-source-http"]').text()).toBe('unknown');
+    expect(overlay(wrapper, '[data-testid="mo-source-http"]').text()).toBe('unknown');
     wrapper.unmount();
   });
 
@@ -217,15 +216,17 @@ describe('inbound (MO) routing view', () => {
       (call) => String(call[0]).includes('/mo/rules?') && !String(call[0]).includes('preview'),
     );
     expect(String(listCall?.[0])).not.toContain('sort=');
-    expect(wrapper.get('[data-testid="mo-rule-rule-1"]').text()).toContain('keyword first_word');
-    expect(wrapper.find('[data-testid="mo-rule-order-warning"]').exists()).toBe(false);
+    expect(overlay(wrapper, '[data-testid="mo-rule-rule-1"]').text()).toContain(
+      'keyword first_word',
+    );
+    expect(overlayHas(wrapper, '[data-testid="mo-rule-order-warning"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('sends only whitelisted MO rule filters', async () => {
     const fetchMock = stubApi();
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="mo-rule-filter-keyword-type"]').setValue('exact');
+    await overlay(wrapper, '[data-testid="mo-rule-filter-keyword-type"]').setValue('exact');
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some((call) =>
@@ -234,26 +235,26 @@ describe('inbound (MO) routing view', () => {
       ).toBe(true),
     );
     // matchDestination and matchSenderPrefix are searchable, not filterable.
-    expect(wrapper.find('[data-testid="mo-rule-filter-destination"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="mo-rule-filter-sender-prefix"]').exists()).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="mo-rule-filter-destination"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="mo-rule-filter-sender-prefix"]')).toBe(false);
     wrapper.unmount();
   });
 
   it('surfaces the SSRF rejection verbatim, naming the host and the reason', async () => {
     const fetchMock = stubApi({ destinationError: SSRF_REJECTION });
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="mo-rule-open-rule-1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-rule-open-rule-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-destination-target"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-destination-target"]')).toBe(true),
     );
-    await wrapper
-      .get('[data-testid="mo-destination-target"]')
-      .setValue('http://169.254.169.254/latest/meta-data/');
-    await wrapper.get('[data-testid="mo-destination-add"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-destination-target"]').setValue(
+      'http://169.254.169.254/latest/meta-data/',
+    );
+    await overlay(wrapper, '[data-testid="mo-destination-add"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-destination-error"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-destination-error"]')).toBe(true),
     );
-    const error = wrapper.get('[data-testid="mo-destination-error"]').text();
+    const error = overlay(wrapper, '[data-testid="mo-destination-error"]').text();
     expect(error).toContain('169.254.169.254');
     expect(error).toContain('loopback, link-local or private address');
     expect(error).not.toBe('Bad request');
@@ -274,19 +275,19 @@ describe('inbound (MO) routing view', () => {
 
   it('warns about the double SSRF check before a webhook URL is typed', async () => {
     const { wrapper } = await mountView();
-    await wrapper.get('[data-testid="mo-rule-open-rule-1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-rule-open-rule-1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-webhook-ssrf-note"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-webhook-ssrf-note"]')).toBe(true),
     );
-    const note = wrapper.get('[data-testid="mo-webhook-ssrf-note"]').text();
+    const note = overlay(wrapper, '[data-testid="mo-webhook-ssrf-note"]').text();
     expect(note).toContain('once when it is saved and again on every delivery attempt');
     expect(note).toContain('169.254.169.254');
     // The header is a bearer secret, not an HMAC — do not let anyone assume it is.
     expect(note).toContain('not an HMAC of the payload');
     // The note is for webhooks only.
-    await wrapper.get('[data-testid="mo-destination-kind"]').setValue('email');
+    await overlay(wrapper, '[data-testid="mo-destination-kind"]').setValue('email');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-webhook-ssrf-note"]').exists()).toBe(false),
+      expect(overlayHas(wrapper, '[data-testid="mo-webhook-ssrf-note"]')).toBe(false),
     );
     wrapper.unmount();
   });
@@ -294,13 +295,13 @@ describe('inbound (MO) routing view', () => {
   it('offers Retry only for the statuses the API accepts', async () => {
     const { wrapper } = await mountView();
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-delivery-retry-del-failed"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-delivery-retry-del-failed"]')).toBe(true),
     );
     expect(
-      wrapper.get('[data-testid="mo-delivery-retry-del-failed"]').attributes('disabled'),
+      overlay(wrapper, '[data-testid="mo-delivery-retry-del-failed"]').attributes('disabled'),
     ).toBeUndefined();
     // pending is not retryable; the control explains itself rather than 400-ing.
-    const pending = wrapper.get('[data-testid="mo-delivery-retry-del-pending"]');
+    const pending = overlay(wrapper, '[data-testid="mo-delivery-retry-del-pending"]');
     expect(pending.attributes('disabled')).toBeDefined();
     expect(pending.attributes('title')).toContain('Only a failed, dead-lettered or cancelled');
     wrapper.unmount();
@@ -309,11 +310,11 @@ describe('inbound (MO) routing view', () => {
   it('says the attempt budget is reset when a delivery is retried', async () => {
     const fetchMock = stubApi();
     const { wrapper } = await mountView(fetchMock);
-    await wrapper.get('[data-testid="mo-delivery-retry-del-failed"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-delivery-retry-del-failed"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-delivery-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-delivery-notice"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="mo-delivery-notice"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="mo-delivery-notice"]').text()).toContain(
       'attempt counter is reset to zero',
     );
     expect(
@@ -353,16 +354,16 @@ describe('inbound (MO) routing view', () => {
         },
       }),
     );
-    await wrapper.get('[data-testid="mo-preview-sender"]').setValue('+256700000001');
-    await wrapper.get('[data-testid="mo-preview-receiver"]').setValue('4455');
-    await wrapper.get('[data-testid="mo-preview-body"]').setValue('STOP');
-    await wrapper.get('[data-testid="mo-preview-run"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-preview-sender"]').setValue('+256700000001');
+    await overlay(wrapper, '[data-testid="mo-preview-receiver"]').setValue('4455');
+    await overlay(wrapper, '[data-testid="mo-preview-body"]').setValue('STOP');
+    await overlay(wrapper, '[data-testid="mo-preview-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-preview-result"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-preview-result"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="mo-preview-match-count"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="mo-preview-delivery-count"]').text()).toBe('1');
-    const stopped = wrapper.get('[data-testid="mo-preview-stopped-early"]').text();
+    expect(overlay(wrapper, '[data-testid="mo-preview-match-count"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="mo-preview-delivery-count"]').text()).toBe('1');
+    const stopped = overlay(wrapper, '[data-testid="mo-preview-stopped-early"]').text();
     expect(stopped).toContain('3 rule(s) never evaluated');
     // The API cannot name them, and the copy must not pretend otherwise.
     expect(stopped).toContain('The API does not name them');
@@ -383,12 +384,14 @@ describe('inbound (MO) routing view', () => {
         },
       }),
     );
-    await wrapper.get('[data-testid="mo-sweep-run"]').trigger('click');
+    await overlay(wrapper, '[data-testid="mo-sweep-run"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="mo-ingest-notice"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="mo-ingest-notice"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="mo-ingest-notice"]').text()).toContain('was not reachable');
-    expect(wrapper.get('[data-testid="mo-sweep-evidence"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="mo-ingest-notice"]').text()).toContain(
+      'was not reachable',
+    );
+    expect(overlay(wrapper, '[data-testid="mo-sweep-evidence"]').text()).toContain(
       'sqlbox container is not running',
     );
     wrapper.unmount();
@@ -397,13 +400,13 @@ describe('inbound (MO) routing view', () => {
   it('hides ingest control and mutations from an operator without messages.send', async () => {
     grant('messages.view');
     const { wrapper } = await mountView();
-    expect(wrapper.find('[data-testid="mo-ingest-controls"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="mo-rule-create"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="mo-delivery-retry-del-failed"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="mo-readonly"]').text()).toContain('messages.send');
+    expect(overlayHas(wrapper, '[data-testid="mo-ingest-controls"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="mo-rule-create"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="mo-delivery-retry-del-failed"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="mo-readonly"]').text()).toContain('messages.send');
     // Reading the ingest state and the preview stay available.
-    expect(wrapper.find('[data-testid="mo-watermark"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="mo-preview-run"]').exists()).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="mo-watermark"]')).toBe(true);
+    expect(overlayHas(wrapper, '[data-testid="mo-preview-run"]')).toBe(true);
     wrapper.unmount();
   });
 });

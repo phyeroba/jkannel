@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
+import { overlay, overlayHas } from './overlay';
 
 const mocks = vi.hoisted(() => ({ permissions: new Set<string>(['monitoring.view']) }));
 
@@ -92,7 +93,7 @@ const mountView = async (options: Options = {}) => {
     }),
   );
   const wrapper = mount(EventsView);
-  await vi.waitFor(() => expect(wrapper.find('[data-state="loading"]').exists()).toBe(false));
+  await vi.waitFor(() => expect(overlayHas(wrapper, '[data-state="loading"]')).toBe(false));
   return { wrapper, calls };
 };
 
@@ -104,12 +105,12 @@ describe('Events — the stream and its filters', () => {
     expect(first).toContain('limit=100');
     expect(first).toContain('since=');
 
-    await wrapper.get('[data-testid="events-filter-kind"]').setValue('smsc.');
-    await wrapper.get('[data-testid="events-filter-severity"]').setValue('critical');
-    await wrapper.get('[data-testid="events-filter-subject-type"]').setValue('smsc');
-    await wrapper.get('[data-testid="events-filter-subject-id"]').setValue('mtn-p1');
-    await wrapper.get('[data-testid="events-limit"]').setValue('250');
-    await wrapper.get('[data-testid="events-apply"]').trigger('click');
+    await overlay(wrapper, '[data-testid="events-filter-kind"]').setValue('smsc.');
+    await overlay(wrapper, '[data-testid="events-filter-severity"]').setValue('critical');
+    await overlay(wrapper, '[data-testid="events-filter-subject-type"]').setValue('smsc');
+    await overlay(wrapper, '[data-testid="events-filter-subject-id"]').setValue('mtn-p1');
+    await overlay(wrapper, '[data-testid="events-limit"]').setValue('250');
+    await overlay(wrapper, '[data-testid="events-apply"]').trigger('click');
 
     await vi.waitFor(() => expect(calls.some((url) => url.includes('limit=250'))).toBe(true));
     const latest = calls[calls.length - 1];
@@ -121,34 +122,34 @@ describe('Events — the stream and its filters', () => {
 
   it('states that the API has no upper bound on the window', async () => {
     const { wrapper } = await mountView();
-    expect(wrapper.get('[data-testid="events-scope-note"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="events-scope-note"]').text()).toContain(
       'the API takes no upper bound',
     );
   });
 
   it('names severity in words as well as colour', async () => {
     const { wrapper } = await mountView();
-    const badge = wrapper.get('[data-testid="event-severity-e1"]');
+    const badge = overlay(wrapper, '[data-testid="event-severity-e1"]');
     expect(badge.text()).toBe('critical');
     expect(badge.classes()).toContain('bad');
-    expect(wrapper.get('[data-testid="event-severity-e2"]').classes()).toContain('warn');
+    expect(overlay(wrapper, '[data-testid="event-severity-e2"]').classes()).toContain('warn');
   });
 
   it('refuses to send a malformed correlation id the API would reject', async () => {
     const { wrapper, calls } = await mountView();
     const before = calls.length;
-    await wrapper.get('[data-testid="events-filter-correlation"]').setValue('0e3b1f2a');
-    expect(wrapper.get('[data-testid="events-correlation-invalid"]').text()).toContain(
+    await overlay(wrapper, '[data-testid="events-filter-correlation"]').setValue('0e3b1f2a');
+    expect(overlay(wrapper, '[data-testid="events-correlation-invalid"]').text()).toContain(
       '36 characters',
     );
-    await wrapper.get('[data-testid="events-apply"]').trigger('click');
+    await overlay(wrapper, '[data-testid="events-apply"]').trigger('click');
     expect(calls.length).toBe(before);
-    expect(wrapper.get('[data-testid="events-state"]').attributes('data-state')).toBe('error');
+    expect(overlay(wrapper, '[data-testid="events-state"]').attributes('data-state')).toBe('error');
   });
 
   it('narrows the stream to one correlation id when asked', async () => {
     const { wrapper, calls } = await mountView();
-    await wrapper.get('[data-testid="event-filter-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-filter-e1"]').trigger('click');
     await vi.waitFor(() =>
       expect(calls.some((url) => url.includes(`correlationId=${CORRELATION}`))).toBe(true),
     );
@@ -158,14 +159,14 @@ describe('Events — the stream and its filters', () => {
     const { wrapper } = await mountView({
       items: Array.from({ length: 100 }, (_, index) => ({ ...bindLost, id: `e${index}` })),
     });
-    expect(wrapper.get('[data-testid="events-trimmed"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="events-trimmed"]').text()).toContain(
       'newest slice of the window',
     );
   });
 
   it('reads a quiet window as a normal reading rather than a monitoring gap', async () => {
     const { wrapper } = await mountView({ items: [] });
-    const state = wrapper.get('[data-testid="events-state"]');
+    const state = overlay(wrapper, '[data-testid="events-state"]');
     expect(state.attributes('data-state')).toBe('empty');
     expect(state.text()).toContain('a quiet window is a normal reading');
   });
@@ -202,35 +203,40 @@ describe('Events — the correlation drill-down', () => {
       logs: [{ timestamp: '2026-08-17T09:00:01.000Z', level: 'error', message: 'bind dropped' }],
       permissions: ['monitoring.view', 'system.view'],
     });
-    await wrapper.get('[data-testid="event-thread-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-thread-e1"]').trigger('click');
     // DataState renders nothing once the read succeeds, so the thread's own
     // content — not the banner — is what proves it settled.
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="correlation-metric-events"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="correlation-metric-events"]')).toBe(true),
     );
-    expect(wrapper.find('[data-testid="correlation-state"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="correlation-metric-events"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="correlation-metric-alerts"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="correlation-metric-audit"]').text()).toBe('1');
-    expect(wrapper.get('[data-testid="correlation-alerts"]').text()).toContain('still open');
-    expect(wrapper.get('[data-testid="correlation-audit"]').text()).toContain('smsc.reconnect');
+    expect(overlayHas(wrapper, '[data-testid="correlation-state"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="correlation-metric-events"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="correlation-metric-alerts"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="correlation-metric-audit"]').text()).toBe('1');
+    expect(overlay(wrapper, '[data-testid="correlation-alerts"]').text()).toContain('still open');
+    expect(overlay(wrapper, '[data-testid="correlation-audit"]').text()).toContain(
+      'smsc.reconnect',
+    );
     await vi.waitFor(() =>
-      expect(wrapper.get('[data-testid="correlation-logs"]').text()).toContain('bind dropped'),
+      expect(overlay(wrapper, '[data-testid="correlation-logs"]').text()).toContain('bind dropped'),
     );
   });
 
   it('renders the log caveat verbatim, above the log section', async () => {
     const { wrapper } = await mountView({ permissions: ['monitoring.view', 'system.view'] });
-    await wrapper.get('[data-testid="event-thread-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-thread-e1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="correlation-logs-empty"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="correlation-logs-empty"]')).toBe(true),
     );
     // The API's own sentence, word for word.
-    expect(wrapper.get('[data-testid="correlation-note"]').text()).toBe(NOTE);
-    const caveat = wrapper.get('[data-testid="correlation-log-caveat"]').text();
+    expect(overlay(wrapper, '[data-testid="correlation-note"]').text()).toBe(NOTE);
+    const caveat = overlay(wrapper, '[data-testid="correlation-log-caveat"]').text();
     expect(caveat).toContain('process-local and do not survive a restart');
     expect(caveat).toContain('events and audit entries here with no log lines');
-    const html = wrapper.html();
+    // The thread is a teleported sheet, so the order has to be read off the
+    // document rather than off the component's own markup.
+    const html = document.body.innerHTML;
+    expect(html.indexOf('correlation-log-caveat')).toBeGreaterThan(-1);
     expect(html.indexOf('correlation-log-caveat')).toBeLessThan(
       html.indexOf('correlation-logs-empty'),
     );
@@ -241,22 +247,22 @@ describe('Events — the correlation drill-down', () => {
       logs: [],
       permissions: ['monitoring.view', 'system.view'],
     });
-    await wrapper.get('[data-testid="event-thread-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-thread-e1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="correlation-logs-empty"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="correlation-logs-empty"]')).toBe(true),
     );
-    const empty = wrapper.get('[data-testid="correlation-logs-empty"]').text();
+    const empty = overlay(wrapper, '[data-testid="correlation-logs-empty"]').text();
     expect(empty).toContain('not retained here');
     expect(empty).toContain('not as “nothing happened”');
   });
 
   it('says the logs were not requested when the operator lacks system.view', async () => {
     const { wrapper, calls } = await mountView({ permissions: ['monitoring.view'] });
-    await wrapper.get('[data-testid="event-thread-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-thread-e1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="correlation-logs-forbidden"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="correlation-logs-forbidden"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="correlation-logs-forbidden"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="correlation-logs-forbidden"]').text()).toContain(
       'system.view',
     );
     // No pointless 403 was provoked.
@@ -268,18 +274,18 @@ describe('Events — the correlation drill-down', () => {
       logs: 'error',
       permissions: ['monitoring.view', 'system.view'],
     });
-    await wrapper.get('[data-testid="event-thread-e1"]').trigger('click');
+    await overlay(wrapper, '[data-testid="event-thread-e1"]').trigger('click');
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-testid="correlation-logs-error"]').exists()).toBe(true),
+      expect(overlayHas(wrapper, '[data-testid="correlation-logs-error"]')).toBe(true),
     );
-    expect(wrapper.get('[data-testid="correlation-logs-error"]').text()).toContain(
+    expect(overlay(wrapper, '[data-testid="correlation-logs-error"]').text()).toContain(
       'unread rather than empty',
     );
   });
 
   it('offers no thread control for an event that carries no correlation id', async () => {
     const { wrapper } = await mountView();
-    expect(wrapper.find('[data-testid="event-thread-e2"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="event-nothread-e2"]').text()).toBe('not correlated');
+    expect(overlayHas(wrapper, '[data-testid="event-thread-e2"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="event-nothread-e2"]').text()).toBe('not correlated');
   });
 });

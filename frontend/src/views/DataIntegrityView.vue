@@ -27,6 +27,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 import { type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
@@ -141,6 +142,7 @@ const records = ref<RecordValue[]>([]);
 const recordState = ref<State>('loading');
 const recordError = ref('');
 const recordBusy = ref('');
+const showRecordForm = ref(false);
 const draftKey = ref('');
 const draftValue = ref('{}');
 
@@ -187,6 +189,8 @@ async function createRecord() {
     });
     draftKey.value = '';
     draftValue.value = '{}';
+    // Closes only on success, so a refusal stays visible beside the input.
+    showRecordForm.value = false;
     await loadRecords();
   } catch (cause) {
     recordError.value = messageFrom(cause, 'The record could not be created.');
@@ -310,8 +314,8 @@ onMounted(() => {
       <p class="source-note" data-testid="audit-caveat">
         A verifying chain proves no entry has been altered or removed between the entries either
         side of it. It does <strong>not</strong> prove that an action was audited at all — someone
-        with direct database access who never wrote an entry leaves a chain that verifies
-        perfectly. This is tamper evidence, not proof of completeness.
+        with direct database access who never wrote an entry leaves a chain that verifies perfectly.
+        This is tamper evidence, not proof of completeness.
       </p>
     </section>
 
@@ -408,6 +412,15 @@ onMounted(() => {
             other record in the system uses.
           </p>
         </div>
+        <button
+          v-if="canManage"
+          class="primary-button"
+          type="button"
+          data-testid="record-new"
+          @click="showRecordForm = true"
+        >
+          New record
+        </button>
       </header>
 
       <p v-if="recordError" class="form-error" role="alert" data-testid="records-error">
@@ -473,25 +486,45 @@ onMounted(() => {
         </div>
       </DataState>
 
-      <div v-if="canManage" class="field-grid" data-testid="record-form">
-        <label class="filter-select">
-          <span>Key</span>
-          <input v-model="draftKey" type="text" data-testid="record-key" />
-        </label>
-        <label class="filter-select filter-search">
-          <span>Value (JSON object)</span>
-          <input v-model="draftValue" type="text" data-testid="record-value" />
-        </label>
-        <button
-          class="primary-button"
-          type="button"
-          :disabled="Boolean(recordBusy)"
-          data-testid="record-create"
-          @click="createRecord"
-        >
-          Create
-        </button>
-      </div>
+      <!-- A Dialog behind "New record", like every other create form here. It
+           was a permanently-open field grid whose submit button read "Create",
+           which looks like a disclosure control and is not. -->
+      <ModalDialog
+        :open="showRecordForm && canManage"
+        title="New reference record"
+        testid="record-form"
+        wide
+        @close="showRecordForm = false"
+      >
+        <div class="dialog-grid">
+          <label class="filter-select">
+            <span>Key</span>
+            <input v-model="draftKey" type="text" data-testid="record-key" />
+          </label>
+          <label class="filter-select filter-search dialog-span">
+            <span>Value (JSON object)</span>
+            <input v-model="draftValue" type="text" data-testid="record-value" />
+          </label>
+        </div>
+        <!-- The panel's error banner is behind the scrim while this is open. -->
+        <p v-if="recordError" class="form-error" role="alert" data-testid="record-form-error">
+          {{ recordError }}
+        </p>
+        <template #footer>
+          <button class="secondary-button" type="button" @click="showRecordForm = false">
+            Cancel
+          </button>
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="Boolean(recordBusy)"
+            data-testid="record-create"
+            @click="createRecord"
+          >
+            Create
+          </button>
+        </template>
+      </ModalDialog>
       <p v-if="canManage" class="source-note">
         “Apply value below” sends the version the row was rendered at. If somebody else changed it
         in the meantime the API refuses rather than overwriting them, and this screen says so — it

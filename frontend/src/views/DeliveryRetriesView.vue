@@ -371,7 +371,10 @@ onMounted(() => {
         </div>
         <div class="metric">
           <strong>{{
-            displayValue(scalar(status?.pollIntervalSeconds ?? status?.poll_interval_seconds), statusState)
+            displayValue(
+              scalar(status?.pollIntervalSeconds ?? status?.poll_interval_seconds),
+              statusState,
+            )
           }}</strong>
           <small>seconds between sweeps</small>
         </div>
@@ -494,9 +497,11 @@ onMounted(() => {
                 </tr>
                 <tr v-if="expandedChain === text(chain.id)">
                   <td colspan="6">
-                    <pre v-if="chainDetail" class="json-block" :data-testid="`chain-detail-${text(chain.id)}`">{{
-                      JSON.stringify(chainDetail, null, 2)
-                    }}</pre>
+                    <pre
+                      v-if="chainDetail"
+                      class="json-block"
+                      :data-testid="`chain-detail-${text(chain.id)}`"
+                      >{{ JSON.stringify(chainDetail, null, 2) }}</pre>
                     <p v-else class="source-note">Reading the chain…</p>
                   </td>
                 </tr>
@@ -564,7 +569,12 @@ onMounted(() => {
                 </td>
                 <td class="mono cell-tight">{{ text(attempt.chain_id ?? attempt.chainId) }}</td>
                 <td class="mono">
-                  {{ displayValue(scalar(attempt.attempt_number ?? attempt.attemptNumber), attemptState) }}
+                  {{
+                    displayValue(
+                      scalar(attempt.attempt_number ?? attempt.attemptNumber),
+                      attemptState,
+                    )
+                  }}
                 </td>
                 <td class="mono cell-tight">
                   {{ text(attempt.smsc_id ?? attempt.smscId, 'not recorded') }}
@@ -645,15 +655,15 @@ onMounted(() => {
                 <td>
                   {{
                     [
-                      policy.retryOnFailed ?? policy.retry_on_failed ? 'failed' : '',
-                      policy.retryOnRejected ?? policy.retry_on_rejected ? 'rejected' : '',
+                      (policy.retryOnFailed ?? policy.retry_on_failed) ? 'failed' : '',
+                      (policy.retryOnRejected ?? policy.retry_on_rejected) ? 'rejected' : '',
                     ]
                       .filter(Boolean)
                       .join(', ') || 'nothing'
                   }}
                 </td>
                 <td>
-                  {{ policy.chargeCreditOnRetry ?? policy.charge_credit_on_retry ? 'yes' : 'no' }}
+                  {{ (policy.chargeCreditOnRetry ?? policy.charge_credit_on_retry) ? 'yes' : 'no' }}
                 </td>
                 <td v-if="canSend" class="row-actions">
                   <button
@@ -749,16 +759,17 @@ onMounted(() => {
           </label>
         </div>
         <div class="toggle-row">
-          <label><input v-model="draft.enabled" type="checkbox" data-testid="draft-enabled" /> Enabled</label>
+          <label
+            ><input v-model="draft.enabled" type="checkbox" data-testid="draft-enabled" />
+            Enabled</label
+          >
           <label><input v-model="draft.retryOnFailed" type="checkbox" /> Retry on failed</label>
           <label><input v-model="draft.retryOnRejected" type="checkbox" /> Retry on rejected</label>
           <label
             ><input v-model="draft.requireDifferentBind" type="checkbox" /> Require a different
             bind</label
           >
-          <label
-            ><input v-model="draft.chargeCreditOnRetry" type="checkbox" /> Charge credit</label
-          >
+          <label><input v-model="draft.chargeCreditOnRetry" type="checkbox" /> Charge credit</label>
         </div>
         <footer class="detail-actions">
           <button
@@ -772,9 +783,9 @@ onMounted(() => {
           </button>
         </footer>
         <p class="source-note">
-          Turning a policy on also starts the scanner, so retrying begins rather than waiting for
-          an unrelated event. Switching credit charging off suppresses the DEBIT only — the retry
-          still consumes the customer's quota, because it goes through the shared send path.
+          Turning a policy on also starts the scanner, so retrying begins rather than waiting for an
+          unrelated event. Switching credit charging off suppresses the DEBIT only — the retry still
+          consumes the customer's quota, because it goes through the shared send path.
         </p>
       </template>
     </section>

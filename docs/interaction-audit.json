@@ -1,0 +1,142 @@
+[
+  {
+    "route": "/carriers",
+    "add": "dialog  (\"New carrier\")",
+    "row": "navigate /carriers/baadef36-256d-48c7-8d0c-33b59c937fd2 (of 2 tables)"
+  },
+  {
+    "route": "/smsc",
+    "add": "dialog  (\"Add SMSC\")",
+    "row": "drawer"
+  },
+  {
+    "route": "/routing",
+    "add": "dialog  (\"Create route\")",
+    "row": "no rows"
+  },
+  {
+    "route": "/routing-advanced",
+    "add": "dialog  (\"New route\")",
+    "row": "no rows"
+  },
+  {
+    "route": "/customers",
+    "add": "dialog  (\"Add customer\")",
+    "row": "drawer"
+  },
+  {
+    "route": "/users",
+    "add": "dialog  (\"Invite user\")",
+    "row": "drawer"
+  },
+  {
+    "route": "/roles",
+    "add": "dialog  (\"New role\")",
+    "row": "dialog (of 2 tables)"
+  },
+  {
+    "route": "/api-gateway",
+    "add": "dialog  (\"Create API client\")",
+    "row": "nothing"
+  },
+  {
+    "route": "/alerts",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/alert-lifecycle",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/configuration",
+    "add": "dialog  (\"Create configuration\")",
+    "row": "drawer (of 3 tables)"
+  },
+  {
+    "route": "/plugins",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/backup",
+    "add": "dialog  (\"Create backup\")",
+    "row": "nothing (of 2 tables)"
+  },
+  {
+    "route": "/messages",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/delivery-reports",
+    "add": "no add control",
+    "row": "no rows"
+  },
+  {
+    "route": "/notifications",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/logs-audit",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/sessions",
+    "add": "no add control",
+    "row": "nothing"
+  },
+  {
+    "route": "/sessions-smpp",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/mo-routing",
+    "add": "dialog  (\"New rule\")",
+    "row": "no rows"
+  },
+  {
+    "route": "/content-rules",
+    "add": "dialog  (\"New rule\")",
+    "row": "no rows"
+  },
+  {
+    "route": "/recipient-policy",
+    "add": "dialog  (\"New entry\")",
+    "row": "no rows"
+  },
+  {
+    "route": "/scheduled-sends",
+    "add": "no add control",
+    "row": "no rows"
+  },
+  {
+    "route": "/delivery-retries",
+    "add": "no add control",
+    "row": "no rows"
+  },
+  {
+    "route": "/jobs",
+    "add": "no add control",
+    "row": "drawer"
+  },
+  {
+    "route": "/data-integrity",
+    "add": "dialog  (\"New record\")",
+    "row": "nothing (of 2 tables)"
+  },
+  {
+    "route": "/services",
+    "add": "no add control",
+    "row": "select"
+  },
+  {
+    "route": "/docker",
+    "add": "no add control",
+    "row": "no rows"
+  }
+]

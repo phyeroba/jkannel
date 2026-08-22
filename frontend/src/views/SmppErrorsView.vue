@@ -133,7 +133,10 @@ const throttleState = ref<State>('loading');
 const throttleSeries = computed(() => {
   const series = [
     { label: 'Observed MT (/s)', values: throttlePoints.value.map((point) => point.outbound) },
-    { label: 'Peak in bucket (/s)', values: throttlePoints.value.map((point) => point.peakOutbound) },
+    {
+      label: 'Peak in bucket (/s)',
+      values: throttlePoints.value.map((point) => point.peakOutbound),
+    },
   ];
   if (throttleCeiling.value !== null)
     series.push({
@@ -396,11 +399,7 @@ onMounted(() => {
       growing queue is something else entirely — so the panel draws that and
       says which of the two questions it is answering.
     -->
-    <section
-      class="panel"
-      data-testid="smpp-throttling"
-      aria-labelledby="smpp-throttling-heading"
-    >
+    <section class="panel" data-testid="smpp-throttling" aria-labelledby="smpp-throttling-heading">
       <header class="panel-header">
         <div>
           <h2 id="smpp-throttling-heading">Throttling in context</h2>
@@ -429,7 +428,12 @@ onMounted(() => {
         }}
       </p>
 
-      <p v-if="throttleCeiling === null" class="warn-notice" role="note" data-testid="smpp-throttle-noceiling">
+      <p
+        v-if="throttleCeiling === null"
+        class="warn-notice"
+        role="note"
+        data-testid="smpp-throttle-noceiling"
+      >
         <strong>No connection declares a throughput ceiling</strong>, so there is no line to compare
         against and the chart above is throughput alone. The ceiling is set per SMSC as its TPS.
       </p>

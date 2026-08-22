@@ -382,7 +382,9 @@ watch(engineId, reload);
         <template v-if="smsc?.trafficSuspendedReason">
           Reason given: {{ smsc.trafficSuspendedReason }}.
         </template>
-        <template v-if="smsc?.trafficSuspendedBy"> Suspended by {{ smsc.trafficSuspendedBy }}.</template>
+        <template v-if="smsc?.trafficSuspendedBy">
+          Suspended by {{ smsc.trafficSuspendedBy }}.</template
+        >
       </p>
 
       <p
@@ -726,8 +728,8 @@ watch(engineId, reload);
         </dl>
         <p class="source-note">
           These are the engine's own counters for this bind since it last started, not a queue age.
-          Per-message queue age is not reported per connection, so the oldest waiting message
-          cannot be named here — Queues has the spool-level figure.
+          Per-message queue age is not reported per connection, so the oldest waiting message cannot
+          be named here — Queues has the spool-level figure.
         </p>
 
         <div class="t-caps route-heading">Routes using this connection</div>
