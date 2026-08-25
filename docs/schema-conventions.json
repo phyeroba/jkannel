@@ -1,0 +1,576 @@
+{
+  "target": [
+    {
+      "table": "alert_rules",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "api_gateway_clients",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "api_keys",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "backup_schedules",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "carriers",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "config_templates",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "customer_quotas",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "customer_routes",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "customers",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "delivery_retry_policies",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "escalation_policies",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "maintenance_windows",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "messaging_blocklist",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "messaging_content_rules",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "mo_routing_rules",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "mo_rule_destinations",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "notification_channels",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "plugin_registrations",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "report_definitions",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "roles",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "routing_rules",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "sender_ids",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "smsc_definitions",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "system_settings",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "tenants",
+      "deletedAt": true,
+      "version": true
+    },
+    {
+      "table": "users",
+      "deletedAt": true,
+      "version": true
+    }
+  ],
+  "excluded": [
+    {
+      "table": "adapter_instances",
+      "deletedAt": false,
+      "version": false,
+      "reason": "discovered from the engine, rewritten on each poll"
+    },
+    {
+      "table": "ai_assistance_requests",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a request log; each row is what was asked, once"
+    },
+    {
+      "table": "alert_acknowledgements",
+      "deletedAt": false,
+      "version": false,
+      "reason": "incident facts; resolved rather than deleted"
+    },
+    {
+      "table": "alert_comments",
+      "deletedAt": false,
+      "version": false,
+      "reason": "incident facts; resolved rather than deleted"
+    },
+    {
+      "table": "alert_escalations",
+      "deletedAt": false,
+      "version": false,
+      "reason": "incident facts; resolved rather than deleted"
+    },
+    {
+      "table": "alert_instances",
+      "deletedAt": false,
+      "version": false,
+      "reason": "incident facts; resolved rather than deleted"
+    },
+    {
+      "table": "api_idempotency_records",
+      "deletedAt": false,
+      "version": false,
+      "reason": "short-lived deduplication keys, swept by retention"
+    },
+    {
+      "table": "api_jobs",
+      "deletedAt": false,
+      "version": false,
+      "reason": "queue work with a terminal state; finishing is not deleting"
+    },
+    {
+      "table": "audit_log_archive",
+      "deletedAt": false,
+      "version": false,
+      "reason": "cold storage of rows already retired from a live table"
+    },
+    {
+      "table": "audit_log_default",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only tamper-evident chain; deleting an entry is the thing it exists to prevent"
+    },
+    {
+      "table": "auth_sessions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "credentials with a real expiry — genuinely deleted, never soft"
+    },
+    {
+      "table": "backup_records",
+      "deletedAt": false,
+      "version": false,
+      "reason": "an artifact record whose artifact is deleted with it — a soft-deleted backup would claim to exist"
+    },
+    {
+      "table": "bulk_send_jobs",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a campaign run — it completes, it is not edited afterwards"
+    },
+    {
+      "table": "bulk_send_recipients",
+      "deletedAt": false,
+      "version": false,
+      "reason": "work items with a terminal state; completion is not deletion"
+    },
+    {
+      "table": "config_drift_checks",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "configuration_versions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "immutable by design — a change is a new version, never an edit"
+    },
+    {
+      "table": "credit_transactions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "ledger; a correction is another row, never an edit"
+    },
+    {
+      "table": "customer_balances",
+      "deletedAt": false,
+      "version": false,
+      "reason": "ledger; a correction is another row, never an edit"
+    },
+    {
+      "table": "data_model_records",
+      "deletedAt": true,
+      "version": true,
+      "reason": "the reference implementation of the conventions; already carries both"
+    },
+    {
+      "table": "data_model_retention_state",
+      "deletedAt": false,
+      "version": false,
+      "reason": "current-value state rows the system owns and rewrites"
+    },
+    {
+      "table": "delivery_retry_state",
+      "deletedAt": false,
+      "version": false,
+      "reason": "current-value state rows the system owns and rewrites"
+    },
+    {
+      "table": "engine_capability_entries",
+      "deletedAt": false,
+      "version": false,
+      "reason": "discovered from the engine, rewritten on each poll"
+    },
+    {
+      "table": "engine_capability_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "engine_connection_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "engine_instances",
+      "deletedAt": false,
+      "version": false,
+      "reason": "discovered from the engine, rewritten on each poll"
+    },
+    {
+      "table": "engine_lifecycle_actions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "engine_lifecycle_results",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "engine_poll_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "engine_queue_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "engine_runtime_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "engine_sync_cursors",
+      "deletedAt": false,
+      "version": false,
+      "reason": "ingest position, owned by the poller"
+    },
+    {
+      "table": "gateway_request_log",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only log"
+    },
+    {
+      "table": "gateway_request_log_archive",
+      "deletedAt": false,
+      "version": false,
+      "reason": "cold storage of rows already retired from a live table"
+    },
+    {
+      "table": "login_history",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only history"
+    },
+    {
+      "table": "message_delivery_retries",
+      "deletedAt": false,
+      "version": false,
+      "reason": "work items with a terminal state; completion is not deletion"
+    },
+    {
+      "table": "message_delivery_retry_attempts",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only attempt log"
+    },
+    {
+      "table": "message_route_decisions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only per-message audit"
+    },
+    {
+      "table": "metric_samples",
+      "deletedAt": false,
+      "version": false,
+      "reason": "time series; rows are facts, not records"
+    },
+    {
+      "table": "mfa_devices",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a credential; removing one must really remove it"
+    },
+    {
+      "table": "mfa_recovery_codes",
+      "deletedAt": false,
+      "version": false,
+      "reason": "credentials with a real expiry — genuinely deleted, never soft"
+    },
+    {
+      "table": "mo_deliveries",
+      "deletedAt": false,
+      "version": false,
+      "reason": "engine-owned message rows; JKANNEL is not their custodian"
+    },
+    {
+      "table": "mo_ingest_state",
+      "deletedAt": false,
+      "version": false,
+      "reason": "current-value state rows the system owns and rewrites"
+    },
+    {
+      "table": "mo_messages",
+      "deletedAt": false,
+      "version": false,
+      "reason": "engine-owned message rows; JKANNEL is not their custodian"
+    },
+    {
+      "table": "mt_dedupe_keys",
+      "deletedAt": false,
+      "version": false,
+      "reason": "short-lived deduplication keys, swept by retention"
+    },
+    {
+      "table": "notification_deliveries",
+      "deletedAt": false,
+      "version": false,
+      "reason": "observations and delivery attempts, not owned records"
+    },
+    {
+      "table": "notification_deliveries_archive",
+      "deletedAt": false,
+      "version": false,
+      "reason": "cold storage of rows already retired from a live table"
+    },
+    {
+      "table": "operational_events",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only event stream"
+    },
+    {
+      "table": "password_history",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only history"
+    },
+    {
+      "table": "password_reset_tokens",
+      "deletedAt": false,
+      "version": false,
+      "reason": "credentials with a real expiry — genuinely deleted, never soft"
+    },
+    {
+      "table": "permissions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "the seeded permission catalogue — code owns it, not an operator"
+    },
+    {
+      "table": "pii_reveal_grants",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a time-boxed grant — expiry is the lifecycle, and the record must survive it for audit"
+    },
+    {
+      "table": "report_definition_runs",
+      "deletedAt": false,
+      "version": false,
+      "reason": "an execution record — immutable once written"
+    },
+    {
+      "table": "report_job_runs",
+      "deletedAt": false,
+      "version": false,
+      "reason": "an execution record — immutable once written"
+    },
+    {
+      "table": "report_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "restore_operations",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "role_permissions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "join tables; the row IS the relationship, and removing it is the operation"
+    },
+    {
+      "table": "route_deployments",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "route_failovers",
+      "deletedAt": false,
+      "version": false,
+      "reason": "versions are immutable by definition; targets belong to their route"
+    },
+    {
+      "table": "route_targets",
+      "deletedAt": false,
+      "version": false,
+      "reason": "versions are immutable by definition; targets belong to their route"
+    },
+    {
+      "table": "route_versions",
+      "deletedAt": false,
+      "version": true,
+      "reason": "versions are immutable by definition; targets belong to their route"
+    },
+    {
+      "table": "scheduled_messages",
+      "deletedAt": false,
+      "version": false,
+      "reason": "work items with a terminal state; completion is not deletion"
+    },
+    {
+      "table": "schema_migrations",
+      "deletedAt": false,
+      "version": true,
+      "reason": "the migration ledger — owned by the runner, never by an operator"
+    },
+    {
+      "table": "send_sms",
+      "deletedAt": false,
+      "version": false,
+      "reason": "engine-owned message rows; JKANNEL is not their custodian"
+    },
+    {
+      "table": "sent_sms",
+      "deletedAt": false,
+      "version": false,
+      "reason": "engine-owned message rows; JKANNEL is not their custodian"
+    },
+    {
+      "table": "smsc_bind_snapshots",
+      "deletedAt": false,
+      "version": false,
+      "reason": "a point-in-time observation, not a record anybody owns"
+    },
+    {
+      "table": "smsc_bind_state",
+      "deletedAt": false,
+      "version": false,
+      "reason": "current-value state rows the system owns and rewrites"
+    },
+    {
+      "table": "smsc_bind_transitions",
+      "deletedAt": false,
+      "version": false,
+      "reason": "append-only history of state changes"
+    },
+    {
+      "table": "smsc_deployments",
+      "deletedAt": false,
+      "version": false,
+      "reason": "operation records — immutable once run"
+    },
+    {
+      "table": "smsc_health",
+      "deletedAt": false,
+      "version": false,
+      "reason": "observations and delivery attempts, not owned records"
+    },
+    {
+      "table": "test_sends",
+      "deletedAt": false,
+      "version": false,
+      "reason": "diagnostic records, immutable once sent"
+    },
+    {
+      "table": "user_invitations",
+      "deletedAt": false,
+      "version": false,
+      "reason": "single-use, with a terminal accepted/expired state"
+    },
+    {
+      "table": "user_notifications",
+      "deletedAt": false,
+      "version": false,
+      "reason": "per-user notices, dismissed rather than edited"
+    },
+    {
+      "table": "user_roles",
+      "deletedAt": false,
+      "version": false,
+      "reason": "join tables; the row IS the relationship, and removing it is the operation"
+    }
+  ],
+  "missingDelete": [],
+  "missingVersion": []
+}

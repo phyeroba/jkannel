@@ -190,9 +190,79 @@ export class ConsoleRepository {
   }
 
   /**
+   * Tables where a removed row is kept and marked rather than erased.
+   *
+   * Mirrors the `soft_delete_tables` list in migration 054 and the target set
+   * `scripts/schema-conventions.mjs` computes; the script fails if a table is
+   * in one and not the other, which is what stops the two drifting.
+   *
+   * Held here rather than discovered from the catalogue on each query: a read
+   * path that decides whether to filter by asking the database what columns
+   * exist would silently stop filtering the day a column is renamed, and
+   * "silently stops hiding deleted rows" is the failure this list prevents.
+   */
+  private static readonly SOFT_DELETED = new Set([
+    'api_gateway_clients',
+    'api_keys',
+    'backup_schedules',
+    'carriers',
+    'config_templates',
+    'customer_quotas',
+    'customer_routes',
+    'customers',
+    'data_model_records',
+    'delivery_retry_policies',
+    'escalation_policies',
+    'maintenance_windows',
+    'messaging_blocklist',
+    'messaging_content_rules',
+    'mo_routing_rules',
+    'mo_rule_destinations',
+    'notification_channels',
+    'plugin_registrations',
+    'report_definitions',
+    'roles',
+    'routing_rules',
+    'sender_ids',
+    'smsc_definitions',
+    'system_settings',
+    'tenants',
+    'users',
+  ]);
+
+  /**
+   * The soft-delete predicate for a FROM clause, or '' when the table has none.
+   *
+   * The table name is taken from the FROM clause the caller already wrote,
+   * because every grid read goes through this one method — which is the only
+   * reason applying the convention across two dozen tables is a small change
+   * rather than two dozen edits that someone would half-finish.
+   *
+   * An aliased or joined FROM (`FROM users u JOIN ...`) is handled by matching
+   * the first identifier and qualifying with its alias when there is one:
+   * `deleted_at IS NULL` is ambiguous the moment a join brings in a second
+   * table carrying the same column, and an ambiguous predicate is a query that
+   * throws rather than one that quietly returns the wrong rows.
+   */
+  private liveOnly(from: string): string {
+    const match = /\bfrom\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?/i.exec(
+      from,
+    );
+    if (!match) return '';
+    const [, table, rawAlias] = match;
+    if (!ConsoleRepository.SOFT_DELETED.has(table.toLowerCase())) return '';
+    const reserved = new Set(['join', 'where', 'left', 'right', 'inner', 'cross', 'full', 'on']);
+    const alias = rawAlias && !reserved.has(rawAlias.toLowerCase()) ? rawAlias : table;
+    return `${alias}.deleted_at IS NULL`;
+  }
+
+  /**
    * Runs a grid query (search/sort/filter/pagination) and returns the page
    * with a total count. `body.select` must not include ORDER BY/LIMIT, and
    * `body.where` (optional) must start with WHERE; grid clauses are appended.
+   *
+   * Soft-deleted rows are excluded here, once, for every register in the
+   * console.
    */
   private async grid<T extends QueryResultRow>(
     actor: Actor,
@@ -202,11 +272,13 @@ export class ConsoleRepository {
   ): Promise<GridPage<T>> {
     const parsed = parseListQuery(rawQuery, gridDef);
     const fragments = buildGridSql(parsed, gridDef, body.params ?? []);
-    const where = body.where
-      ? `${body.where}${fragments.andWhere}`
-      : fragments.andWhere
-        ? `WHERE ${fragments.andWhere.slice(' AND '.length)}`
-        : '';
+    const live = this.liveOnly(body.from);
+    const clauses = [
+      body.where ? body.where.replace(/^\s*where\s+/i, '') : '',
+      live,
+      fragments.andWhere ? fragments.andWhere.slice(' AND '.length) : '',
+    ].filter(Boolean);
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `${body.select}, count(*) OVER() AS __total ${body.from} ${where} ${fragments.orderBy} ${fragments.limitOffset}`;
     return this.inTenant(actor, async (c) => {
       const result = await c.query<T & { __total: string }>(sql, fragments.params);
