@@ -81,6 +81,34 @@ function appValue(selector, prop) {
 }
 const appHasSelector = (selector) => appRules.some((r) => r.selector === selector);
 
+/**
+ * The design system's EFFECTIVE value for a property, not every value it ever
+ * declares for it.
+ *
+ * `appValue` above already takes the last declaration, because that is what the
+ * cascade does. The wanted side did not: it compared against each declaration
+ * in turn, so a property the KIT ITSELF declares twice was reported as a
+ * divergence against its own superseded value. Both of the two "diverging
+ * declarations" this tool had been reporting were that:
+ *
+ *   th                 `th, td { font-size: var(--fs-body-sm) }` on one line and
+ *                      `th { font-size: var(--fs-table-head) }` on the next
+ *   .sidebar nav       `padding: 4px 0 20px` at layout.css:28, then
+ *                      `padding: 8px 0 20px` at layout.css:48
+ *
+ * The vendored files are byte-identical to the package in both cases. The tool
+ * was wrong, not the port — the thirteenth false reading found in this tooling,
+ * and the same shape as the rest: a comparison quietly stricter than it reads.
+ */
+function designValue(selector, prop) {
+  let found;
+  for (const r of designRules) {
+    if (r.selector !== selector) continue;
+    if (r.decls.has(prop)) found = r.decls.get(prop);
+  }
+  return found;
+}
+
 // Properties that describe layout and identity. Comparing every property would
 // bury the signal in shorthand-vs-longhand noise.
 const KEY = new Set([
@@ -132,8 +160,11 @@ for (const rule of designRules) {
     });
     continue;
   }
-  for (const [prop, want] of rule.decls) {
+  for (const [prop] of rule.decls) {
     if (!KEY.has(prop)) continue;
+    // Effective value on both sides, so the comparison is cascade against
+    // cascade rather than declaration against declaration.
+    const want = designValue(rule.selector, prop);
     const got = appValue(rule.selector, prop);
     if (got === undefined) differs.push({ selector: rule.selector, prop, want, got: '(not set)' });
     else if (norm(got) !== norm(want)) differs.push({ selector: rule.selector, prop, want, got });

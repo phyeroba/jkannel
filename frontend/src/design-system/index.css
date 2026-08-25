@@ -33,6 +33,27 @@
 /* Tokens the component and layout files consume, before they consume them. */
 @import './spacing.css';
 @import './typography.css';
+/* ---------------------------------------------------------------------------
+   `base.css` WAS MISSED IN THE FIRST VENDORING, and it is the file that APPLIES
+   the type scale rather than declaring it.
+
+   Every token it uses was already here — `--fs-body: 15px`, `--lh-body: 1.6`,
+   `--tracking-tight` — and nothing was setting them on `body`, so the console
+   ran on the browser's defaults: 16px and a 1.5 line height. `design-diff`
+   stayed green throughout, because it compares the stylesheets we have against
+   the ones we copied, and a file nobody copied is in neither.
+
+   `rendered-diff.mjs` is what found it, by measuring `getComputedStyle` on the
+   kit and on us side by side. The symptom was systematic and small enough to
+   read as "slightly off" rather than as a defect: every line height in the
+   console was 1.5× its font size where the design specifies 1.6×, body copy was
+   a pixel large, and headings had none of the design's negative tracking.
+
+   It also restores `h2` sizing and the focus-visible outline the design
+   specifies, and `button, input, select, textarea { font: inherit }` — without
+   which controls fall back to the browser's own 13.333px form font.
+   --------------------------------------------------------------------------- */
+@import './base.css';
 @import './components.css';
 @import './layout.css';
 
@@ -300,6 +321,36 @@ main > [data-testid='module-workspace'] > * {
 /* Blocks after the grid (an error, a caveat) are siblings of it, not cells. */
 .dialog-body > * + * {
   margin-top: var(--sp-4);
+}
+
+/* ---------------------------------------------------------------------------
+   HEADINGS, PUT BACK AFTER TAILWIND'S PREFLIGHT TAKES THEM AWAY
+
+   `@tailwindcss/vite` injects `h1,h2,h3,h4,h5,h6 { font-size: inherit;
+   font-weight: inherit }`. The design system styles headings in `base.css` —
+   colour, size, tracking — and deliberately does NOT set a weight, because the
+   browser's own bold is the intended look and every heading in the kit renders
+   at 700. Preflight removes exactly the declaration the design was relying on,
+   so every panel heading in this console rendered at regular weight.
+
+   Nothing in the CSS audits could see it: the design system has no rule to
+   diverge from, and the reset arrives from a build plugin rather than from a
+   stylesheet in this repository. `rendered-diff.mjs` found it by comparing
+   `getComputedStyle` against the kit.
+
+   Restored here rather than by disabling preflight, because the rest of
+   preflight is wanted and this is precisely the "JKANNEL-specific adaptation"
+   this file exists to hold. `h1` needs nothing — `typography.css` sets its
+   weight explicitly.
+   --------------------------------------------------------------------------- */
+h2,
+h3 {
+  font-weight: var(--fw-bold);
+}
+/* Except where the design system states a weight of its own. */
+.drawer-head h2,
+.t-card-title {
+  font-weight: 600;
 }
 
 /* Inside a panel, a notice or banner is content rather than a sibling block:
