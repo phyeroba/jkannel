@@ -2,7 +2,7 @@
   {
     "label": "Operations",
     "to": "/dashboard/operations",
-    "chars": 1871,
+    "chars": 1823,
     "panels": 5,
     "controls": 14,
     "denied": false,
@@ -26,9 +26,9 @@
   {
     "label": "Alert Lifecycle",
     "to": "/alert-lifecycle",
-    "chars": 1864,
+    "chars": 3042,
     "panels": 2,
-    "controls": 12,
+    "controls": 17,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -38,7 +38,7 @@
   {
     "label": "Escalation & Maintenance",
     "to": "/alert-response",
-    "chars": 1922,
+    "chars": 1924,
     "panels": 4,
     "controls": 9,
     "denied": false,
@@ -50,7 +50,7 @@
   {
     "label": "Messages",
     "to": "/messages",
-    "chars": 2011,
+    "chars": 20075,
     "panels": 5,
     "controls": 17,
     "denied": false,
@@ -62,7 +62,7 @@
   {
     "label": "Live Traffic",
     "to": "/live-traffic",
-    "chars": 2476,
+    "chars": 2490,
     "panels": 4,
     "controls": 9,
     "denied": false,
@@ -74,7 +74,7 @@
   {
     "label": "Queues",
     "to": "/queues",
-    "chars": 2269,
+    "chars": 2265,
     "panels": 4,
     "controls": 14,
     "denied": false,
@@ -86,9 +86,9 @@
   {
     "label": "DLR Performance",
     "to": "/dlr-performance",
-    "chars": 4162,
+    "chars": 4610,
     "panels": 6,
-    "controls": 4,
+    "controls": 7,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -98,7 +98,7 @@
   {
     "label": "Live Queue",
     "to": "/live-queue",
-    "chars": 4394,
+    "chars": 4411,
     "panels": 6,
     "controls": 39,
     "denied": false,
@@ -122,7 +122,7 @@
   {
     "label": "Delivery Reports",
     "to": "/delivery-reports",
-    "chars": 973,
+    "chars": 6695,
     "panels": 3,
     "controls": 27,
     "denied": false,
@@ -194,7 +194,7 @@
   {
     "label": "Carriers",
     "to": "/carriers",
-    "chars": 2056,
+    "chars": 2060,
     "panels": 2,
     "controls": 15,
     "denied": false,
@@ -206,9 +206,9 @@
   {
     "label": "SMSC Connections",
     "to": "/smsc",
-    "chars": 1428,
+    "chars": 1394,
     "panels": 3,
-    "controls": 36,
+    "controls": 25,
     "denied": false,
     "calls": 6,
     "answered": 6,
@@ -230,9 +230,9 @@
   {
     "label": "Routing",
     "to": "/routing",
-    "chars": 728,
+    "chars": 1125,
     "panels": 3,
-    "controls": 15,
+    "controls": 21,
     "denied": false,
     "calls": 7,
     "answered": 7,
@@ -242,9 +242,9 @@
   {
     "label": "Advanced Routing",
     "to": "/routing-advanced",
-    "chars": 1019,
-    "panels": 2,
-    "controls": 16,
+    "chars": 1388,
+    "panels": 3,
+    "controls": 22,
     "denied": false,
     "calls": 6,
     "answered": 6,
@@ -254,12 +254,12 @@
   {
     "label": "Failover",
     "to": "/failover",
-    "chars": 1018,
-    "panels": 3,
-    "controls": 2,
+    "chars": 1952,
+    "panels": 4,
+    "controls": 7,
     "denied": false,
-    "calls": 8,
-    "answered": 8,
+    "calls": 9,
+    "answered": 9,
     "broken": [],
     "verdict": "ok"
   },
@@ -290,7 +290,7 @@
   {
     "label": "SMPP Errors",
     "to": "/smpp-errors",
-    "chars": 5395,
+    "chars": 5401,
     "panels": 5,
     "controls": 7,
     "denied": false,
@@ -302,9 +302,9 @@
   {
     "label": "Events",
     "to": "/events",
-    "chars": 1215,
+    "chars": 3360,
     "panels": 1,
-    "controls": 10,
+    "controls": 44,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -314,7 +314,7 @@
   {
     "label": "Analytics & Reports",
     "to": "/reports",
-    "chars": 5359,
+    "chars": 5557,
     "panels": 12,
     "controls": 23,
     "denied": false,
@@ -350,7 +350,7 @@
   {
     "label": "API Gateway",
     "to": "/api-gateway",
-    "chars": 1490,
+    "chars": 1492,
     "panels": 3,
     "controls": 13,
     "denied": false,
@@ -362,9 +362,9 @@
   {
     "label": "API Reference",
     "to": "/api-reference",
-    "chars": 27679,
+    "chars": 27752,
     "panels": 5,
-    "controls": 408,
+    "controls": 409,
     "denied": false,
     "calls": 5,
     "answered": 5,
@@ -374,7 +374,7 @@
   {
     "label": "Services",
     "to": "/services",
-    "chars": 3389,
+    "chars": 3388,
     "panels": 6,
     "controls": 4,
     "denied": false,
@@ -398,7 +398,7 @@
   {
     "label": "Performance",
     "to": "/performance",
-    "chars": 2128,
+    "chars": 2135,
     "panels": 3,
     "controls": 6,
     "denied": false,
@@ -422,7 +422,7 @@
   {
     "label": "Logs & Audit",
     "to": "/logs-audit",
-    "chars": 9507,
+    "chars": 9056,
     "panels": 2,
     "controls": 13,
     "denied": false,
@@ -434,7 +434,7 @@
   {
     "label": "Data Integrity",
     "to": "/data-integrity",
-    "chars": 1768,
+    "chars": 1776,
     "panels": 3,
     "controls": 10,
     "denied": false,
@@ -446,7 +446,7 @@
   {
     "label": "Background Jobs",
     "to": "/jobs",
-    "chars": 790,
+    "chars": 791,
     "panels": 2,
     "controls": 6,
     "denied": false,
@@ -458,7 +458,7 @@
   {
     "label": "Log Explorer",
     "to": "/log-explorer",
-    "chars": 15555,
+    "chars": 15752,
     "panels": 3,
     "controls": 119,
     "denied": false,
@@ -482,7 +482,7 @@
   {
     "label": "Configuration",
     "to": "/configuration",
-    "chars": 3402,
+    "chars": 3407,
     "panels": 8,
     "controls": 25,
     "denied": false,
@@ -494,7 +494,7 @@
   {
     "label": "Plugins",
     "to": "/plugins",
-    "chars": 1895,
+    "chars": 1900,
     "panels": 4,
     "controls": 14,
     "denied": false,
@@ -506,7 +506,7 @@
   {
     "label": "Backup & Restore",
     "to": "/backup",
-    "chars": 2482,
+    "chars": 2493,
     "panels": 4,
     "controls": 21,
     "denied": false,
@@ -530,7 +530,7 @@
   {
     "label": "Roles & Permissions",
     "to": "/roles",
-    "chars": 5067,
+    "chars": 5102,
     "panels": 3,
     "controls": 25,
     "denied": false,
@@ -542,7 +542,7 @@
   {
     "label": "Sessions",
     "to": "/sessions",
-    "chars": 9863,
+    "chars": 10228,
     "panels": 2,
     "controls": 61,
     "denied": false,

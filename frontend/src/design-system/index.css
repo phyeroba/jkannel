@@ -308,10 +308,28 @@ main > [data-testid='module-workspace'] > * {
    or a narrow viewport collapses to a single column on its own, and a field
    never drops below a typable 200px.
    --------------------------------------------------------------------------- */
-.dialog-body .dialog-grid {
+.dialog-body .dialog-grid,
+.drawer-body .dialog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--sp-4); /* 12px — the kit's inline value */
+}
+/* `.field` carries an 18px bottom margin for stacked forms. Inside a grid that
+   ADDS to the row gap, so rows sat 30px apart while columns sat at 12 — the
+   grid supplies the rhythm here and the field must not also. */
+.dialog-grid > .field,
+.dialog-grid > label {
+  margin-bottom: 0;
+}
+/* A checkbox reads as one line, not as a label stacked above a box. */
+.dialog-grid > .checkbox-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.dialog-grid > .checkbox-row input {
+  width: auto;
+  min-height: 0;
 }
 /* A field that holds prose — a note, a URL, a template — is unusable in a
    200px track, so it opts out of the auto-fit and takes the full width. */
@@ -351,6 +369,70 @@ h3 {
 .drawer-head h2,
 .t-card-title {
   font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   A PANEL IS AS TALL AS ITS CONTENT
+
+   `.dashboard-grid` is a two-column grid, and a grid item stretches to its
+   row's height by default. So a short panel beside a tall one grew to match it
+   — System health, with three dependency rows, was stretched to the height of
+   the incident table beside it and carried some seven hundred pixels of empty
+   white below its last row. It reads as a panel that failed to load.
+
+   `align-items: start` is the whole fix: each panel takes the height it needs
+   and the row is as tall as its tallest member, which is what the eye expects
+   from a dashboard of unequal cards. The kit does not have this problem because
+   it does not use a fixed two-column grid here at all.
+   --------------------------------------------------------------------------- */
+.dashboard-grid {
+  align-items: start;
+}
+
+/* ---------------------------------------------------------------------------
+   ROW ACTIONS SIT ON ONE LINE
+
+   There was no container rule for `.row-actions` at all, so five buttons in a
+   squeezed Actions column each wrapped onto their own line and every row of the
+   SMSC register stood about 200px tall — a four-row table filling the screen.
+   The cell was doing what CSS told it to; nothing had told it anything.
+
+   `flex-wrap` rather than `nowrap`: on a narrow viewport the buttons should
+   still wrap rather than force a horizontal scrollbar across the whole table.
+   `width: 1%` with `white-space: nowrap` is the standard way to make a table
+   column shrink to its content, so the action column stops stealing width from
+   the columns carrying the data.
+   --------------------------------------------------------------------------- */
+td.row-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+/* Row buttons are secondary to the row itself: the kit sizes an in-table
+   control down from the page's primary actions. */
+td.row-actions .primary-button,
+td.row-actions .secondary-button,
+td.row-actions .danger-button {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: var(--fs-caption);
+}
+
+/* The kit colours a country chip's count inline when any bind in that market is
+   down. Inline styles do not survive the port, so it is a class — the value is
+   the design system's `--warn`, unchanged. */
+.chip .chip-warn {
+  color: var(--warn);
+}
+/* The chip row is a scope selector above the register, not a panel: it gets the
+   container's rhythm from the view root and needs no surface of its own. */
+.country-chips {
+  padding: 0;
 }
 
 /* Inside a panel, a notice or banner is content rather than a sibling block:

@@ -163,7 +163,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
     <fieldset class="cfg-group">
       <legend>Identity</legend>
       <div class="dialog-grid">
-        <label class="filter-select">
+        <label class="field">
           <span>Name</span>
           <input
             :value="str('name')"
@@ -172,7 +172,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small>What operators call it. Free text.</small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Engine id</span>
           <input
             :value="str('engineId')"
@@ -186,7 +186,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             reference it{{ mode === 'edit' ? ', so it cannot be changed' : '' }}.
           </small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Protocol</span>
           <select
             :value="type"
@@ -200,7 +200,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           </select>
           <small><span class="mono">smsc</span> — decides which settings below apply.</small>
         </label>
-        <label class="filter-select checkbox-row">
+        <label class="field checkbox-row">
           <input
             type="checkbox"
             :checked="bool('enabled')"
@@ -221,7 +221,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
         exists so throughput and routing can be exercised without a real bind.
       </p>
       <div class="dialog-grid">
-        <label v-if="!isFake" class="filter-select">
+        <label v-if="!isFake" class="field">
           <span>Host</span>
           <input
             :value="str('host')"
@@ -231,7 +231,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">host</span></small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Port</span>
           <input
             type="number"
@@ -244,7 +244,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">port</span></small>
         </label>
-        <label v-if="isSmpp" class="filter-select">
+        <label v-if="isSmpp" class="field">
           <span>Bind mode</span>
           <select
             :value="str('bindMode')"
@@ -261,7 +261,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             <span class="mono">receive-port</span>.
           </small>
         </label>
-        <label v-if="isSmpp && str('bindMode') === 'transmitter'" class="filter-select">
+        <label v-if="isSmpp && str('bindMode') === 'transmitter'" class="field">
           <span>Receive port</span>
           <input
             type="number"
@@ -273,7 +273,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">receive-port</span> — the carrier's receiver port.</small>
         </label>
-        <label v-if="isHttp" class="filter-select dialog-span">
+        <label v-if="isHttp" class="field dialog-span">
           <span>Send URL</span>
           <input
             :value="str('sendUrl')"
@@ -283,7 +283,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">send-url</span></small>
         </label>
-        <label v-if="isSmpp" class="filter-select checkbox-row">
+        <label v-if="isSmpp" class="field checkbox-row">
           <input
             type="checkbox"
             :checked="bool('useTls')"
@@ -307,7 +307,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
         generation time.
       </p>
       <div class="dialog-grid">
-        <label v-if="isSmpp" class="filter-select">
+        <label v-if="isSmpp" class="field">
           <span>System id</span>
           <input
             :value="str('systemId')"
@@ -317,7 +317,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">smsc-username</span> — the bind username, in clear.</small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Username reference (optional)</span>
           <input
             :value="str('usernameSecretRef')"
@@ -329,7 +329,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             Use instead of System id when the carrier treats the username as sensitive.
           </small>
         </label>
-        <label class="filter-select dialog-span">
+        <label class="field dialog-span">
           <span>Password reference</span>
           <input
             :value="str('credentialSecretRef')"
@@ -386,7 +386,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
         override — left blank, the engine's own default applies.
       </p>
       <div class="dialog-grid">
-        <label class="filter-select">
+        <label class="field">
           <span>TPS ceiling</span>
           <input
             type="number"
@@ -401,7 +401,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           >
         </label>
         <template v-if="open.throughput">
-          <label v-if="isSmpp" class="filter-select">
+          <label v-if="isSmpp" class="field">
             <span>Window size</span>
             <input
               type="number"
@@ -416,7 +416,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
               flight.</small
             >
           </label>
-          <label class="filter-select">
+          <label class="field">
             <span>Parallel connections</span>
             <input
               type="number"
@@ -431,7 +431,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
               observed sessions will not match this number.
             </small>
           </label>
-          <label v-if="isSmpp" class="filter-select">
+          <label v-if="isSmpp" class="field">
             <span>Enquire-link interval (s)</span>
             <input
               type="number"
@@ -443,7 +443,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             />
             <small><span class="mono">enquire-link-interval</span> — the keepalive.</small>
           </label>
-          <label class="filter-select">
+          <label class="field">
             <span>Reconnect delay (s)</span>
             <input
               type="number"
@@ -455,7 +455,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             />
             <small><span class="mono">reconnect-delay</span></small>
           </label>
-          <label class="filter-select">
+          <label class="field">
             <span>Connection timeout (s)</span>
             <input
               type="number"
@@ -468,7 +468,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             />
             <small><span class="mono">connection-timeout</span></small>
           </label>
-          <label v-if="isSmpp" class="filter-select">
+          <label v-if="isSmpp" class="field">
             <span>Wait-ack (s)</span>
             <input
               type="number"
@@ -482,7 +482,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
               ><span class="mono">wait-ack</span> — how long to wait for a submit response.</small
             >
           </label>
-          <label v-if="isSmpp" class="filter-select">
+          <label v-if="isSmpp" class="field">
             <span>On wait-ack expiry</span>
             <select
               :value="str('waitAckExpireAction')"
@@ -496,7 +496,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             </select>
             <small><span class="mono">wait-ack-expire</span></small>
           </label>
-          <label class="filter-select">
+          <label class="field">
             <span>Max consecutive errors</span>
             <input
               type="number"
@@ -509,7 +509,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
               ><span class="mono">max-error-count</span> — errors before the bind is dropped.</small
             >
           </label>
-          <label v-if="isSmpp" class="filter-select checkbox-row dialog-span">
+          <label v-if="isSmpp" class="field checkbox-row dialog-span">
             <input
               type="checkbox"
               :checked="bool('retryOnAuthFailure')"
@@ -545,7 +545,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
         field is left out of the configuration entirely, so the engine's default applies.
       </p>
       <div v-if="open.addressing" class="dialog-grid">
-        <label class="filter-select">
+        <label class="field">
           <span>System type</span>
           <input
             :value="str('systemType')"
@@ -555,7 +555,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">system-type</span></small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Interface version</span>
           <select
             :value="str('interfaceVersion')"
@@ -569,7 +569,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           </select>
           <small><span class="mono">interface-version</span></small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Address range</span>
           <input
             :value="str('addressRange')"
@@ -582,7 +582,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             inbound traffic to deliver on this bind.
           </small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Alternative charset</span>
           <input
             :value="str('altCharset')"
@@ -595,7 +595,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             03.38.
           </small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Source TON</span>
           <input
             type="number"
@@ -609,7 +609,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             ><span class="mono">source-addr-ton</span> — 1 international, 5 alphanumeric.</small
           >
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Source NPI</span>
           <input
             type="number"
@@ -621,7 +621,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">source-addr-npi</span> — 1 is ISDN/E.164.</small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Destination TON</span>
           <input
             type="number"
@@ -633,7 +633,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">dest-addr-ton</span></small>
         </label>
-        <label class="filter-select">
+        <label class="field">
           <span>Destination NPI</span>
           <input
             type="number"
@@ -685,7 +685,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             },
           ]"
           :key="entry.key"
-          class="filter-select dialog-span"
+          class="field dialog-span"
         >
           <span>{{ entry.label }}</span>
           <input
@@ -703,7 +703,7 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
     </fieldset>
 
     <!-- NOTES ---------------------------------------------------------------- -->
-    <label class="filter-select dialog-span">
+    <label class="field dialog-span">
       <span>Notes</span>
       <input
         :value="str('notes')"

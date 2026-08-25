@@ -1,0 +1,66 @@
+[
+  {
+    "route": "/dashboard/operations",
+    "name": "01-operations",
+    "title": "Operations overview",
+    "caption": "Every figure is read from the running engine at request time. A value the engine did not report reads \"unknown\" rather than zero — the console never invents a number to fill a card.",
+    "file": "01-operations.png"
+  },
+  {
+    "route": "/smsc",
+    "name": "02-smsc-register",
+    "title": "SMSC connections",
+    "caption": "The carrier-facing connections, scoped by market. Bind state is what the engine observed, not what the configuration asked for, so an enabled bind the carrier has not accepted is visible as such.",
+    "file": "02-smsc-register.png"
+  },
+  {
+    "route": "/smsc",
+    "name": "03-smsc-configuration",
+    "title": "Connection settings, point and click",
+    "caption": "All 38 settable SMSC attributes have a control, grouped as a carrier onboarding sheet is laid out and collapsed until wanted. Each field names the kannel.conf directive it becomes, and a setting left blank is omitted from the generated file so the engine default applies.",
+    "action": "openSmscForm",
+    "file": "03-smsc-configuration.png"
+  },
+  {
+    "route": "/routing",
+    "name": "04-routing",
+    "title": "Carrier routing",
+    "caption": "Routes are drafted, validated, then deployed — and only a deployed route decides where a message goes. The simulator resolves against the same deployed set the send path uses.",
+    "file": "04-routing.png"
+  },
+  {
+    "route": "/live-queue",
+    "name": "05-live-queue",
+    "title": "Live queue",
+    "caption": "The engine spool as it drains. A healthy gateway empties this in under a second, so an empty queue is the normal state rather than a sign that nothing was sent.",
+    "file": "05-live-queue.png"
+  },
+  {
+    "route": "/messages",
+    "name": "06-messages",
+    "title": "Message log and trace",
+    "caption": "Every submission with its delivery outcome. Opening one shows the full trace — segments, encoding, and the engine events behind the status — in a sheet, so the log keeps its place.",
+    "file": "06-messages.png"
+  },
+  {
+    "route": "/alerts",
+    "name": "07-alerts",
+    "title": "Alerts",
+    "caption": "Operational alerts with their lifecycle: acknowledged, assigned, suppressed or resolved, and whether anybody was actually notified — which is a different question from whether it fired.",
+    "file": "07-alerts.png"
+  },
+  {
+    "route": "/configuration",
+    "name": "08-configuration",
+    "title": "Engine configuration",
+    "caption": "Configuration is generated from the database, validated by a real bearerbox parse in an isolated container, approved as an immutable version, and only then deployed.",
+    "file": "08-configuration.png"
+  },
+  {
+    "route": "/api-reference",
+    "name": "09-api-reference",
+    "title": "API reference",
+    "caption": "The console is one client of the API, not a privileged one. Every operation it performs is documented here with a runnable example.",
+    "file": "09-api-reference.png"
+  }
+]

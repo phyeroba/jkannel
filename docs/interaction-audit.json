@@ -12,12 +12,12 @@
   {
     "route": "/routing",
     "add": "dialog  (\"Create route\")",
-    "row": "no rows"
+    "row": "drawer"
   },
   {
     "route": "/routing-advanced",
     "add": "dialog  (\"New route\")",
-    "row": "no rows"
+    "row": "select"
   },
   {
     "route": "/customers",
@@ -72,7 +72,7 @@
   {
     "route": "/delivery-reports",
     "add": "no add control",
-    "row": "no rows"
+    "row": "drawer"
   },
   {
     "route": "/notifications",

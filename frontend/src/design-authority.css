@@ -1473,7 +1473,13 @@ li.selectable:hover {
   --control-h: 36px;
   --control-pad-x: 12px;
   --control-radius: var(--radius-md);
-  --control-font: 13.5px;
+  /* --control-font is deliberately GONE. The design system sizes no control at
+     all: `base.css` gives every button, input, select and textarea
+     `font: inherit`, so a button takes body copy (15px) and a filter control
+     takes the 13px its `.filter-select` wrapper sets. One token for both made
+     every control 13.5px — buttons a point and a half small, filter selects a
+     half-point large — which `rendered-diff.mjs` measured against the kit.
+     Anything needing a size of its own states it at its own selector. */
   /* One focus ring for every control, so keyboard position is never ambiguous. */
   --control-ring: 0 0 0 3px var(--brand-soft);
 }
@@ -1492,8 +1498,10 @@ select {
   background: var(--surface-2);
   color: var(--text-strong);
   font: inherit;
-  font-size: var(--control-font);
-  line-height: 1.4;
+  /* No line-height either. `font: inherit` already carries the body's, and
+     stating 1.4 here made a control's text lead differently from the label
+     beside it — the kit leaves controls at `normal` and this is the last of the
+     control-typography overrides `rendered-diff.mjs` measured. */
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
@@ -1616,7 +1624,6 @@ label {
   padding: 0 var(--control-pad-x);
   min-height: var(--control-h);
   border-radius: var(--control-radius);
-  font-size: var(--control-font);
 }
 .setting-control textarea {
   padding: 10px var(--control-pad-x);
@@ -1638,7 +1645,6 @@ label {
   padding-left: var(--control-pad-x);
   padding-top: 0;
   padding-bottom: 0;
-  font-size: var(--control-font);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1661,7 +1667,6 @@ label {
   padding-top: 0;
   padding-bottom: 0;
   border-radius: var(--control-radius);
-  font-size: var(--control-font);
   white-space: nowrap;
 }
 .primary-button:focus-visible,

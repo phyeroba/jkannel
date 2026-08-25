@@ -27,42 +27,110 @@ engine names.
 
 ## Screenshots
 
-All captured from a development stack with fake binds and no real traffic —
-never from production. Subscriber numbers and message bodies are masked by
-default in the product itself, and the SMSC identifiers shown here are
-synthetic.
+Captured from a development stack: the binds are Kannel's own `fake` SMSCs, the
+traffic is synthetic, and any real carrier hostname is replaced before the
+shutter by `scripts/readme-shots.mjs`. Regenerate them with:
 
-| Sign in | Operations dashboard | Reports & analytics |
-|---|---|---|
-| ![JKANNEL login](docs/screenshots/login.png) | ![Operations dashboard](docs/screenshots/dashboard.png) | ![Reports and analytics](docs/screenshots/analytics.png) |
+```bash
+node scripts/readme-shots.mjs        # copy into e2e/ first to resolve Playwright
+```
 
-**System health** — every component the gateway depends on, which dependency
-explains a failure, and the components nothing watches (counted apart from
-healthy, never folded into it).
+### Operations dashboard
 
-| Services board | Nodes | Runtime |
-|---|---|---|
-| ![Services board](docs/screenshots/services.png) | ![Nodes and resource pressure](docs/screenshots/nodes.png) | ![Live traffic](docs/screenshots/live-traffic.png) |
+![JKANNEL operations dashboard: metric cards for queue depth, messages, DLRs and alerts; a traffic chart; system health with per-dependency state; and an active incident list](docs/screenshots/01-operations.png)
 
-**Connectivity and routing**
+Live situational awareness in one screen. Every figure is read from the running
+engine at request time — and a value the engine did not report reads `unknown`
+rather than `0`. The distinction matters operationally: an unobserved bind is
+not an idle one, and a console that prints a confident zero for something it
+never measured will get somebody paged for the wrong reason.
 
-| Carriers | SMSC connections | Routing |
-|---|---|---|
-| ![Carriers](docs/screenshots/carriers.png) | ![SMSC connections](docs/screenshots/smsc.png) | ![Routing](docs/screenshots/routing.png) |
+### SMSC connections
 
-**Traffic and diagnostics** — the message grid is masked by default; seeing real
-values needs the `messages.reveal` permission *and* a reasoned, time-limited,
-audited window.
+![The SMSC register: a country scope chip, filters, and a table of connections showing bind state, TPS, capacity, queue depth and last error](docs/screenshots/02-smsc-register.png)
 
-| Messages (masked) | Queues | Message trace |
-|---|---|---|
-| ![Messages, masked by default](docs/screenshots/messages.png) | ![Queues](docs/screenshots/queues.png) | ![Message trace](docs/screenshots/message-trace.png) |
+The carrier-facing connections, scoped by market. **State is what the engine
+observed, not what the configuration asked for** — a bind an operator enabled
+and the carrier has not accepted shows as retrying, with the connection error
+the engine reported. Clicking a row opens the connection; Test and Reconnect are
+on the row because they are diagnostic and safe.
 
-| Test tools | API reference |
-|---|---|
-| ![Test tools](docs/screenshots/test-tools.png) | ![API reference](docs/screenshots/api-reference.png) |
+### Connection settings, point and click
 
-> Regenerate with `node e2e/screenshots.mjs` against a running local stack.
+![The Create SMSC dialog with grouped settings: identity, connection, credentials, throughput and resilience, addressing and encoding, and engine routing rules — each field labelled with its kannel.conf directive](docs/screenshots/03-smsc-configuration.png)
+
+**This is the screen that replaces `kannel.conf`.** All 38 settable attributes
+have a control, grouped the way a carrier's onboarding sheet is laid out and
+collapsed until wanted, so a working SMPP bind needs only the first two groups.
+
+Three things make it easier than the file rather than merely equal to it:
+
+- **Only what applies is shown.** A `fake` SMSC has no system-id; an HTTP one
+  has no bind mode. The file lists every directive whether it applies or not,
+  and working out which ones do is most of the work of reading it.
+- **Every field names its directive.** `address-range`, `max-pending-submits`,
+  `enquire-link-interval` — so somebody who knows Kannel finds what they know,
+  and somebody who does not can search the Kannel manual for the exact word.
+- **Blank means absent.** A setting left empty is omitted from the generated
+  file entirely, so the engine's own default applies. Placeholders show what
+  that default is; they are never pre-filled, because a number typed in is a
+  number pinned into the config.
+
+Passwords are never stored. The record holds a `secret://` reference and the
+generated config holds the environment variable it derives to — and the form
+tells you which variable that is and whether it is currently set, which used to
+be knowledge you only got from a failed bind.
+
+### Carrier routing
+
+![The routing screen showing route definitions with priority, destination prefix, target and fallback SMSC, and deployment state](docs/screenshots/04-routing.png)
+
+Routes are drafted, validated, then deployed — and **only a deployed route
+decides where a message goes**. The simulator resolves against the same deployed
+set the send path uses, and names any matching route that is not deployed rather
+than silently predicting a winner that cannot win.
+
+### Live queue
+
+![The live queue screen showing per-bind spool depth, throughput and controls to reroute or resend](docs/screenshots/05-live-queue.png)
+
+The engine spool as it drains. A healthy gateway empties this in under a second,
+so an empty queue is the normal state rather than evidence that nothing was
+sent — the screen says so, because the opposite reading causes real incidents.
+
+### Message log and trace
+
+![The message explorer with recipient numbers masked, showing direction, status, SMSC, and timestamps](docs/screenshots/06-messages.png)
+
+Every submission with its delivery outcome. Recipient numbers and message bodies
+are **masked by default**; revealing them needs the `messages.reveal` permission
+*and* a reasoned, time-limited, audited window. Opening a row shows the full
+trace — segments, encoding, and the engine events behind the status — in a sheet,
+so the log keeps its place behind it.
+
+### Alerts
+
+![The alerts screen listing operational alerts with severity, condition, status, and notification state](docs/screenshots/07-alerts.png)
+
+Operational alerts with their lifecycle: acknowledged, assigned, suppressed or
+resolved — and whether anybody was actually notified, which is a different
+question from whether the alert fired and the one that matters at 3am.
+
+### Engine configuration
+
+![The configuration workspace showing generated configuration versions, templates, and the validate/approve/deploy controls](docs/screenshots/08-configuration.png)
+
+Configuration is generated from the database, validated by a **real bearerbox
+parse in an isolated container**, approved as an immutable version, and only then
+deployed atomically. A failed post-deploy health check rolls back automatically.
+
+### API reference
+
+![The API reference screen listing every endpoint with parameters and a runnable curl example](docs/screenshots/09-api-reference.png)
+
+The console is one client of the API, not a privileged one. Every operation it
+performs is documented here with a runnable example, so anything you can do by
+pointing and clicking you can also script.
 
 ## What it does
 
@@ -76,7 +144,7 @@ The summary:
 | **Messaging** | Send single, bulk or over the REST API; one transactional send pipeline (normalise → blocklist → route → entitlements → record → submit); message explorer with CSV/PDF export; replay, clone and requeue. |
 | **Live Queue** | Per-bind status, queue depth, failures and throughput; start/stop/reconnect a *single* bind without restarting the gateway; reroute the pending spool; bulk-resend failed traffic to a healthy bind. |
 | **Routing** | Static, prefix, country, operator and weighted routes; priority, least-cost, load-balance, round-robin and time-based strategies; health-aware failover; a resolve/preview that explains why a destination took a given bind; per-message decision audit. |
-| **SMSC connections** | Full CRUD with the SMPP attribute set, enable/disable/reconnect against the live engine, bind-state polling and transition history. |
+| **SMSC connections** | Every one of the 38 settable attributes has a control — no config file, no curl — grouped as a carrier onboarding sheet and each field naming the `kannel.conf` directive it becomes. Enable/disable/reconnect against the live engine, bind-state polling and transition history. |
 | **Configuration** | Generates a complete working gateway config from the database, with credentials emitted as secret *references*; immutable versions, diff, approval, atomic deploy, native validation, drift detection and automatic rollback on a failed health check. |
 | **Monitoring & alerts** | Bind poller with anti-flap alerting, scheduled alert-rule evaluation, a full alert lifecycle (acknowledge, resolve, assign, suppress, reopen, close, comments), escalation policies with a deliverability check, maintenance windows, Prometheus metrics and an SMS-focused Grafana dashboard. |
 | **Reporting** | KPI overview, traffic trends, per-SMSC and per-route breakdowns, hourly heatmap, latency/SLA percentiles, saved scheduled reports, CSV/PDF export throughout. |

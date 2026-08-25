@@ -1381,9 +1381,53 @@ const states = computed(() => [
 const serverSideSearch = computed(
   () => Boolean(grid.value) || isCursor.value || key.value === 'messages',
 );
+/**
+ * Country scope for the SMSC register — the chips above it.
+ *
+ * Counted from the rows already loaded rather than fetched as a separate
+ * summary: a second query could disagree with the table underneath it, and a
+ * header that contradicts the list below is worse than no header.
+ */
+const countryFilter = ref('');
+const countryChips = computed(() => {
+  if (key.value !== 'smsc') return [];
+  const tally = new Map<
+    string,
+    { country: string; code: string; label: string; total: number; down: number }
+  >();
+  for (const row of rows.value) {
+    const raw = row.raw;
+    const country = text(raw.carrier_country ?? raw.carrierCountry, '');
+    if (!country || country === '—') continue;
+    const entry = tally.get(country) ?? {
+      country,
+      // The engine has no country code of its own; the carrier's two-letter
+      // country IS the code, so the chip shows it rather than inventing one.
+      code: country.slice(0, 2).toUpperCase(),
+      // Blank when the country IS its own two-letter code, which is how the
+      // carrier register stores it — otherwise the chip read "UG UG".
+      label: country.length > 2 ? country : '',
+      total: 0,
+      down: 0,
+    };
+    entry.total += 1;
+    // "Not connected" is the observed bind state, not the enabled flag: a bind
+    // an operator has enabled and the carrier has not accepted is exactly the
+    // case this count exists to surface.
+    if (smscDotClass(raw) !== 'good') entry.down += 1;
+    tally.set(country, entry);
+  }
+  return [...tally.values()].sort((a, b) => b.down - a.down || a.country.localeCompare(b.country));
+});
+
 const visibleRows = computed(() => {
-  if (serverSideSearch.value) return rows.value;
-  return rows.value
+  const scoped = countryFilter.value
+    ? rows.value.filter(
+        (row) => text(row.raw.carrier_country ?? row.raw.carrierCountry, '') === countryFilter.value,
+      )
+    : rows.value;
+  if (serverSideSearch.value) return scoped;
+  return scoped
     .filter((row) => state.value === 'All' || row.status === state.value)
     .filter((row) =>
       `${row.id} ${row.name} ${row.detail} ${row.status}`
@@ -3580,6 +3624,23 @@ function requestSmscAction(row: Row, operation: ControlOperation) {
   pendingSmsc.value = { row, operation };
 }
 
+/**
+ * The open record as a `Row`, so the sheet can drive the same control path the
+ * register row does.
+ *
+ * The impact dialog is keyed on the SMSC's id and nothing else, so this carries
+ * the id and the record — rather than reaching for the register row, which is
+ * not guaranteed to still be loaded behind a sheet opened from a deep link.
+ */
+const detailRow = computed<Row>(() => ({
+  id: String(detail.value?.id ?? ''),
+  name: text(detail.value?.name, ''),
+  detail: '',
+  status: text(detail.value?.lifecycle_state ?? detail.value?.status, ''),
+  updated: '',
+  raw: (detail.value ?? {}) as RecordValue,
+}));
+
 async function confirmSmscAction(reason: string) {
   const pending = pendingSmsc.value;
   if (!pending) return;
@@ -3968,6 +4029,44 @@ onUnmounted(() => {
 
 <template>
   <section v-if="workspace" :aria-busy="loading" data-testid="module-workspace">
+    <!--
+      COUNTRY SCOPE CHIPS, as `SmscsScreen.jsx` has above its register.
+
+      A gateway's connections group by market before they group by anything
+      else — "is Uganda healthy" is the question an operator asks first, and
+      answering it from a flat list of forty binds means reading forty rows.
+      Each chip carries the count and, when any are down, how many, so the
+      answer is legible before anything is clicked.
+
+      Derived from the rows already on screen: `carrier_country` is on every
+      SMSC row the grid returns, so this counts what is loaded rather than
+      asking the server for a second, possibly disagreeing, summary.
+    -->
+    <section
+      v-if="key === 'smsc' && countryChips.length"
+      class="grid-toolbar country-chips"
+      data-testid="smsc-country-chips"
+      aria-label="Filter by country"
+    >
+      <button
+        v-for="chip in countryChips"
+        :key="chip.country"
+        class="chip"
+        :class="{ 'chip-active': countryFilter === chip.country }"
+        type="button"
+        :aria-pressed="countryFilter === chip.country"
+        :data-testid="`smsc-country-${chip.country}`"
+        @click="countryFilter = countryFilter === chip.country ? '' : chip.country"
+      >
+        <strong>{{ chip.code }}</strong>
+        <template v-if="chip.label">{{ chip.label }}</template>
+        <span :class="{ 'chip-warn': chip.down > 0 }">
+          {{ chip.total }} SMSC{{ chip.total === 1 ? '' : 's'
+          }}<template v-if="chip.down"> · {{ chip.down }} not connected</template>
+        </span>
+      </button>
+    </section>
+
     <section class="toolbar panel" :class="{ 'grid-toolbar': Boolean(grid) }">
       <label v-if="searchIsLive" class="filter-search">
         <span class="sr-only">Search {{ workspace.noun }} records</span>
@@ -5395,6 +5494,29 @@ onUnmounted(() => {
               <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
                 Edit
               </button>
+              <!-- Moved here from the register row. Each one goes through the
+                   impact dialog, which is already on this record. -->
+              <button
+                class="secondary-button"
+                :data-testid="`smsc-detail-toggle`"
+                @click="requestSmscAction(detailRow, smscEnabled(detail) ? 'disable' : 'enable')"
+              >
+                {{ smscEnabled(detail) ? 'Disable' : 'Enable' }}
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="smsc-detail-suspend"
+                @click="requestSmscAction(detailRow, 'suspend')"
+              >
+                Suspend traffic
+              </button>
+              <button
+                class="secondary-button"
+                data-testid="smsc-detail-resume"
+                @click="requestSmscAction(detailRow, 'resume')"
+              >
+                Resume traffic
+              </button>
               <button
                 class="secondary-button danger-button"
                 data-testid="smsc-archive"
@@ -6429,6 +6551,22 @@ onUnmounted(() => {
                 </td>
                 <td>{{ row.updated }}</td>
               </template>
+              <!--
+                TWO ACTIONS INLINE, THE STATE CHANGES ON THE RECORD.
+
+                Five buttons in this cell made the register unreadable: fifteen
+                columns and a 400px action group left every other cell wrapping,
+                and rows measured 221px tall against 70px on a register without
+                them. `SmscsScreen.jsx` has no row actions at all — the row
+                opens the connection and the actions live there.
+
+                Test and Reconnect stay, because they are diagnostic, safe, and
+                the reason somebody scans this list during an incident. Disable,
+                Suspend and Resume moved to the sheet the row opens: they change
+                whether traffic flows, their impact dialog already lives on the
+                record, and a destructive control one careless click away in a
+                dense grid is the wrong place for them.
+              -->
               <td v-if="key === 'smsc'" class="row-actions" @click.stop>
                 <button class="secondary-button" @click="testSmsc(row)">Test</button>
                 <button
@@ -6437,27 +6575,6 @@ onUnmounted(() => {
                   @click="requestSmscAction(row, 'reconnect')"
                 >
                   Reconnect
-                </button>
-                <button
-                  class="secondary-button"
-                  :data-testid="`smsc-toggle-${row.id}`"
-                  @click="requestSmscAction(row, smscEnabled(row.raw) ? 'disable' : 'enable')"
-                >
-                  {{ smscEnabled(row.raw) ? 'Disable' : 'Enable' }}
-                </button>
-                <button
-                  class="secondary-button"
-                  :data-testid="`smsc-suspend-${row.id}`"
-                  @click="requestSmscAction(row, 'suspend')"
-                >
-                  Suspend
-                </button>
-                <button
-                  class="secondary-button"
-                  :data-testid="`smsc-resume-${row.id}`"
-                  @click="requestSmscAction(row, 'resume')"
-                >
-                  Resume
                 </button>
               </td>
               <td v-else-if="key === 'routing'" class="row-actions" @click.stop>

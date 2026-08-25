@@ -598,8 +598,16 @@ th,
 td {
   text-align: left;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
   font-size: 13px;
+}
+/* The rule below carries the border on `td` ONLY, which is where the design
+   system puts it (`components.css`: `td { border-top: … }` and `th` gets a
+   `border-bottom` instead). Applying it to `th` as well drew a hairline above
+   the header band that the kit does not have — measured by
+   `rendered-diff.mjs`, invisible to the stylesheet audit because the design
+   system has no `th` border-top rule to diverge from. */
+td {
+  border-top: 1px solid var(--border);
 }
 th {
   color: var(--muted);

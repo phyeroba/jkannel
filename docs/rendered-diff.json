@@ -30,9 +30,9 @@
       "borderRadius": "10px",
       "borderTopWidth": "0px",
       "borderTopColor": "rgb(111, 107, 125)",
-      "paddingTop": "20px",
-      "paddingLeft": "20px",
-      "__classes": "panel"
+      "paddingTop": "14px",
+      "paddingLeft": "14px",
+      "__classes": "toolbar panel grid-toolbar"
     }
   },
   {
@@ -92,9 +92,9 @@
       "__classes": "primary-button"
     },
     "got": {
-      "fontSize": "13.5px",
+      "fontSize": "15px",
       "fontWeight": "700",
-      "lineHeight": "21.6px",
+      "lineHeight": "24px",
       "letterSpacing": "normal",
       "textTransform": "none",
       "color": "rgb(255, 255, 255)",
@@ -114,9 +114,9 @@
     "route": "/smsc",
     "want": null,
     "got": {
-      "fontSize": "13.5px",
+      "fontSize": "15px",
       "fontWeight": "700",
-      "lineHeight": "21.6px",
+      "lineHeight": "24px",
       "letterSpacing": "normal",
       "textTransform": "none",
       "color": "rgb(111, 107, 125)",
@@ -146,7 +146,7 @@
       "borderTopWidth": "0px",
       "borderTopColor": "rgb(165, 162, 173)",
       "paddingTop": "14px",
-      "paddingLeft": "20px",
+      "paddingLeft": "16px",
       "__classes": "(none)"
     },
     "got": {
@@ -158,10 +158,10 @@
       "color": "rgb(165, 162, 173)",
       "backgroundColor": "rgb(251, 251, 252)",
       "borderRadius": "0px",
-      "borderTopWidth": "1px",
-      "borderTopColor": "rgb(235, 233, 241)",
+      "borderTopWidth": "0px",
+      "borderTopColor": "rgb(165, 162, 173)",
       "paddingTop": "14px",
-      "paddingLeft": "20px",
+      "paddingLeft": "16px",
       "__classes": "(none)"
     }
   },
@@ -192,12 +192,12 @@
       "letterSpacing": "normal",
       "textTransform": "none",
       "color": "rgb(111, 107, 125)",
-      "backgroundColor": "rgb(251, 251, 252)",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
       "borderRadius": "0px",
       "borderTopWidth": "0px",
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
-      "paddingLeft": "20px",
+      "paddingLeft": "16px",
       "__classes": "(none)"
     }
   },
@@ -244,18 +244,18 @@
     "route": "/smsc",
     "want": {
       "fontSize": "13.5px",
-      "fontWeight": "500",
+      "fontWeight": "600",
       "lineHeight": "18.225px",
       "letterSpacing": "normal",
       "textTransform": "none",
-      "color": "rgb(207, 211, 236)",
-      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "backgroundColor": "rgb(26, 134, 200)",
       "borderRadius": "8px",
       "borderTopWidth": "0px",
-      "borderTopColor": "rgb(207, 211, 236)",
+      "borderTopColor": "rgb(255, 255, 255)",
       "paddingTop": "9px",
       "paddingLeft": "12px",
-      "__classes": "(none)"
+      "__classes": "active"
     },
     "got": {
       "fontSize": "13.5px",
@@ -294,9 +294,9 @@
       "__classes": "(none)"
     },
     "got": {
-      "fontSize": "13.5px",
+      "fontSize": "13px",
       "fontWeight": "400",
-      "lineHeight": "21.6px",
+      "lineHeight": "20.8px",
       "letterSpacing": "normal",
       "textTransform": "none",
       "color": "rgb(68, 64, 80)",
@@ -329,7 +329,21 @@
       "paddingLeft": "13px",
       "__classes": "chip"
     },
-    "got": null
+    "got": {
+      "fontSize": "13.5px",
+      "fontWeight": "400",
+      "lineHeight": "21.6px",
+      "letterSpacing": "normal",
+      "textTransform": "none",
+      "color": "rgb(111, 107, 125)",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "borderRadius": "999px",
+      "borderTopWidth": "1px",
+      "borderTopColor": "rgb(235, 233, 241)",
+      "paddingTop": "9px",
+      "paddingLeft": "13px",
+      "__classes": "chip"
+    }
   },
   {
     "name": "metric card",

@@ -206,6 +206,12 @@ describe('module workspace per-module enhancements', () => {
           reasonRequired: false,
           blockedReason: null,
         });
+      // The record behind a row, for the sheet the enable/disable control now
+      // lives on.
+      if (/\/smscs\/s2$/.test(url))
+        return apiResponse({ id: 's2', name: 'Paused', enabled: false, lifecycle_state: 'active' });
+      if (/\/smscs\/s1$/.test(url))
+        return apiResponse({ id: 's1', name: 'Live', enabled: true, lifecycle_state: 'active' });
       return apiResponse(
         gridPage([
           { id: 's1', name: 'Live', enabled: true, lifecycle_state: 'active' },
@@ -218,10 +224,21 @@ describe('module workspace per-module enhancements', () => {
     const wrapper = await mountWorkspace('/smsc', 'SMSC Manager');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
-    expect(inDrawer('[data-testid="smsc-toggle-s1"]').text()).toBe('Disable');
-    expect(inDrawer('[data-testid="smsc-toggle-s2"]').text()).toBe('Enable');
+    // Enable/Disable moved from the register row to the record sheet: five
+    // buttons in the row made every cell wrap and rows stood 221px tall. The
+    // assertion is unchanged — the VERB must come from `enabled`, never from
+    // `lifecycle_state`, and both rows here are lifecycle 'active'.
+    await inDrawer('[data-testid="record-s1"]').trigger('click');
+    await vi.waitFor(() => expect(drawerHas('[data-testid="smsc-detail-toggle"]')).toBe(true));
+    expect(inDrawer('[data-testid="smsc-detail-toggle"]').text()).toBe('Disable');
+    await inDrawer('[data-testid="detail-drawer-close"]').trigger('click');
 
-    await inDrawer('[data-testid="smsc-toggle-s2"]').trigger('click');
+    await inDrawer('[data-testid="record-s2"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(inDrawer('[data-testid="smsc-detail-toggle"]').text()).toBe('Enable'),
+    );
+
+    await inDrawer('[data-testid="smsc-detail-toggle"]').trigger('click');
     await vi.waitFor(() => expect(drawerHas('[data-testid="smsc-confirm-summary"]')).toBe(true));
     expect(inDrawer('[data-testid="smsc-confirm-consequences"]').text()).toContain(
       'added back to the generated engine configuration',

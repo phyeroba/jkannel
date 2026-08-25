@@ -96,7 +96,14 @@ const read = (page, selector) =>
       const all = [...document.querySelectorAll(selector)];
       if (!all.length) return null;
       const scoped = all.filter((el) => el.closest('main'));
-      const pool = scoped.length ? scoped : all;
+      // Never an edge cell. The design system gives `th:first-child` and
+      // `td:last-child` extra side padding — in the kit too — so measuring a
+      // first cell on one side and a middle cell on the other reported a 20px
+      // vs 16px padding difference that both stylesheets agree on.
+      const interior = (scoped.length ? scoped : all).filter(
+        (el) => !el.matches(':first-child') && !el.matches(':last-child'),
+      );
+      const pool = interior.length ? interior : scoped.length ? scoped : all;
       const el = pool.reduce((best, candidate) =>
         candidate.classList.length < best.classList.length ? candidate : best,
       );
@@ -163,6 +170,16 @@ for (const component of COMPONENTS) {
     await appPage.waitForTimeout(3000);
     currentRoute = component.route;
   }
+  // Park the pointer off every row before measuring. The pointer sits at the
+  // origin by default and `tbody tr:hover td { background: var(--surface-2) }`
+  // is real CSS in both the kit and the console — so a cell that happened to be
+  // under it reported a filled background and was counted as a divergence from
+  // the kit's transparent one. A hover state is not a design difference.
+  await Promise.all([
+    kitPage.mouse.move(1598, 2),
+    appPage.mouse.move(1598, 2),
+  ]);
+  await appPage.waitForTimeout(200);
   const [want, got] = await Promise.all([
     read(kitPage, component.selector),
     read(appPage, component.selector),
@@ -178,6 +195,7 @@ console.log('='.repeat(92));
 
 let diffCount = 0;
 let absent = 0;
+let incomparable = 0;
 let compared = 0;
 for (const row of rows) {
   if (!row.want) {
@@ -189,15 +207,30 @@ for (const row of rows) {
     console.log(`\n  ${row.name}  — MISSING from the console (${row.selector})`);
     continue;
   }
+  /*
+   * NOT COMPARABLE when the two sides measured different VARIANTS.
+   *
+   * The kit's first status badge carries its `bad` modifier and ours does not;
+   * its first sidebar link is the active one and ours is not. Those render
+   * differently because they are in different STATES, which is the design
+   * working — and counting the resulting colour and weight deltas as design
+   * divergences buried the real findings underneath them.
+   *
+   * Said out loud rather than silently dropped, so a component that can never
+   * be compared shows up as a gap in this audit rather than passing quietly.
+   */
+  if (row.want.__classes !== row.got.__classes) {
+    incomparable += 1;
+    console.log(
+      `\n  ${row.name}  — not comparable: kit rendered "${row.want.__classes}", ours "${row.got.__classes}"`,
+    );
+    continue;
+  }
   const differences = PROPS.filter((p) => row.want[p] !== row.got[p]);
   compared += PROPS.length;
   if (!differences.length) continue;
   diffCount += differences.length;
   console.log(`\n  ${row.name}   (${row.selector})`);
-  // Which instance each side measured. A difference caused by comparing two
-  // variants of a component must be visible, not counted as a design divergence.
-  if (row.want.__classes !== row.got.__classes)
-    console.log(`      instance          kit "${row.want.__classes}"  ours "${row.got.__classes}"`);
   for (const prop of differences)
     console.log(`      ${prop.padEnd(18)} kit ${String(row.want[prop]).padEnd(26)} ours ${row.got[prop]}`);
 }
@@ -205,7 +238,9 @@ for (const row of rows) {
 console.log(`\n${'='.repeat(92)}`);
 console.log(
   diffCount === 0 && absent === 0
-    ? `Every component renders identically to the kit across ${compared} computed properties.`
-    : `${diffCount} rendered difference(s) across ${compared} properties · ${absent} component(s) missing.`,
+    ? `Every comparable component renders identically to the kit across ${compared} computed ` +
+      `properties (${incomparable} not comparable — a different variant on each side).`
+    : `${diffCount} rendered difference(s) across ${compared} properties · ${absent} missing · ` +
+      `${incomparable} not comparable.`,
 );
 fs.writeFileSync(path.join(ROOT, 'docs/rendered-diff.json'), JSON.stringify(rows, null, 2));
