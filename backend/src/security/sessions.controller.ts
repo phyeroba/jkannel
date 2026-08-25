@@ -116,6 +116,13 @@ export class SessionsController {
     response.send(pdf);
   }
 
+  // After the literal `export.*` routes above, so `:id` cannot swallow them.
+  @Get(':id')
+  @RequirePermissions('users.sessions')
+  get(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.sessions.getSession(this.actor(request), id);
+  }
+
   @Post(':id/revoke')
   @RequirePermissions('users.sessions')
   revoke(@Req() request: AuthenticatedRequest, @Param('id') id: string) {

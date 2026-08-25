@@ -1423,7 +1423,8 @@ const countryChips = computed(() => {
 const visibleRows = computed(() => {
   const scoped = countryFilter.value
     ? rows.value.filter(
-        (row) => text(row.raw.carrier_country ?? row.raw.carrierCountry, '') === countryFilter.value,
+        (row) =>
+          text(row.raw.carrier_country ?? row.raw.carrierCountry, '') === countryFilter.value,
       )
     : rows.value;
   if (serverSideSearch.value) return scoped;
@@ -1623,7 +1624,13 @@ const detailModule = computed(
     key.value === 'customers' ||
     key.value === 'plugins' ||
     key.value === 'notifications' ||
-    key.value === 'routing',
+    key.value === 'routing' ||
+    // Added once the API grew a per-record read for each. Every one of these
+    // was listed in `interaction-audit.mjs` as a register whose rows opened
+    // nothing, with the reason "there is no GET" — which was true, and is the
+    // difference between a deliberate omission and an unfinished one.
+    key.value === 'api-gateway' ||
+    key.value === 'backup',
 );
 const settingGroups = computed(() => {
   const groups: Record<string, RecordValue[]> = {};
@@ -2222,7 +2229,11 @@ async function openDetail(row: Row) {
                 ? `/notifications/${row.id}`
                 : key.value === 'routing'
                   ? `/routes/${row.id}`
-                  : `/audit-events/${row.id}`;
+                  : key.value === 'api-gateway'
+                    ? `/api-gateway/clients/${row.id}`
+                    : key.value === 'backup'
+                      ? `/backup-dr/${row.id}`
+                      : `/audit-events/${row.id}`;
     const record = await apiRequest<RecordValue>(endpoint);
     detail.value = record;
     // Reading a notification WRITES: `GET /notifications/:id` sets read_at.
@@ -2338,6 +2349,16 @@ const DETAIL_HEADINGS: Record<string, { eyebrow: string; title: string; subtitle
     eyebrow: 'Route',
     title: 'Route detail',
     subtitle: 'Match, targets and the deployed version',
+  },
+  'api-gateway': {
+    eyebrow: 'API client',
+    title: 'API client',
+    subtitle: 'Scopes, allowed routes and rate limit',
+  },
+  backup: {
+    eyebrow: 'Backup',
+    title: 'Backup',
+    subtitle: 'Scope, size, checksum and where the artifact lives',
   },
 };
 const detailHeading = computed(
@@ -5741,6 +5762,78 @@ onUnmounted(() => {
               Straight from <span class="mono">GET /plugins/{{ text(detail.id, '') }}</span
               >. There is no uninstall endpoint in this build, so a plugin can be disabled here but
               not removed.
+            </p>
+          </template>
+
+          <template v-else-if="key === 'api-gateway'">
+            <dl class="detail-grid">
+              <dt>Name</dt>
+              <dd data-testid="client-detail-name">{{ text(detail.name) }}</dd>
+              <dt>Client key</dt>
+              <dd class="mono">{{ text(detail.client_key ?? detail.clientKey) }}</dd>
+              <dt>Status</dt>
+              <dd>{{ text(detail.status) }}</dd>
+              <dt>Rate limit</dt>
+              <dd class="mono">
+                {{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin) }} / min
+              </dd>
+              <dt>Last used</dt>
+              <dd>{{ text(detail.last_used_at ?? detail.lastUsedAt, 'never') }}</dd>
+              <dt>Created</dt>
+              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
+            </dl>
+            <!-- The reason to open a client at all: what it is permitted to do,
+                 which is the question somebody asks before revoking it. -->
+            <h3>Scopes</h3>
+            <span class="chip-list" data-testid="client-detail-scopes">
+              <span v-for="scope in stringArray('scopes')" :key="scope" class="chip mono">{{
+                scope
+              }}</span>
+              <span v-if="!stringArray('scopes').length" class="chip muted">none granted</span>
+            </span>
+            <h3>Allowed routes</h3>
+            <span class="chip-list" data-testid="client-detail-routes">
+              <span v-for="route in stringArray('allowed_routes')" :key="route" class="chip mono">{{
+                route
+              }}</span>
+              <span v-if="!stringArray('allowed_routes').length" class="chip muted">
+                unrestricted — every route this client's scopes permit
+              </span>
+            </span>
+            <p class="source-note">
+              The secret is not shown and cannot be: it is displayed once at creation and only its
+              hash is stored. Rotate it if it has been lost.
+            </p>
+          </template>
+
+          <template v-else-if="key === 'backup'">
+            <dl class="detail-grid">
+              <dt>Label</dt>
+              <dd data-testid="backup-detail-label">{{ text(detail.label) }}</dd>
+              <dt>Kind</dt>
+              <dd>{{ text(detail.kind) }}</dd>
+              <dt>Status</dt>
+              <dd data-testid="backup-detail-status">{{ text(detail.status) }}</dd>
+              <dt>Size</dt>
+              <dd class="mono">{{ text(detail.size_bytes ?? detail.sizeBytes) }}</dd>
+              <dt>Checksum</dt>
+              <dd class="mono">{{ text(detail.checksum) }}</dd>
+              <dt>Encrypted</dt>
+              <dd>{{ text(detail.encrypted) }}</dd>
+              <dt>Location</dt>
+              <dd class="mono" data-testid="backup-detail-location">
+                {{ text(detail.location) }}
+              </dd>
+              <dt>Started</dt>
+              <dd>{{ text(detail.started_at ?? detail.startedAt) }}</dd>
+              <dt>Completed</dt>
+              <dd>{{ text(detail.completed_at ?? detail.completedAt) }}</dd>
+            </dl>
+            <p class="source-note">
+              Restore is the most consequential control in this console, and the decision behind it
+              is here: how old the artifact is, whether it completed, whether anything has verified
+              it since, and whether it is somewhere that survives losing this host. A location that
+              reads <span class="mono">file://</span> is on the host itself.
             </p>
           </template>
 

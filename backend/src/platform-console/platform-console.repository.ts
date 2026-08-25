@@ -119,6 +119,33 @@ export class PlatformConsoleRepository {
     );
   }
 
+  /**
+   * One API client.
+   *
+   * `/api-gateway/clients/{id}` had PATCH and DELETE and no GET, so the console
+   * could change a client and remove it but never open one — the register row
+   * was the only view of the record, and the scopes and allowed routes it holds
+   * are exactly what somebody needs to read before revoking anything.
+   *
+   * `secret_hash` is deliberately not selected. The secret is shown once at
+   * creation and never again; a read that returned even its hash would turn
+   * "shown once" from a property into a claim.
+   */
+  async getApiClient(actor: Actor, id: string) {
+    return this.inTenant(actor, async (client) => {
+      const row = (
+        await client.query(
+          `SELECT id,name,description,client_key,scopes,allowed_routes,rate_limit_per_min,
+                  status,last_used_at,created_by,created_at,updated_at,version
+             FROM api_gateway_clients WHERE id=$1 AND deleted_at IS NULL`,
+          [id],
+        )
+      ).rows[0];
+      if (!row) throw new NotFoundException('API client not found');
+      return row;
+    });
+  }
+
   async createApiClient(actor: Actor, value: any) {
     const clientKey = `jk_${randomBytes(12).toString('hex')}`;
     const secret = `sk_${randomBytes(24).toString('hex')}`;

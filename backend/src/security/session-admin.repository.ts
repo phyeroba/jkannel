@@ -89,6 +89,35 @@ export class SessionAdminRepository {
     });
   }
 
+  /**
+   * One session.
+   *
+   * `/sessions/{id}` had revoke and no GET, so an operator deciding whether to
+   * cut somebody off could see only the register row. The question that
+   * actually gets asked — is this the same person on a second device, or is it
+   * a session from an address nobody recognises — is answered by the address,
+   * the agent and the last-seen time together, and only a record view puts them
+   * in front of somebody before they act.
+   *
+   * No token material is selected, and none exists to select: `auth_sessions`
+   * stores a hash, and this does not read it.
+   */
+  async getSession(actor: SessionActor, id: string): Promise<SessionRow> {
+    return this.database.tenantTransaction(actor.tenantId, async (client) => {
+      const row = (
+        await client.query<SessionRow>(
+          `SELECT s.id,s.user_id,u.username,s.created_at,s.last_seen_at,s.expires_at,
+                  s.revoked_at,s.ip_address,s.user_agent
+             FROM auth_sessions s JOIN users u ON u.id=s.user_id
+            WHERE s.id=$1`,
+          [id],
+        )
+      ).rows[0];
+      if (!row) throw new NotFoundException('Session not found');
+      return row;
+    });
+  }
+
   async revokeSession(actor: SessionActor, id: string): Promise<{ id: string; revoked_at: Date }> {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const existing = (

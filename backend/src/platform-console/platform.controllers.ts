@@ -144,6 +144,15 @@ export class ApiGatewayController {
       requester(r),
     );
   }
+  // Declared AFTER the literal `clients/export.*` paths above, so those match
+  // first — `:id` would otherwise swallow "export.csv" and answer it with a
+  // 404 for a client whose id is a filename.
+  @Get('clients/:id') @RequirePermissions('system.view') get(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    return this.repository.getApiClient(actor(r), uuid(id, 'id'));
+  }
   @Post('clients') @RequirePermissions('system.manage') create(@Req() r: Request, @Body() b: any) {
     return this.repository.createApiClient(actor(r), { ...b, name: text(b.name, 'name') });
   }
@@ -232,6 +241,28 @@ export class PluginsController {
   }
 }
 
+/**
+ * DEPRECATED — superseded by `/backup-dr`.
+ *
+ * Both controllers read and write `backup_records`, so they do not disagree
+ * about the data; they are two doors into one room, and the console goes
+ * through the other one. Two implementations of the same resource is the
+ * problem regardless: a fix applied to one is absent from the other, and which
+ * door a caller used decides whether they got it.
+ *
+ * NOT DELETED, because that is a breaking change for a client this repository
+ * cannot see. `/backups` is a published surface with published semantics; an
+ * external integration may be calling it right now, and removing it would fail
+ * their backups silently at whatever hour their cron runs.
+ *
+ * So it is marked instead: every response carries `Deprecation` and `Sunset`
+ * (RFC 8594) and a `Link` to the replacement, which is how a machine client
+ * finds out before its integration breaks rather than after. Delete it once the
+ * gateway request log shows nothing but the console calling it — which is a
+ * measurable condition, not a date somebody guesses.
+ */
+const BACKUPS_SUNSET = 'Wed, 31 Dec 2026 23:59:59 GMT';
+
 @Controller('backups')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class BackupsController {
@@ -240,14 +271,42 @@ export class BackupsController {
     private readonly exporter?: ExportService,
   ) {}
 
-  @Get() @RequirePermissions('system.view') list(@Req() r: Request, @Query() q: any = {}) {
-    return this.repository.listBackups(actor(r), q);
+  /**
+   * Marks a response deprecated.
+   *
+   * Applied to the read path here rather than to every handler: a caller
+   * listing backups is a caller who will notice, and the write paths delegate
+   * to the same repository the replacement uses.
+   */
+  private deprecate(res: any) {
+    if (!res?.setHeader) return;
+    res.setHeader('Deprecation', 'true');
+    res.setHeader('Sunset', BACKUPS_SUNSET);
+    res.setHeader('Link', '</api/v1/backup-dr>; rel="successor-version"');
+  }
+
+  @Get() @RequirePermissions('system.view') async list(
+    @Req() r: Request,
+    @Query() q: any = {},
+    @Res({ passthrough: true }) res?: any,
+  ) {
+    this.deprecate(res);
+    const page = await this.repository.listBackups(actor(r), q);
+    return {
+      ...page,
+      deprecation: {
+        successor: '/api/v1/backup-dr',
+        sunset: BACKUPS_SUNSET,
+        note: 'This path is superseded by /backup-dr, which the console uses. Both read the same records.',
+      },
+    };
   }
   @Get('export.csv') @RequirePermissions('system.view') exportCsv(
     @Req() r: Request,
     @Query() q: any = {},
     @Res() res?: any,
   ) {
+    this.deprecate(res);
     return this.export(r, 'csv', q, res);
   }
   @Get('export.pdf') @RequirePermissions('system.view') exportPdf(

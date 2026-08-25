@@ -114,6 +114,28 @@ export class BackupDrController {
     });
   }
 
+  /**
+   * One backup.
+   *
+   * The repository has had `getBackup` all along; nothing exposed it, so the
+   * register offered Verify and Restore against a row an operator could never
+   * open. Restore is the most consequential button in this console and the
+   * decision behind it — which scope, how old, whether the artifact was ever
+   * verified, and where it actually lives — was only ever visible as a table
+   * row.
+   *
+   * Declared before `:id/verify` and `:id/restore` in the file but after the
+   * literal `export.*` and `schedules` paths, so no static segment is captured.
+   */
+  @Get(':id') @RequirePermissions('system.view') async get(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    const record = await this.repository.getBackup(actor(r), id);
+    if (!record) throw new NotFoundException('Backup not found');
+    return record;
+  }
+
   @Post(':id/verify') @RequirePermissions('system.manage') verify(
     @Req() r: Request,
     @Param('id') id: string,

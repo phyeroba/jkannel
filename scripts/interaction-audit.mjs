@@ -98,12 +98,22 @@ const ADD = /^(add|new|create|invite|register|bind route|set quota|\+)\b/i;
  * should happen the day one of these gains a GET.
  */
 const NO_RECORD_TO_OPEN = {
-  '/api-gateway': '/api-gateway/clients/{id} is PATCH and DELETE only — there is no GET',
-  '/backup': '/backups/{id} offers restore and verify, no GET',
-  '/sessions': '/sessions/{id} offers revoke, no GET',
   '/data-integrity':
     'the row IS the editor — every value is an input in its own cell, so a sheet adds nothing',
+  '/sessions':
+    'the row already shows every field the record has — username, address, client, created, ' +
+    'last seen, expires, revoked. A sheet would repeat the row and call it detail.',
 };
+// /api-gateway and /backup were here, each with "there is no GET" as the reason.
+// That was true and it was the wrong conclusion: the honest answer to a missing
+// read is to add it, not to file the absence as a design decision. Both have a
+// per-record GET now and open their record.
+//
+// /sessions was here for the same reason and stays for a DIFFERENT one. The GET
+// was added — an API client had no way to read one session — but the register
+// already prints every field that record holds, so opening it would add a
+// scrim and no information. Worth separating: "we cannot" and "there is nothing
+// to show" look identical in a report and are fixed by opposite actions.
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
