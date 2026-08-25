@@ -192,8 +192,24 @@ has been made must stop reading as a defect nobody has looked at.
   with `docker start` is fine — that keeps the same container.
 - **Never touch `cpaas-*` containers, the 3 PM2 processes (`auth-service`,
   `messaging-service`, `console-web`), or `/etc/nginx/sites-available/speedamobile`.**
-- **Never commit `smpp.carrier.example` carrier details** (`smpp.carrier.example:4089`, `carrier-user`, egress
-  `203.0.113.10`). `.env` only — gitignored.
+- **Never commit the carrier's bind details** — hostname, port, bind username or
+  egress IP. They live in the gitignored `.env` and nowhere else. The values are
+  deliberately NOT repeated here: a rule that quotes what it forbids publishes
+  it, which is what this line used to do.
+  - `node scripts/secret-scan.mjs` checks every TRACKED file, binaries included,
+    against `SECRET_SCAN_TERMS` (or `SHOT_REDACTIONS`) in `.env`. Run it before
+    any push.
+  - Two near-misses in one session, neither careless. A README screenshot
+    photographed the SMSC register of a stack that has the real carrier
+    configured. And `runtime/kamex/kamex.conf` — the file the deployment service
+    writes the GENERATED config to — was ALSO tracked in git with a safe seed,
+    so the first local deploy replaced tracked content with carrier details and
+    the next `git add -A` committed them. That one is a booby trap: the file is
+    supposed to change, so nothing about the diff looks wrong. It is gitignored
+    now and seeded from `infrastructure/kannel/kamex.local-seed.conf`.
+  - **Still outstanding:** the values remain in this file's own git HISTORY from
+    before it said this. Removing them means rewriting published history — a
+    decision for Peter, not a script.
 - **`docker-compose.override.yml`** is gitignored and exists only on the server.
 - Documentation lives in `docs/`, never the repo root.
 

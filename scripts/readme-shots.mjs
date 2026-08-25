@@ -123,13 +123,19 @@ const SHOTS = [
  * black box can be moved, a replaced string cannot, and the resulting image is
  * still a truthful picture of the screen's STRUCTURE, which is what a README
  * screenshot is for.
+ *
+ * THE LIST ITSELF IS NOT IN THIS FILE. It was, briefly, and that was the same
+ * mistake one level up: a redaction list naming the carrier's hostname publishes
+ * the carrier's hostname to whoever reads the script. It comes from
+ * `SHOT_REDACTIONS` in the gitignored `.env` instead, as
+ * `from=to,from=to`. Empty means no redaction, which is correct for a stack
+ * with no real carrier and wrong for one that has — so the run below REFUSES
+ * when the list is empty and any of the values are visible on screen.
  */
-const REDACTIONS = [
-  ['smpp.carrier.example', 'smpp.carrier.example'],
-  ['carrier-user', 'carrier-user'],
-  ['203.0.113.10', '203.0.113.10'],
-  ['203.0.113.10', '203.0.113.10'],
-];
+const REDACTIONS = (process.env.SHOT_REDACTIONS ?? '')
+  .split(',')
+  .map((pair) => pair.split('=').map((part) => part.trim()))
+  .filter(([from, to]) => from && to);
 
 async function redact(page) {
   const remaining = await page.evaluate((pairs) => {
@@ -231,10 +237,7 @@ await browser.close();
  * Filenames and captions are checked here; the images themselves are checked by
  * the caller against the same list, because this cannot read pixels.
  */
-const FORBIDDEN = (process.env.SHOT_FORBIDDEN ?? 'smpp.carrier.example,carrier-user,203.0.113.10')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const FORBIDDEN = REDACTIONS.map(([from]) => from);
 const textual = JSON.stringify(captured);
 const leaked = FORBIDDEN.filter((term) => textual.includes(term));
 if (leaked.length) {
