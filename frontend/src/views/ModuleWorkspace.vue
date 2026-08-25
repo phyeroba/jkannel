@@ -64,6 +64,7 @@ const DIRECTIVE_OWNERS: Array<{
 ];
 import DetailDrawer from '../components/DetailDrawer.vue';
 import ModalDialog from '../components/ModalDialog.vue';
+import SmscConfigForm, { type SmscDraft } from '../components/SmscConfigForm.vue';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
 import { describeComposerText } from '../utils/message-segments';
 import { controlEndpoint, operationVerb, type ControlOperation } from '../utils/safe-control';
@@ -1078,10 +1079,18 @@ const configSqlbox = ref(true);
 const configDiffFrom = ref('');
 const configDiffTo = ref('');
 const configDiffResult = ref<RecordValue | null>(null);
-const smscType = ref<'fake' | 'smpp' | 'http' | 'at'>('fake');
-const smscHost = ref('');
-const smscPort = ref(2775);
-const smscTps = ref(10);
+/**
+ * The whole SMSC draft, as one record rather than a ref per field.
+ *
+ * There are thirty-eight settable fields. A ref each is how the form came to
+ * expose four of them: adding one meant adding a ref, a reset, a payload line
+ * and a control, so nobody did. `SmscConfigForm` reads and writes this object,
+ * and a field it sets is a field that saves.
+ */
+// SMPP by default: a carrier bind is what this console is for, and `fake`
+// — a local test sink that reaches no network — is a strange thing to
+// offer somebody first.
+const smscDraft = ref<SmscDraft>({ type: 'smpp', port: 2775, tps: 10, enabled: true });
 
 /* Server-side grid state (search is shared with the legacy client filter). */
 /* Message search (G13): every filter below — query, status, direction, SMSC and
@@ -1164,11 +1173,7 @@ const editUserRoleIds = ref<string[]>([]);
 const editUserPassword = ref('');
 
 /* SMSC edit. */
-const editSmscName = ref('');
-const editSmscHost = ref('');
-const editSmscPort = ref(2775);
-const editSmscTps = ref(10);
-const editSmscEnabled = ref(true);
+const editSmscDraft = ref<SmscDraft>({});
 
 /* Cursor-paginated modules (queues, delivery reports). */
 const cursorItems = ref<RecordValue[]>([]);
@@ -2205,11 +2210,46 @@ async function openDetail(row: Row) {
       if (!roleOptions.value.length) void loadRoles();
     }
     if (key.value === 'smsc') {
-      editSmscName.value = text(record.name, '') === '—' ? '' : String(record.name ?? '');
-      editSmscHost.value = text(record.host, '') === '—' ? '' : String(record.host ?? '');
-      editSmscPort.value = Number(record.port ?? 2775);
-      editSmscTps.value = Number(record.tps ?? 10);
-      editSmscEnabled.value = record.enabled === true || record.enabled === 'true';
+      // The record as the API returned it, camelCased where the row is snake.
+      // Loading the whole thing is what lets the form round-trip a field it
+      // does not itself name — an unedited attribute must survive a save.
+      editSmscDraft.value = {
+        ...record,
+        engineId: record.engine_id ?? record.engineId,
+        name: text(record.name, '') === '—' ? '' : (record.name ?? ''),
+        enabled: record.enabled === true || record.enabled === 'true',
+        systemId: record.system_id ?? record.systemId,
+        usernameSecretRef: record.username_secret_ref ?? record.usernameSecretRef,
+        credentialSecretRef: record.credential_secret_ref ?? record.credentialSecretRef,
+        systemType: record.system_type ?? record.systemType,
+        bindMode: record.bind_mode ?? record.bindMode,
+        receivePort: record.receive_port ?? record.receivePort,
+        interfaceVersion: record.interface_version ?? record.interfaceVersion,
+        addressRange: record.address_range ?? record.addressRange,
+        sourceAddrTon: record.source_addr_ton ?? record.sourceAddrTon,
+        sourceAddrNpi: record.source_addr_npi ?? record.sourceAddrNpi,
+        destAddrTon: record.dest_addr_ton ?? record.destAddrTon,
+        destAddrNpi: record.dest_addr_npi ?? record.destAddrNpi,
+        windowSize: record.window_size ?? record.windowSize,
+        keepaliveSeconds: record.keepalive_seconds ?? record.keepaliveSeconds,
+        reconnectDelaySeconds: record.reconnect_delay_seconds ?? record.reconnectDelaySeconds,
+        waitAckSeconds: record.wait_ack_seconds ?? record.waitAckSeconds,
+        maxErrorCount: record.max_error_count ?? record.maxErrorCount,
+        useTls: record.use_tls ?? record.useTls,
+        altCharset: record.alt_charset ?? record.altCharset,
+        sendUrl: record.send_url ?? record.sendUrl,
+        connectionCount: record.connection_count ?? record.connectionCount,
+        connectionTimeoutSeconds:
+          record.connection_timeout_seconds ?? record.connectionTimeoutSeconds,
+        waitAckExpireAction: record.wait_ack_expire_action ?? record.waitAckExpireAction,
+        retryOnAuthFailure: record.retry_on_auth_failure ?? record.retryOnAuthFailure,
+        allowedSmscIds: record.allowed_smsc_ids ?? record.allowedSmscIds,
+        deniedSmscIds: record.denied_smsc_ids ?? record.deniedSmscIds,
+        preferredSmscIds: record.preferred_smsc_ids ?? record.preferredSmscIds,
+        allowedPrefixes: record.allowed_prefixes ?? record.allowedPrefixes,
+        deniedPrefixes: record.denied_prefixes ?? record.deniedPrefixes,
+        preferredPrefixes: record.preferred_prefixes ?? record.preferredPrefixes,
+      };
     }
   } catch (reason) {
     detailError.value =
@@ -2711,13 +2751,19 @@ async function saveSmsc() {
   try {
     await apiRequest(`/smscs/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({
-        name: editSmscName.value.trim(),
-        host: editSmscHost.value.trim(),
-        port: editSmscPort.value,
-        tps: editSmscTps.value,
-        enabled: editSmscEnabled.value,
-      }),
+      // PATCH is partial, so only what the form holds is sent. `engineId` is
+      // excluded deliberately: routes and reports reference it, and the update
+      // handler does not accept a change to it.
+      body: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(editSmscDraft.value).filter(
+            ([key, v]) =>
+              !['id', 'engineId', 'engine_id', 'created_at', 'updated_at'].includes(key) &&
+              !key.includes('_') &&
+              v !== undefined,
+          ),
+        ),
+      ),
     });
     notice.value = 'SMSC updated.';
     await openDetail({ id } as Row);
@@ -3420,12 +3466,21 @@ async function createRecord() {
     let payload: RecordValue = { name };
 
     if (value.createKind === 'smsc') {
+      // Everything the operator set, and nothing they did not. An empty string
+      // or null means "leave the directive out", which is not the same as
+      // sending a default the engine would then render.
+      const draft = Object.fromEntries(
+        Object.entries(smscDraft.value).filter(
+          ([, v]) => v !== '' && v !== null && v !== undefined,
+        ),
+      );
       payload = {
+        ...draft,
         name,
-        engineId: name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'),
-        type: smscType.value,
-        tps: smscTps.value,
-        ...(smscType.value === 'fake' ? {} : { host: smscHost.value, port: smscPort.value }),
+        engineId:
+          String(smscDraft.value.engineId ?? '').trim() ||
+          name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'),
+        tps: Number(smscDraft.value.tps ?? 10),
       };
     }
 
@@ -5348,28 +5403,9 @@ onUnmounted(() => {
                 Delete / Archive
               </button>
             </div>
-            <div v-if="canManageSystem && editing" class="composer" data-testid="smsc-edit-form">
-              <label>
-                Name
-                <input v-model="editSmscName" data-testid="smsc-edit-name" />
-              </label>
-              <label>
-                Host
-                <input v-model="editSmscHost" data-testid="smsc-edit-host" />
-              </label>
-              <label>
-                Port
-                <input v-model.number="editSmscPort" type="number" data-testid="smsc-edit-port" />
-              </label>
-              <label>
-                TPS
-                <input v-model.number="editSmscTps" type="number" data-testid="smsc-edit-tps" />
-              </label>
-              <label class="checkbox-row">
-                <input v-model="editSmscEnabled" type="checkbox" data-testid="smsc-edit-enabled" />
-                Enabled
-              </label>
-              <div>
+            <div v-if="canManageSystem && editing" data-testid="smsc-edit-form">
+              <SmscConfigForm v-model="editSmscDraft" mode="edit" testid="smsc-edit" />
+              <div class="detail-actions">
                 <button
                   class="primary-button"
                   data-testid="smsc-save"
@@ -5788,31 +5824,16 @@ onUnmounted(() => {
           </p>
         </template>
 
+        <!--
+          The full connection form, not a four-field summary of it. The Name box
+          above is the composer's shared field; everything a carrier's onboarding
+          sheet carries is in here, grouped as that sheet is and collapsed until
+          it is wanted.
+        -->
         <template v-if="workspace.createKind === 'smsc'">
-          <label>
-            Protocol
-            <select v-model="smscType">
-              <option value="fake">Fake SMSC</option>
-              <option value="smpp">SMPP client</option>
-              <option value="http">HTTP SMS</option>
-              <option value="at">AT modem</option>
-            </select>
-          </label>
-          <label v-if="smscType !== 'fake'">
-            Host
-            <input v-model="smscHost" />
-          </label>
-          <label v-if="smscType !== 'fake'">
-            Port
-            <input v-model.number="smscPort" type="number" min="1" max="65535" />
-          </label>
-          <label>
-            TPS limit
-            <input v-model.number="smscTps" type="number" min="1" max="100000" />
-          </label>
-          <p class="form-hint dialog-span">
-            Credentials use secret references; plaintext passwords are never stored here.
-          </p>
+          <div class="dialog-span">
+            <SmscConfigForm v-model="smscDraft" mode="create" testid="smsc-create" />
+          </div>
         </template>
 
         <template v-if="workspace.createKind === 'configuration'">
@@ -5861,7 +5882,9 @@ onUnmounted(() => {
             loading ||
             !draftName.trim() ||
             (workspace.createKind === 'route' && !draftTarget.trim()) ||
-            (workspace.createKind === 'smsc' && smscType !== 'fake' && !smscHost.trim())
+            (workspace.createKind === 'smsc' &&
+              smscDraft.type !== 'fake' &&
+              !String(smscDraft.host ?? '').trim())
           "
           @click="createRecord"
         >

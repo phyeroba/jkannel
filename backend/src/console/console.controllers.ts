@@ -23,6 +23,10 @@ import {
   SecurityPolicyService,
 } from '../security/security-policy.service';
 import { ConsoleRepository, Actor, GridPage } from './console.repository';
+import {
+  InvalidSecretReferenceError,
+  SecretResolver,
+} from '../configuration/secret-resolver.service';
 import { ExportColumn, ExportService } from '../platform/export.service';
 import { KamexSqlboxRepository, parseMessagePriority } from '../engine/kamex-sqlbox.repository';
 import {
@@ -467,7 +471,7 @@ export class RoutesController {
       fallbackSmscId: row.fallback_smsc_id ?? undefined,
     }));
     try {
-      return this.routing!.evaluate(
+      const decision = this.routing!.evaluate(
         {
           messageId: text(b.messageId ?? randomUUID(), 'messageId'),
           destination,
@@ -477,6 +481,38 @@ export class RoutesController {
         },
         rules,
       );
+      /*
+       * A route that WOULD have matched but is not deployed.
+       *
+       * Without this the simulator answers "no route matched" seconds after an
+       * operator created a route for exactly that destination, which reads as
+       * the route being wrong rather than as it not being live yet. Naming it
+       * turns a dead end into the next step.
+       *
+       * Matched here with the same prefix and sender test the resolver applies,
+       * deliberately kept simple: this is a diagnostic hint about rows the
+       * evaluation excluded, not a second routing engine.
+       */
+      const blocked = (data.undeployed ?? []).filter((row: any) => {
+        const prefix = row.destination_prefix ?? '';
+        const matchesPrefix = !prefix || destination.replace(/^\+/, '').startsWith(prefix);
+        const matchesSender = !row.sender || row.sender === b.sender;
+        return matchesPrefix && matchesSender;
+      });
+      return {
+        ...decision,
+        notInForce: blocked.map((row: any) => ({
+          id: row.id,
+          priority: row.priority,
+          destinationPrefix: row.destination_prefix ?? null,
+          targetSmscId: row.target_smsc_id,
+          deploymentState: row.deployment_state,
+        })),
+        notInForceNote: blocked.length
+          ? `${blocked.length} route(s) match this destination but are not deployed, so the send ` +
+            'path ignores them. Deploy a route to make it take effect.'
+          : undefined,
+      };
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
@@ -892,7 +928,59 @@ export class ConfigurationsController {
     // Builds the EngineConfiguration from smsc_definitions. Optional so the
     // controller can still be constructed with a body-supplied model in tests.
     private readonly modelBuilder?: ConfigurationModelBuilder,
+    // Answers "is this secret actually set" for the console's forms. Optional
+    // for the same reason as the rest.
+    private readonly secrets?: SecretResolver,
   ) {}
+
+  /**
+   * Does this `secret://` reference resolve, and to which environment variable?
+   *
+   * WHY THIS ENDPOINT EXISTS
+   * -------------------------------------------------------------------------
+   * A bind password is never stored: the record holds `secret://carrier/mtn-ug`
+   * and the rendered config holds `${CARRIER_MTN_UG}`, whose value comes from
+   * the host environment. That is the right design and it is also the single
+   * most confusing thing about configuring this gateway, because the derivation
+   * from reference to variable name lived only in `envName()` — so an operator
+   * invented a reference, saved it, and had no way to learn which variable they
+   * now had to set. The bind then failed to authenticate with a message about
+   * the carrier rejecting it.
+   *
+   * Presence only, never the value, and never a hint of it. Knowing that
+   * `CARRIER_MTN_UG` is set tells an operator who may already write to this
+   * record nothing they could not learn by deploying and reading the error.
+   */
+  @Post('secret-check') @RequirePermissions('configuration.view') secretCheck(@Body() b: any) {
+    const references: unknown = b?.references;
+    if (!Array.isArray(references) || references.some((r) => typeof r !== 'string'))
+      throw new BadRequestException('references must be an array of secret:// strings');
+    if (references.length > 32) throw new BadRequestException('At most 32 references per check');
+    if (!this.secrets) throw new BadRequestException('Secret resolver is not available');
+    return {
+      references: (references as string[]).map((reference) => {
+        try {
+          return {
+            reference,
+            envName: this.secrets!.envName(reference),
+            present: this.secrets!.has(reference),
+            valid: true,
+          };
+        } catch (cause) {
+          // A malformed reference is a fact about the input, not a server
+          // fault: the form asks about whatever the operator has typed so far,
+          // and half-typed text must come back as "not valid yet" rather than
+          // as a 400 that blanks the whole check.
+          if (cause instanceof InvalidSecretReferenceError)
+            return { reference, envName: null, present: false, valid: false };
+          throw cause;
+        }
+      }),
+      note:
+        'Presence only — no secret value is read or returned. Set a missing variable in the ' +
+        'deployment environment, then redeploy the engine for it to take effect.',
+    };
+  }
   @Get() @RequirePermissions('configuration.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listConfigurations(actor(r), q);
   }

@@ -1,0 +1,192 @@
+[
+  {
+    "field": "name",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "engineId",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "type",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "host",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "port",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "tps",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "enabled",
+    "directive": "(core)",
+    "onScreen": true
+  },
+  {
+    "field": "credentialSecretRef",
+    "directive": "smsc-password (secret ref)",
+    "onScreen": true
+  },
+  {
+    "field": "systemId",
+    "directive": "smsc-username / system-id",
+    "onScreen": true
+  },
+  {
+    "field": "usernameSecretRef",
+    "directive": "smsc-username (secret ref)",
+    "onScreen": true
+  },
+  {
+    "field": "systemType",
+    "directive": "system-type",
+    "onScreen": true
+  },
+  {
+    "field": "bindMode",
+    "directive": "transceiver-mode / receive-port",
+    "onScreen": true
+  },
+  {
+    "field": "receivePort",
+    "directive": "receive-port",
+    "onScreen": true
+  },
+  {
+    "field": "interfaceVersion",
+    "directive": "interface-version",
+    "onScreen": true
+  },
+  {
+    "field": "addressRange",
+    "directive": "address-range",
+    "onScreen": true
+  },
+  {
+    "field": "sourceAddrTon",
+    "directive": "source-addr-ton",
+    "onScreen": true
+  },
+  {
+    "field": "sourceAddrNpi",
+    "directive": "source-addr-npi",
+    "onScreen": true
+  },
+  {
+    "field": "destAddrTon",
+    "directive": "dest-addr-ton",
+    "onScreen": true
+  },
+  {
+    "field": "destAddrNpi",
+    "directive": "dest-addr-npi",
+    "onScreen": true
+  },
+  {
+    "field": "windowSize",
+    "directive": "max-pending-submits",
+    "onScreen": true
+  },
+  {
+    "field": "keepaliveSeconds",
+    "directive": "enquire-link-interval",
+    "onScreen": true
+  },
+  {
+    "field": "reconnectDelaySeconds",
+    "directive": "reconnect-delay",
+    "onScreen": true
+  },
+  {
+    "field": "waitAckSeconds",
+    "directive": "wait-ack",
+    "onScreen": true
+  },
+  {
+    "field": "maxErrorCount",
+    "directive": "max-error-count",
+    "onScreen": true
+  },
+  {
+    "field": "useTls",
+    "directive": "use-ssl",
+    "onScreen": true
+  },
+  {
+    "field": "altCharset",
+    "directive": "alt-charset",
+    "onScreen": true
+  },
+  {
+    "field": "sendUrl",
+    "directive": "send-url",
+    "onScreen": true
+  },
+  {
+    "field": "notes",
+    "directive": "(console only — not an engine directive)",
+    "onScreen": true
+  },
+  {
+    "field": "connectionCount",
+    "directive": "instances",
+    "onScreen": true
+  },
+  {
+    "field": "connectionTimeoutSeconds",
+    "directive": "connection-timeout",
+    "onScreen": true
+  },
+  {
+    "field": "waitAckExpireAction",
+    "directive": "wait-ack-expire",
+    "onScreen": true
+  },
+  {
+    "field": "retryOnAuthFailure",
+    "directive": "retry",
+    "onScreen": true
+  },
+  {
+    "field": "allowedSmscIds",
+    "directive": "allowed-smsc-id",
+    "onScreen": true
+  },
+  {
+    "field": "deniedSmscIds",
+    "directive": "denied-smsc-id",
+    "onScreen": true
+  },
+  {
+    "field": "preferredSmscIds",
+    "directive": "preferred-smsc-id",
+    "onScreen": true
+  },
+  {
+    "field": "allowedPrefixes",
+    "directive": "allowed-prefix",
+    "onScreen": true
+  },
+  {
+    "field": "deniedPrefixes",
+    "directive": "denied-prefix",
+    "onScreen": true
+  },
+  {
+    "field": "preferredPrefixes",
+    "directive": "preferred-prefix",
+    "onScreen": true
+  }
+]

@@ -677,11 +677,35 @@ export class ConsoleRepository {
       return row;
     });
   }
+  /**
+   * The routes the simulator evaluates, and the ones it must warn about.
+   *
+   * This used to select EVERY row in `routing_rules`, while the send path takes
+   * `deployedOnly: true` (see `route-resolution.service.ts`). The simulator
+   * therefore predicted a winner from routes that were not in force: an
+   * operator created a route, asked the simulator whether traffic would reach
+   * it, was told yes, and then had every message refused with "no route
+   * matched the destination". The preview an operator uses to decide whether a
+   * change is safe was answering a different question from the one that
+   * decides delivery.
+   *
+   * Deployed rows are returned for evaluation. The rest come back separately so
+   * the answer can say "a route matches but is not deployed", which is the
+   * actual situation and is far more useful than either a false match or a bare
+   * "no route matched" moments after one was created.
+   */
   async routeSimulationData(actor: Actor) {
     return this.inTenant(actor, async (c) => {
+      const COLUMNS =
+        'id::text,priority,enabled,destination_prefix,sender,target_smsc_id::text,fallback_smsc_id::text';
       const routes = (
         await c.query(
-          'SELECT id::text,priority,enabled,destination_prefix,sender,target_smsc_id::text,fallback_smsc_id::text FROM routing_rules ORDER BY priority,id',
+          `SELECT ${COLUMNS} FROM routing_rules WHERE deployment_state='deployed' ORDER BY priority,id`,
+        )
+      ).rows;
+      const undeployed = (
+        await c.query(
+          `SELECT ${COLUMNS},deployment_state FROM routing_rules WHERE deployment_state<>'deployed' ORDER BY priority,id`,
         )
       ).rows;
       const smscs = (
@@ -689,7 +713,7 @@ export class ConsoleRepository {
           "SELECT id::text FROM smsc_definitions WHERE enabled=true AND lifecycle_state NOT IN ('disabled','archived','degraded')",
         )
       ).rows;
-      return { routes, smscs };
+      return { routes, undeployed, smscs };
     });
   }
   async validateRoute(actor: Actor, id: string, reason?: string) {
