@@ -2,7 +2,7 @@
   {
     "route": "/carriers",
     "add": "dialog  (\"New carrier\")",
-    "row": "navigate /carriers/baadef36-256d-48c7-8d0c-33b59c937fd2 (of 2 tables)"
+    "row": "navigate /carriers/5ed3369c-bce4-427a-a91d-a1ed03f8a274"
   },
   {
     "route": "/smsc",
@@ -37,7 +37,7 @@
   {
     "route": "/api-gateway",
     "add": "dialog  (\"Create API client\")",
-    "row": "nothing"
+    "row": "no rows"
   },
   {
     "route": "/alerts",
@@ -62,7 +62,7 @@
   {
     "route": "/backup",
     "add": "dialog  (\"Create backup\")",
-    "row": "nothing (of 2 tables)"
+    "row": "no rows"
   },
   {
     "route": "/messages",
@@ -102,7 +102,7 @@
   {
     "route": "/content-rules",
     "add": "dialog  (\"New rule\")",
-    "row": "no rows"
+    "row": "dialog"
   },
   {
     "route": "/recipient-policy",
@@ -122,12 +122,12 @@
   {
     "route": "/jobs",
     "add": "no add control",
-    "row": "drawer"
+    "row": "no rows"
   },
   {
     "route": "/data-integrity",
     "add": "dialog  (\"New record\")",
-    "row": "nothing (of 2 tables)"
+    "row": "nothing"
   },
   {
     "route": "/services",

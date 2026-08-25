@@ -70,7 +70,18 @@ node scripts/menu-audit.mjs          # does every sidebar item reach a working e
 node scripts/link-check.mjs          # does every in-page link resolve to a declared route
 node scripts/spacing-audit.mjs       # measured gap between every adjacent panel pair
 node scripts/interaction-audit.mjs   # what a click actually OPENS
+node scripts/configurability-audit.mjs # can every settable field be set by clicking
+node scripts/rendered-diff.mjs       # computed styles, kit vs console
+node scripts/padding-audit.mjs       # panel interiors, every route
+node scripts/readme-shots.mjs        # the README's screenshots, carrier details redacted
+node scripts/throughput-test.mjs     # load, via the engine's own fakesmsc
+node scripts/routing-e2e.mjs         # does a message land where the route says
 ```
+
+> `readme-shots.mjs` REWRITES the carrier's hostname, username and egress IP
+> before every capture and refuses to continue if one survives. Do not disable
+> that: the first run of it photographed the live bind endpoint into a file
+> headed for a public README.
 
 > Playwright scripts must be **copied into `e2e/`** to resolve `@playwright/test`:
 > `Copy-Item scripts/route-smoke.mjs e2e/route-smoke.tmp.mjs` then
