@@ -305,6 +305,45 @@ export class ConfigurationGeneratorService {
       ids.add(smsc.id);
       if (smsc.type !== 'fake' && (!smsc.host || !smsc.port))
         errors.push(`${smsc.id} requires host and port`);
+      /*
+       * A `fake` SMSC needs a PORT, because bearerbox listens on it.
+       *
+       * This was exempted from the host/port rule above — correctly, since a
+       * fake connection has no host to dial — and then nothing checked the one
+       * thing it does need. The rendered group came out portless, native
+       * validation accepted the file (the parser is happy; `port` is optional
+       * to the GRAMMAR), and bearerbox rejected it at runtime with
+       * "'port' invalid in 'fake' record" followed by "Failed to create fake
+       * smsc connection". The deployment reported success and the connection
+       * did not exist.
+       *
+       * That is the shape worth naming: native validation proves the file
+       * PARSES, not that every group it contains can start. Anything the engine
+       * only discovers at runtime has to be caught here instead.
+       */
+      // Both checks below apply to ENABLED links only. A disabled SMSC is not
+      // rendered at all, so its runtime validity cannot matter — and refusing
+      // the whole deployment over a half-configured carrier somebody switched
+      // off is the opposite of helpful: it makes disabling a broken link stop
+      // working as the way to get a deploy out.
+      if (smsc.enabled && smsc.type === 'fake' && !smsc.port)
+        errors.push(`${smsc.id} is a fake SMSC and requires a port for bearerbox to listen on`);
+      /*
+       * An SMPP bind needs a username. Same failure shape: the file parses, and
+       * the engine then logs "SMPP: Configuration file doesn't specify
+       * username" and the bind never comes up.
+       *
+       * Either spelling satisfies it — `username` renders as `smsc-username` in
+       * clear (the model builder maps the record's `system_id` onto it), and
+       * `usernameSecretRef` renders the same directive as an environment
+       * placeholder. They are two ways of supplying one directive, so demanding
+       * a particular one would reject a valid configuration.
+       */
+      if (smsc.enabled && smsc.type === 'smpp' && !smsc.username && !smsc.usernameSecretRef)
+        errors.push(
+          `${smsc.id} is an SMPP bind and requires a system id or a username secret reference — ` +
+            'without one the engine logs "Configuration file does not specify username" and never binds',
+        );
       if (smsc.usernameSecretRef && !smsc.usernameSecretRef.startsWith('secret://'))
         errors.push(`${smsc.id} credential must be a secret reference`);
       if (smsc.passwordSecretRef && !smsc.passwordSecretRef.startsWith('secret://'))

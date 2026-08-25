@@ -29,8 +29,72 @@ describe('ConfigurationGeneratorService', () => {
       usernameEnv: 'POSTGRES_USER',
       passwordEnv: 'POSTGRES_PASSWORD',
     },
-    smsc: [{ id: 'test', type: 'fake' as const, enabled: true }],
+    // A port, because a fake SMSC without one renders a group bearerbox rejects
+    // at runtime ("'port' invalid in 'fake' record"). The base model here is
+    // meant to be a VALID configuration; it was quietly an invalid one, which
+    // is how the generator came to emit portless fake groups in production.
+    smsc: [{ id: 'test', type: 'fake' as const, port: 10000, enabled: true }],
   };
+  /*
+   * NATIVE VALIDATION PROVES THE FILE PARSES, NOT THAT EVERY GROUP CAN START.
+   *
+   * Both of these rendered a file that a real bearerbox accepted in the
+   * validator container and then rejected at runtime — one with "'port' invalid
+   * in 'fake' record / Failed to create fake smsc connection", the other with
+   * "SMPP: Configuration file doesn't specify username". The deployment
+   * reported success and the connection did not exist.
+   *
+   * Anything the engine only discovers when it starts a group has to be caught
+   * here, because the parser will not catch it and the deploy will say fine.
+   */
+  it('refuses a fake SMSC with no port for bearerbox to listen on', () => {
+    const broken = { ...model, smsc: [{ id: 'sink', type: 'fake' as const, enabled: true }] };
+    expect(service.validate(broken)).toContainEqual(
+      expect.stringContaining('requires a port for bearerbox to listen on'),
+    );
+  });
+
+  it('refuses an SMPP bind with no system id and no username reference', () => {
+    const broken = {
+      ...model,
+      smsc: [
+        {
+          id: 'carrier',
+          type: 'smpp' as const,
+          host: 'smpp.example',
+          port: 2775,
+          enabled: true,
+          passwordSecretRef: 'secret://kamex/pw',
+        },
+      ],
+    };
+    expect(service.validate(broken)).toContainEqual(expect.stringContaining('requires a system id'));
+  });
+
+  it('accepts either spelling of the username, because they render one directive', () => {
+    const base = { id: 'carrier', type: 'smpp' as const, host: 'h', port: 2775, enabled: true };
+    expect(service.validate({ ...model, smsc: [{ ...base, username: 'sysid' }] })).toEqual([]);
+    expect(
+      service.validate({
+        ...model,
+        smsc: [{ ...base, usernameSecretRef: 'secret://kamex/user' }],
+      }),
+    ).toEqual([]);
+  });
+
+  it('does not block a deployment over a DISABLED link that is never rendered', () => {
+    // Refusing here would make "switch the broken carrier off" stop being the
+    // way to get a deploy out, which is exactly when somebody needs one.
+    const withDisabled = {
+      ...model,
+      smsc: [
+        ...model.smsc,
+        { id: 'retired', type: 'smpp' as const, host: 'h', port: 2775, enabled: false },
+      ],
+    };
+    expect(service.validate(withDisabled)).toEqual([]);
+  });
+
   it('is deterministic and excludes secret values', () => {
     expect(service.generate(model)).toEqual(service.generate(model));
     expect(service.generate(model).content).not.toContain('secret://');

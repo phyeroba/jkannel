@@ -61,3 +61,13 @@ test-results/
 
 # Throwaway capture scripts copied into e2e/ so they resolve @playwright/test.
 e2e/*.tmp.mjs
+
+# The engine configuration DEPLOY TARGET.
+#
+# `configuration-deployment.service.ts` writes the generated config here, and
+# a generated config contains the real carrier hostname and port. This file was
+# tracked with a safe hand-written seed, so the first local deploy silently
+# replaced tracked content with carrier details and the next `git add -A`
+# committed them. Seeded from infrastructure/kannel/kamex.local-seed.conf.
+runtime/kamex/kamex.conf
+runtime/kamex/*.tmp
