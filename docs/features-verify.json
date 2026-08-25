@@ -1,0 +1,207 @@
+{
+  "stale": [],
+  "holds": [
+    {
+      "id": "password-policy",
+      "text": "Password policy, session limits and idle timeout are configurable but not enforced",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src/security",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "realtime-push",
+      "text": "No real-time push — a few screens poll, the rest need a manual refresh",
+      "kind": "absent",
+      "find": [
+        [
+          "frontend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "container-metrics",
+      "text": "No per-container resource metrics",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "export-status-filter",
+      "text": "Export ignores an active status filter",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src/platform/export.service.ts",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "replay-dlr",
+      "text": "No \"replay DLR\"",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "billing",
+      "text": "No billing, rating or multi-part segment accounting",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "https-listener",
+      "text": "No HTTPS listener in the shipped gateway config",
+      "kind": "absent",
+      "find": [
+        [
+          "infrastructure/kannel",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "webhook-hmac",
+      "text": "Webhook signing is a static secret, not HMAC",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "oauth-webauthn",
+      "text": "No OAuth2/OIDC, no WebAuthn",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "plugin-runtime",
+      "text": "Plugins can be registered and validated but not executed",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src/plugins/plugin.runtime.ts",
+          {}
+        ]
+      ]
+    },
+    {
+      "id": "pitr",
+      "text": "No point-in-time recovery (no WAL archiving)",
+      "kind": "absent",
+      "find": [
+        [
+          "backend/src/backup-dr",
+          {}
+        ]
+      ]
+    }
+  ],
+  "closed": [
+    {
+      "id": "roles-readonly",
+      "text": "No role or permission management — the Roles screen is read-only",
+      "kind": "closed",
+      "find": [
+        [
+          "backend/src/console/console.controllers.ts",
+          {}
+        ]
+      ],
+      "route": "/roles",
+      "evidence": "backend/src/console/console.controllers.ts"
+    },
+    {
+      "id": "alert-transitions",
+      "text": "Alert resolve / assign / suppress / close",
+      "kind": "closed",
+      "route": "/alerts/{id}/resolve",
+      "evidence": "/alerts/{id}/resolve"
+    },
+    {
+      "id": "log-explorer",
+      "text": "No log explorer, live tail, or correlation-ID search",
+      "kind": "closed",
+      "find": [
+        [
+          "frontend/src/views/LogExplorerView.vue",
+          {}
+        ]
+      ],
+      "evidence": "frontend/src/views/LogExplorerView.vue"
+    },
+    {
+      "id": "segment-columns",
+      "text": "No encoding/segment/UDH columns",
+      "kind": "closed",
+      "find": [
+        [
+          "frontend/src/views/ModuleWorkspace.vue",
+          {}
+        ]
+      ],
+      "evidence": "frontend/src/views/ModuleWorkspace.vue"
+    },
+    {
+      "id": "offsite-backup",
+      "text": "No object-storage backup target",
+      "kind": "closed",
+      "find": [
+        [
+          "backend/src/backup-dr/s3.destination.ts",
+          {}
+        ]
+      ],
+      "evidence": "backend/src/backup-dr/s3.destination.ts"
+    }
+  ],
+  "regressed": [],
+  "external": [
+    {
+      "id": "carrier-bind",
+      "text": "A generated configuration has never bound to a live carrier",
+      "kind": "external"
+    },
+    {
+      "id": "pentest",
+      "text": "No independent penetration test",
+      "kind": "external"
+    },
+    {
+      "id": "soak",
+      "text": "No production-scale soak at the specification throughput targets",
+      "kind": "external"
+    },
+    {
+      "id": "ha-drill",
+      "text": "No multi-node HA failover drill with measured RPO/RTO",
+      "kind": "external"
+    }
+  ]
+}

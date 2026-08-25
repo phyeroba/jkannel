@@ -23,10 +23,19 @@ listed as a feature. The full evidence, file-by-file, is in
 | ⚠️ | Works, with a limitation stated inline |
 
 Anything not built is in **[Not yet implemented](#not-yet-implemented)** at the bottom.
-That section is deliberately long and specific — it is the honest half of this document.
+That section is deliberately long and specific — it is the honest half of this document,
+and **`node scripts/features-verify.mjs` checks it**. Every claim there that can be
+settled mechanically carries a probe; the tool reports any that no longer hold and exits
+non-zero. Run it before trusting this file.
 
-**Scale:** 39 API controllers · ~250 endpoints · 34 database migrations · 26 console
-screens · 100 backend test suites (836 tests) · 18 frontend suites (112 tests).
+That check exists because hand-verification does not survive contact with three weeks of
+work. This document was accurate on 2026-08-04 and by 2026-08-25 five of its claims were
+wrong — all five in the direction of **understating** what had been built, which is the
+expensive way for a capability document to rot: it gets work re-planned that is already
+finished.
+
+**Scale:** ~348 API operations · 99 database tables · 53 console routes ·
+174 backend test suites (2,031 tests) · 60 frontend suites (687 tests).
 
 ---
 
@@ -91,6 +100,14 @@ screens · 100 backend test suites (836 tests) · 18 frontend suites (112 tests)
 - ✅ Live status polling with bind-state transition history and audit.
 - ✅ Full SMPP attribute set — system ID, system type, bind mode, TON/NPI, window size,
   keepalive, reconnect delay, TLS.
+- ✅ **All 38 settable attributes have a console control** — no config file and no curl.
+  Grouped as a carrier onboarding sheet is laid out, collapsed until wanted, and each
+  field names the `kannel.conf` directive it becomes. A field left blank is omitted from
+  the generated file, so the engine's own default applies. Checked by
+  `scripts/configurability-audit.mjs`, which reads the settable set out of the backend
+  rather than from a list typed into the tool.
+- ✅ A `secret://` reference resolves on screen: the form names the environment variable
+  it derives to and says whether that variable is set.
 - ⚠️ `reconnect` re-issues a start command rather than forcing a bind cycle; "test
   connection" proves a TCP socket opens, not that an SMPP bind succeeds.
 
@@ -228,20 +245,22 @@ screens · 100 backend test suites (836 tests) · 18 frontend suites (112 tests)
 
 Stated plainly so nobody plans around something that isn't there.
 
+Verified by `scripts/features-verify.mjs` on 2026-08-25. Five entries were removed
+from this list in that pass because the work had been done and nobody had come back to
+the document — they are recorded under *Recently closed* below rather than deleted
+silently, because a gap list that quietly shrinks is not evidence of anything.
+
 **Administration**
-- No role or permission management — roles cannot be created or edited, and the standard
-  role catalogue is not seeded. The Roles screen is read-only.
-- Alert resolve / assign / suppress / close.
 - Password policy, session limits and idle timeout are configurable but not enforced.
 
 **Observability**
-- No log explorer, live tail, or correlation-ID search; log lines carry no correlation ID.
 - No real-time push — a few screens poll; the rest need a manual refresh.
-- No per-container resource metrics.
+- No per-container resource metrics. The API container has no Docker socket, deliberately,
+  so this needs a metrics agent rather than a screen.
 
 **Messaging & data**
-- No independent message store, so no date-range search, no encoding/segment/UDH columns,
-  and retention deletes engine rows without archiving.
+- No independent message store, so no date-range search, and retention deletes engine rows
+  without archiving.
 - Export ignores an active status filter.
 - No "replay DLR".
 - No billing, rating or multi-part segment accounting.
@@ -251,7 +270,25 @@ Stated plainly so nobody plans around something that isn't there.
 - Webhook signing is a static secret, not HMAC.
 - No OAuth2/OIDC, no WebAuthn.
 - Plugins can be registered and validated but not executed — there is no plugin runtime.
-- No point-in-time recovery; no object-storage backup target.
+- No point-in-time recovery: PostgreSQL WAL archiving is not configured, so a restore
+  goes to the last full backup. (Streaming replication for HA *is* configured — see
+  `infrastructure/ha/` — which is a different guarantee.)
+
+**Data model conventions** — the specification calls these mandatory:
+- Soft delete (`deleted_at`) is on **6 of 99 tables**; optimistic locking (`version`) on
+  **9 of 99**. The helpers and the conventions exist; the coverage does not.
+
+### Recently closed
+
+Listed here for one release so the change is visible rather than silent:
+
+| Was claimed missing | Evidence it is built |
+|---|---|
+| Role and permission management; read-only Roles screen | `POST /roles`, plus create/edit/delete and a permission catalogue in `RolesView.vue` |
+| Alert resolve / assign / suppress / close | `/alerts/{id}/resolve`, `/assign`, `/suppress`, `/close`, `/acknowledge` — all served |
+| No log explorer, live tail or correlation-ID search | `LogExplorerView.vue`, and correlation drill-down in `EventsView.vue` |
+| No encoding / segment / UDH columns | All three in the message trace sheet |
+| No object-storage backup target | `S3Destination` — SigV4 over `node:crypto`, wired into `backup-dr.service.ts` |
 
 **External evidence outstanding** — these need infrastructure or third parties, not code:
 - A generated configuration has never bound to a live carrier (awaiting carrier IP
@@ -262,7 +299,8 @@ Stated plainly so nobody plans around something that isn't there.
 
 ---
 
-*Verified 2026-08-04 against commit `eefa320`. Evidence:
+*Gap list verified 2026-08-25 by `scripts/features-verify.mjs` — re-run it rather than
+trusting this date. Evidence:
 [`project/IMPLEMENTATION_VERIFICATION.md`](project/IMPLEMENTATION_VERIFICATION.md) ·
 Gap history: [`project/SPEC_GAP_ANALYSIS.md`](project/SPEC_GAP_ANALYSIS.md) ·
 Per-requirement status: [`progress/requirements-traceability.md`](progress/requirements-traceability.md)*
