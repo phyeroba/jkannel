@@ -3559,7 +3559,13 @@ async function primaryAction() {
 
 async function createRecord() {
   const value = workspace.value;
-  const name = draftName.value.trim();
+  // The SMSC form owns its own Name field; every other kind uses the composer's
+  // shared one. Reading it from whichever is actually on screen is what stops
+  // the two disagreeing.
+  const name =
+    value?.createKind === 'smsc'
+      ? String(smscDraft.value.name ?? '').trim()
+      : draftName.value.trim();
   if (!value?.actionEndpoint || !name) return;
 
   loading.value = true;
@@ -6082,7 +6088,23 @@ onUnmounted(() => {
       @close="showComposer = false"
     >
       <div class="dialog-grid">
-        <label class="dialog-span">
+        <!--
+          NOT SHOWN FOR SMSC, because that form has its own Name and two of them
+          is one too many.
+          
+          The dialog rendered both: this shared field at the top, and `Name`
+          inside the SMSC form's Identity group with a hint under it. They were
+          not two names for two things — `createRecord` built the payload as
+          `{ ...draft, name }`, so the top one WON and whatever the operator
+          typed in the group with the explanation was silently discarded. Worse,
+          Create stayed disabled until the top one was filled, so the field that
+          looked authoritative was the one that did nothing.
+          
+          Caught by looking at the README screenshot of this very dialog, which
+          shows an empty "Name" sitting above an IDENTITY group containing
+          another "Name".
+        -->
+        <label v-if="workspace.createKind !== 'smsc'" class="dialog-span">
           {{
             workspace.createKind === 'invitation'
               ? 'Email'
@@ -6140,10 +6162,10 @@ onUnmounted(() => {
         </template>
 
         <!--
-          The full connection form, not a four-field summary of it. The Name box
-          above is the composer's shared field; everything a carrier's onboarding
-          sheet carries is in here, grouped as that sheet is and collapsed until
-          it is wanted.
+          The full connection form, not a four-field summary of it. Everything a
+          carrier's onboarding sheet carries is in here, grouped as that sheet
+          is and collapsed until it is wanted — INCLUDING the Name, which is why
+          the composer's shared Name field is hidden for this kind.
         -->
         <template v-if="workspace.createKind === 'smsc'">
           <div class="dialog-span">
@@ -6195,7 +6217,9 @@ onUnmounted(() => {
           data-testid="save-draft"
           :disabled="
             loading ||
-            !draftName.trim() ||
+            (workspace.createKind === 'smsc'
+              ? !String(smscDraft.name ?? '').trim()
+              : !draftName.trim()) ||
             (workspace.createKind === 'route' && !draftTarget.trim()) ||
             (workspace.createKind === 'smsc' &&
               smscDraft.type !== 'fake' &&

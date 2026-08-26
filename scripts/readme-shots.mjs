@@ -132,10 +132,57 @@ const SHOTS = [
  * with no real carrier and wrong for one that has — so the run below REFUSES
  * when the list is empty and any of the values are visible on screen.
  */
-const REDACTIONS = (process.env.SHOT_REDACTIONS ?? '')
+/**
+ * `.env` is read from disk, not inherited from the environment.
+ *
+ * This used `process.env.SHOT_REDACTIONS` alone, and nothing in this repository
+ * loads `.env` into the process — so the list was ALWAYS empty, redaction never
+ * ran, and the carrier's hostname was rendered into the SMSC register behind
+ * the Create SMSC dialog in `03-smsc-configuration.png`.
+ *
+ * The guard below could not catch it either, because it is built from this same
+ * list: an empty list has nothing to look for, so "nothing forbidden was found"
+ * was true and meaningless. That is the defining shape of a safety check that
+ * fails open, and it is the exact failure this script exists to prevent.
+ */
+function redactionPairs() {
+  const inline = process.env.SHOT_REDACTIONS;
+  if (inline) return inline;
+  try {
+    const env = fs.readFileSync(path.join('d:/JKANNEL', '.env'), 'utf8');
+    return /^SHOT_REDACTIONS=(.*)$/m.exec(env)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+const REDACTIONS = redactionPairs()
   .split(',')
   .map((pair) => pair.split('=').map((part) => part.trim()))
   .filter(([from, to]) => from && to);
+
+/*
+ * NO LIST IS NOT THE SAME AS NOTHING TO HIDE.
+ *
+ * A stack with no real carrier configured genuinely needs no redaction, and a
+ * stack that has one needs it absolutely — and from inside this script the two
+ * look identical. Defaulting to "carry on" resolves that ambiguity in the one
+ * direction that can publish a hostname, so it refuses instead and makes the
+ * safe case say so out loud.
+ */
+if (!REDACTIONS.length && process.env.SHOT_ALLOW_NO_REDACTION !== 'true') {
+  console.error(
+    [
+      '',
+      'REFUSING: no redaction list.',
+      '',
+      'SHOT_REDACTIONS is not set in the environment and was not found in .env, so nothing',
+      'would be masked before the shutter. If this deployment really has no carrier details',
+      'on screen, re-run with SHOT_ALLOW_NO_REDACTION=true to say so deliberately.',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
 
 async function redact(page) {
   const remaining = await page.evaluate((pairs) => {
@@ -199,6 +246,23 @@ for (const shot of SHOTS) {
         await toggles.nth(i).click();
         await page.waitForTimeout(120);
       }
+      /*
+       * BACK TO THE TOP, because clicking the LAST toggle scrolled the dialog
+       * body down to it.
+       *
+       * The capture came out on the middle of the form — Alternative charset,
+       * Source TON, Destination NPI — a run of loose fields with no group
+       * heading in frame, under a caption promising settings "grouped as a
+       * carrier onboarding sheet is laid out and collapsed until wanted". The
+       * image contradicted its own caption, and the caption was the true one.
+       *
+       * Every group is still expanded, which is the point of the capture; the
+       * frame just starts where an operator's eye does.
+       */
+      await page.evaluate(() => {
+        const body = document.querySelector('.dialog-body');
+        if (body) body.scrollTop = 0;
+      });
       await page.waitForTimeout(500);
     }
   }
@@ -247,4 +311,36 @@ if (leaked.length) {
 
 fs.writeFileSync(path.join(OUT, 'captions.json'), JSON.stringify(captured, null, 2));
 console.log(`\n${captured.length} screenshots written to ${OUT}`);
-console.log('Check each image for carrier hostnames before publishing:', FORBIDDEN.join(', '));
+/*
+ * The images are the one thing nothing here can verify.
+ *
+ * `secret-scan.mjs` reads tracked files including binaries, and it CANNOT find
+ * a hostname that was rendered into a PNG — the file holds compressed pixels,
+ * not the characters that were drawn. It reported these very screenshots clean
+ * while one of them showed the carrier's hostname in plain sight.
+ *
+ * So the real control is the DOM check above, which runs at shutter time and
+ * refuses if a forbidden string is still on the page. This line is the last
+ * human step, and it names the terms so that looking is quick.
+ */
+console.log(
+  `
+Redacted ${REDACTIONS.length} term(s) before every shutter, and verified none survived in`,
+);
+console.log('the DOM. That is the guarantee — a PNG cannot be text-scanned afterwards.');
+/*
+ * The terms are COUNTED, not printed.
+ *
+ * This used to end `console.log('Terms:', FORBIDDEN.join(', '))`, which put the
+ * carrier's hostname, its system id and two egress addresses straight into
+ * whatever captured the run — a terminal scrollback, a CI log, a transcript. A
+ * script that exists to stop those values being published should not be the
+ * thing that publishes them, and the header of this file makes exactly that
+ * argument about the list living in `.env` rather than in the source. Printing
+ * them at the end undid it.
+ *
+ * The operator already knows what is in their own `.env`; the count is what
+ * tells them the list was loaded, which is the only thing that was actually in
+ * doubt.
+ */
+console.log(`Loaded ${REDACTIONS.length} term(s) from SHOT_REDACTIONS.`);

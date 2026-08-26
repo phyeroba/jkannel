@@ -10,7 +10,9 @@
  *
  *  1. A SCREENSHOT. The first README capture photographed the SMSC register of
  *     a stack that has the real carrier configured, showing the hostname, its
- *     port and the egress IP in plain text.
+ *     port and the egress IP in plain text. NOTE that THIS script cannot catch
+ *     that case — see the note on binaries below — and `readme-shots.mjs`
+ *     redacting the DOM before the shutter is what does.
  *  2. A DEPLOYED ARTEFACT. `runtime/kamex/kamex.conf` is the file the deployment
  *     service writes the GENERATED configuration to, and it was also tracked in
  *     git with a safe hand-written seed. The first local deploy replaced tracked
@@ -95,7 +97,27 @@ for (const file of tracked) {
   } catch {
     continue;
   }
-  // Binaries are scanned too: the leak that started this was a PNG.
+  /*
+   * Binaries are scanned too, and it is important to be exact about what that
+   * buys — because the comment here used to say "the leak that started this was
+   * a PNG", which implied a protection this cannot provide.
+   *
+   * A PNG holds compressed PIXELS. A hostname DRAWN into an image is not the
+   * byte sequence "example.com" anywhere in the file, so no amount of scanning
+   * finds it. Proved the hard way on 2026-08-26: a regenerated README
+   * screenshot showed the carrier's hostname in the register behind a dialog,
+   * and this scan reported every tracked file clean.
+   *
+   * What scanning a binary DOES catch is a value in metadata, in an embedded
+   * text chunk, or in a file that is only nominally binary — a dump, an
+   * archive, a compiled bundle with a literal in it. Those are worth catching
+   * and this is the only thing that catches them.
+   *
+   * Rendered text in an image is covered somewhere else entirely:
+   * `readme-shots.mjs` replaces the values in the DOM before the shutter and
+   * refuses to continue if any survives. That check happens while the content
+   * is still text, which is the only moment it can be checked at all.
+   */
   const text = content.toString('binary');
   for (const term of FORBIDDEN)
     if (text.includes(term)) findings.push({ file, term, allowed: ALLOWED.get(file) });
