@@ -5,6 +5,7 @@ import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
 import { smscHeadroom, smscOptionsFrom, type SmscOption } from '../utils/safe-control';
 import { bindTone, bindWord } from '../utils/connectivity';
+import { describeWildcard, describeWildcardProblem } from '../utils/wildcard';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'loading' | 'ok' | 'error';
@@ -32,7 +33,7 @@ interface ResolveResult {
 }
 
 /** Mirrors ROUTE_TYPES / STRATEGIES in routing-depth.controller.ts. */
-const ROUTE_TYPES = ['static', 'prefix', 'country', 'operator', 'weighted'];
+const ROUTE_TYPES = ['static', 'prefix', 'country', 'operator', 'weighted', 'wildcard'];
 const STRATEGIES = ['priority', 'least-cost', 'load-balance', 'round-robin', 'time-based'];
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const SORT_FIELDS = ['priority', 'name', 'routeType', 'strategy', 'createdAt'];
@@ -190,7 +191,11 @@ function windowOf(route: RecordValue): RecordValue {
 function describeMatch(route: RecordValue): string {
   const parts: string[] = [];
   const type = text(route.routeType, 'static');
-  if (route.matchPrefix) parts.push(`prefix ${route.matchPrefix}`);
+  // A wildcard route's criterion also lives in matchPrefix, but calling it a
+  // "prefix" would misdescribe it — `25677*|25678*` is four prefixes, and
+  // `*1234` is not a prefix at all.
+  if (route.matchPrefix)
+    parts.push(type === 'wildcard' ? `matches ${route.matchPrefix}` : `prefix ${route.matchPrefix}`);
   if (route.countryCode) parts.push(`country +${route.countryCode}`);
   if (route.operator) parts.push(`operator ${route.operator}`);
   if (route.destinationPrefix) parts.push(`destination ${route.destinationPrefix}`);
@@ -275,6 +280,20 @@ const draftEnabled = ref(true);
 const draftType = ref('static');
 const draftStrategy = ref('priority');
 const draftMatchPrefix = ref('');
+/*
+ * The pattern read back to the operator as they type it, and the reason it
+ * would be refused. Both come from the mirror of the backend grammar in
+ * `utils/wildcard.ts`; the backend still validates on save and is authoritative.
+ *
+ * Shown because a wildcard rule decides where live traffic goes, and the one
+ * failure this grammar has is silent: a pattern that is structurally fine and
+ * matches nothing you meant. Reading "anything starting with 25677, ... or
+ * anything starting with 25679" back is how somebody catches that before saving.
+ */
+const wildcardProblem = computed(() =>
+  draftMatchPrefix.value.trim() ? describeWildcardProblem(draftMatchPrefix.value) : null,
+);
+const wildcardReading = computed(() => describeWildcard(draftMatchPrefix.value));
 const draftCountryCode = ref('');
 const draftOperator = ref('');
 const draftDestinationPrefix = ref('');
@@ -928,6 +947,31 @@ onMounted(() => {
           placeholder="25677"
         />
       </label>
+      <!-- The wildcard pattern shares `matchPrefix` with the prefix type but is
+           a different thing to write, so it gets its own field: the grammar is
+           spelled out, the pattern is described back in words as it is typed,
+           and an invalid one is named rather than saved to match nothing. -->
+      <label v-if="draftType === 'wildcard'" class="filter-select">
+        <span>Match pattern</span>
+        <input
+          v-model="draftMatchPrefix"
+          data-testid="route-match-wildcard"
+          type="text"
+          placeholder="25677*|25678*|25676*|25679*"
+        />
+        <small>
+          <span class="mono">*</span> any characters ·
+          <span class="mono">#</span> one digit ·
+          <span class="mono">$</span> one letter ·
+          <span class="mono">|</span> or
+        </small>
+        <small v-if="wildcardProblem" class="wildcard-problem" data-testid="route-wildcard-problem">
+          {{ wildcardProblem }}
+        </small>
+        <small v-else-if="draftMatchPrefix.trim()" data-testid="route-wildcard-reading">
+          Matches {{ wildcardReading }}.
+        </small>
+      </label>
       <label v-if="draftType === 'country'" class="filter-select">
         <span>Country code</span>
         <input
@@ -1173,6 +1217,13 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* An invalid pattern is a warning, not a failure: nothing is broken yet, and the
+   save is what will refuse it. The kit's `--warn` says "this needs your
+   attention" without the alarm of `--danger`. */
+.wildcard-problem {
+  color: var(--warn);
+}
+
 /* The continuity chain: a numbered order of where traffic would go next, which
    is the shape of the answer — first choice, second choice, third. */
 .continuity-list {

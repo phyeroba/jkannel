@@ -176,27 +176,33 @@ export class ConfigurationDeploymentService {
       );
 
     /*
-     * DID EVERY BOX COME BACK? A graceful restart severs delivery silently.
+     * DID EVERY BOX COME BACK? Delivery can stop here without anything saying so.
      *
-     * `graceful-restart` re-execs bearerbox, and SQLBox does not notice: it
-     * keeps a socket that is no longer connected to anything and never
-     * reconnects. Outbound then stops dead — every submission lands in
-     * `send_sms` and stays there — while the deployment reports success,
-     * bearerbox reports healthy, and every figure in the console stays green.
+     * Once, after a deploy, 700 messages sat undelivered in `send_sms` while the
+     * deployment reported success, bearerbox reported healthy and every figure
+     * in the console stayed green. SQLBox's last log line predated the restart;
+     * restarting SQLBox drained all 700 into the engine at once. It had been
+     * holding a socket that no longer reached anything.
      *
-     * Measured here, not theorised: after one deploy, 700 messages sat in
-     * `send_sms`, SQLBox's last log line was from before the restart, and
-     * restarting SQLBox drained all 700 into the engine at once.
+     * WHAT THE FOLLOW-UP MEASUREMENT SHOWED, which narrows the claim this used
+     * to make. `graceful-restart` was blamed for it, and that is wrong: tested
+     * on 2026-08-26, bearerbox's uptime SPANS a graceful restart — the process
+     * is not re-exec'd — and SQLBox reconnected within a second with both its
+     * connections intact. A bearerbox CONTAINER restart does drop the link, and
+     * SQLBox now exits and is restarted for it within about twelve seconds.
      *
-     * The handover already carried "never recreate bearerbox — SQLBox does not
-     * reconnect". Nobody had connected that to the deploy path, which does the
-     * same thing through a different door.
+     * So the common cases recover on their own, and this check is not the
+     * mechanism that saves them. It stays because it is the only thing that
+     * would notice the uncommon one — a link that stops carrying traffic
+     * without closing, which is what those 700 messages were — and because
+     * "fewer boxes attached than before the reload" is a cheap, honest question
+     * that does not depend on knowing the cause.
      *
      * REPORTED, NOT ROLLED BACK. The configuration is valid and deployed; the
      * problem is a box that has to reattach. Rolling back would reload again
-     * and sever it a second time, so the rollback is the one response that
-     * cannot help. What an operator needs is to be told, in the deploy result,
-     * that delivery is down and that restarting SQLBox is the fix.
+     * and could sever it a second time, so the rollback is the one response
+     * that cannot help. What an operator needs is to be told, in the deploy
+     * result, that delivery is down and that restarting SQLBox is the fix.
      */
     const boxesAfter = await this.boxCount(base, password);
     const boxesLost =
@@ -211,9 +217,10 @@ export class ConfigurationDeploymentService {
         ? {
             warning:
               `${boxesLost} box connection(s) did not reattach after the engine restart. ` +
-              'SQLBox does not reconnect on its own, so OUTBOUND DELIVERY HAS STOPPED — ' +
-              'submissions will queue in send_sms with every other indicator green. ' +
-              'Restart the SQLBox container to restore delivery. The configuration itself ' +
+              'If one of them is SQLBox, OUTBOUND DELIVERY HAS STOPPED — submissions will ' +
+              'queue in send_sms with every other indicator green. SQLBox usually reattaches ' +
+              'within a few seconds on its own; if this warning is still true a minute later, ' +
+              'restart the SQLBox container to restore delivery. The configuration itself ' +
               'deployed successfully and is not the problem.',
           }
         : {}),

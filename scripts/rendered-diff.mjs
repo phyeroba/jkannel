@@ -20,9 +20,24 @@
  * WHAT IT COMPARES, AND WHY THOSE
  * ---------------------------------------------------------------------------
  * The properties that carry a design's identity: type size and weight, colour,
- * background, radius, border and padding. Not layout geometry — width and
- * position legitimately differ between a click-through with three fake rows and
- * a console with a real register, and comparing them would bury the signal.
+ * background, radius, border and padding — plus HEIGHT.
+ *
+ * Width and position are still excluded, and for a good reason: they
+ * legitimately differ between a click-through with three fake rows and a
+ * console with a real register, so comparing them would bury the signal.
+ * Height was excluded on the same reasoning and should not have been. A
+ * control's height is not a consequence of how much data is on the page; it is
+ * the design, and it is the first thing an eye notices.
+ *
+ * That exclusion cost something real. The topbar range select rendered 28px in
+ * the kit and 42px here — half as tall again — because a blanket
+ * `min-height: var(--control-h)` overrode the padding the package sizes
+ * controls with. Every compared property matched except `line-height`, so the
+ * report named a cosmetic difference and stayed silent about the visible one.
+ * "All properties match" is only ever as strong as the property list.
+ *
+ * Height is compared only for elements whose height does not depend on content
+ * length — see HEIGHT_EXEMPT below.
  *
  *   node scripts/rendered-diff.mjs
  */
@@ -56,7 +71,7 @@ const COMPONENTS = [
   { name: 'source note', selector: '.source-note', kitScreen: 'Dashboard', route: '/dashboard/operations' },
 ];
 
-/** The properties that carry identity. Geometry is deliberately excluded. */
+/** The properties that carry identity. Width and position stay excluded. */
 const PROPS = [
   'fontSize',
   'fontWeight',
@@ -70,7 +85,53 @@ const PROPS = [
   'borderTopColor',
   'paddingTop',
   'paddingLeft',
+  'height',
 ];
+
+/**
+ * Components whose height legitimately depends on how much content is in them,
+ * so a height difference says nothing about the design.
+ *
+ * A panel is taller when it holds a real register than when it holds three fake
+ * rows; a table cell is taller when its text wraps, and ours wraps because a
+ * real carrier name is longer than "Acme SMSC" (measured: 129px against the
+ * kit's 72px, on identical padding). A CONTROL is not content-dependent — a
+ * select is the height the design says it is, whatever is in the list — which
+ * is why this is a named list rather than a blanket exclusion of geometry.
+ *
+ * The names must match the `name` field in the component table below. A typo
+ * here does not fail; it silently starts comparing a height that cannot match,
+ * which is why the list is short enough to check by eye.
+ */
+const HEIGHT_EXEMPT = new Set([
+  'panel',
+  'table header cell',
+  'table body cell',
+  'metric card',
+  'source note',
+  'panel heading',
+]);
+
+/**
+ * Are two computed values the same, allowing for sub-pixel layout?
+ *
+ * Height comes back fractional — 41.5938px against 41px — because a line box is
+ * a font metric and fractional positions do not round the same way in two
+ * documents with different surrounding content. Under a pixel is not a design
+ * difference and reporting it teaches everyone to skim the report, which is how
+ * a real difference gets skimmed too.
+ *
+ * A pixel is the threshold rather than a percentage: the mistake worth catching
+ * is the 3px one that turns out to be a line-height, and a percentage would let
+ * that pass on a tall element.
+ */
+function same(prop, want, got) {
+  if (want === got) return true;
+  if (prop !== 'height') return false;
+  const a = Number.parseFloat(want);
+  const b = Number.parseFloat(got);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1;
+}
 
 /**
  * The most REPRESENTATIVE element for a selector, not the first one in the DOM.
@@ -226,8 +287,11 @@ for (const row of rows) {
     );
     continue;
   }
-  const differences = PROPS.filter((p) => row.want[p] !== row.got[p]);
-  compared += PROPS.length;
+  // Height is skipped for the components whose height is a function of their
+  // content rather than of the design — see HEIGHT_EXEMPT.
+  const props = HEIGHT_EXEMPT.has(row.name) ? PROPS.filter((p) => p !== 'height') : PROPS;
+  const differences = props.filter((p) => !same(p, row.want[p], row.got[p]));
+  compared += props.length;
   if (!differences.length) continue;
   diffCount += differences.length;
   console.log(`\n  ${row.name}   (${row.selector})`);

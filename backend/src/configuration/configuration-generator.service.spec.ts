@@ -72,13 +72,68 @@ describe('ConfigurationGeneratorService', () => {
   });
 
   it('accepts either spelling of the username, because they render one directive', () => {
-    const base = { id: 'carrier', type: 'smpp' as const, host: 'h', port: 2775, enabled: true };
+    // systemType is set because an SMPP bind without one is rejected in its own
+    // right; leaving it out here would make this test pass or fail for a reason
+    // that has nothing to do with the username spellings it is about.
+    const base = {
+      id: 'carrier',
+      type: 'smpp' as const,
+      host: 'h',
+      port: 2775,
+      enabled: true,
+      systemType: 'SMPP',
+    };
     expect(service.validate({ ...model, smsc: [{ ...base, username: 'sysid' }] })).toEqual([]);
     expect(
       service.validate({
         ...model,
         smsc: [{ ...base, usernameSecretRef: 'secret://kamex/user' }],
       }),
+    ).toEqual([]);
+  });
+
+  /*
+   * The most expensive of the runtime-validity checks: a missing system-type
+   * does not break one bind, it panics bearerbox in `smsc2_start` and takes the
+   * whole gateway with it. Native validation cannot stand in for this — the file
+   * parses, and the validator answered `valid: true` for the exact config that
+   * put the local engine into a restart loop.
+   */
+  it('rejects an SMPP bind with no system type, which panics the whole engine', () => {
+    const withoutSystemType = {
+      ...model,
+      smsc: [
+        {
+          id: 'carrier',
+          type: 'smpp' as const,
+          host: 'h',
+          port: 2775,
+          enabled: true,
+          username: 'sysid',
+        },
+      ],
+    };
+    expect(service.validate(withoutSystemType)).toContainEqual(
+      expect.stringContaining('requires a system type'),
+    );
+    // Whitespace is not a system type. The engine reads the directive as present
+    // and binds with a blank one, which the carrier rejects.
+    expect(
+      service.validate({
+        ...withoutSystemType,
+        smsc: [{ ...withoutSystemType.smsc[0], systemType: '   ' }],
+      }),
+    ).toContainEqual(expect.stringContaining('requires a system type'));
+    expect(
+      service.validate({
+        ...withoutSystemType,
+        smsc: [{ ...withoutSystemType.smsc[0], systemType: 'SMPP' }],
+      }),
+    ).toEqual([]);
+    // Only SMPP. The HTTP renderer supplies its own default and `fake` has no
+    // bind at all, so demanding it there would reject valid configurations.
+    expect(
+      service.validate({ ...model, smsc: [{ id: 'f', type: 'fake' as const, port: 10000, enabled: true }] }),
     ).toEqual([]);
   });
 

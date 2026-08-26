@@ -317,6 +317,30 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
           />
           <small><span class="mono">smsc-username</span> — the bind username, in clear.</small>
         </label>
+        <!-- System type belongs here, with the rest of the bind identity, and
+             it used to live under "Addressing and encoding" — a group that is
+             COLLAPSED by default and whose note says every field in it is
+             optional. It is not optional: bearerbox refuses to construct an
+             SMPP connection without it and then panics rather than skipping it,
+             so one carrier saved with this blank stops the entire gateway,
+             including SMSCs that have nothing to do with it. That is how the
+             local engine ended up in a restart loop. Required, visible, and
+             next to the two fields an operator copies off the same sheet. -->
+        <label v-if="isSmpp" class="field">
+          <span>System type <em class="req">required</em></span>
+          <input
+            :value="str('systemType')"
+            placeholder="issued by the carrier — e.g. SMPP, VMA"
+            :data-testid="id('systemType')"
+            :aria-invalid="isSmpp && !str('systemType').trim() ? 'true' : undefined"
+            @input="set('systemType', ($event.target as HTMLInputElement).value)"
+          />
+          <small v-if="isSmpp && !str('systemType').trim()" class="req-note">
+            <span class="mono">system-type</span> — required for SMPP. Left blank, bearerbox
+            panics on startup and every other SMSC goes down with it.
+          </small>
+          <small v-else><span class="mono">system-type</span> — part of the bind, set by the carrier.</small>
+        </label>
         <label class="field">
           <span>Username reference (optional)</span>
           <input
@@ -546,16 +570,6 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
       </p>
       <div v-if="open.addressing" class="dialog-grid">
         <label class="field">
-          <span>System type</span>
-          <input
-            :value="str('systemType')"
-            placeholder="e.g. VMA, SMPP"
-            :data-testid="id('systemType')"
-            @input="set('systemType', ($event.target as HTMLInputElement).value)"
-          />
-          <small><span class="mono">system-type</span></small>
-        </label>
-        <label class="field">
           <span>Interface version</span>
           <select
             :value="str('interfaceVersion')"
@@ -752,6 +766,27 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
 }
 .cfg-group .source-note {
   margin: 0 0 10px;
+}
+/* "required", set inside the label rather than as a bare asterisk, because an
+   asterisk only means required to someone who already knows it does. Toned to
+   the kit's warning colour and sized down so it annotates the label instead of
+   competing with it. */
+.smsc-form .req {
+  margin-left: 6px;
+  font-style: normal;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* The hint only turns into a warning while the field is actually empty, so a
+   filled-in form is not shouting at an operator who has already done the thing. */
+.smsc-form .req-note {
+  color: var(--warn);
+}
+.smsc-form input[aria-invalid='true'] {
+  border-color: var(--warn);
 }
 /* The hint under a field. Sized below the label so the field still reads as one
    thing, and given room so a two-line hint does not crowd the next row. */

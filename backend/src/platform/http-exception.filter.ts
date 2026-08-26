@@ -1,4 +1,11 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
 import { ContextRequest } from './request-context.middleware';
 
 interface ErrorResponse {
@@ -35,8 +42,52 @@ function detailsOf(exception: unknown, status: number): string[] {
   return errors.filter((entry): entry is string => typeof entry === 'string').slice(0, 50);
 }
 
+/** Never throws, whatever was thrown — a logger that fails hides the failure. */
+function safeString(value: unknown): string {
+  try {
+    return typeof value === 'string' ? value : JSON.stringify(value) || String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger('UnhandledException');
+
+  /**
+   * Writes the cause of a 5xx to the SERVER LOG, having withheld it from the
+   * response.
+   *
+   * Withholding it from the response is right and stays. Not recording it
+   * anywhere was not a second half of that decision, it was an omission, and it
+   * makes a 500 undiagnosable: the operator gets "An internal error occurred"
+   * and the log has only the access line — status 500, a duration, no reason.
+   *
+   * Found the hard way. A throughput run produced twelve 500s out of five
+   * hundred submissions; the access log recorded twelve 500s at about nine
+   * seconds each and the entire rest of the log had nothing about them. There
+   * was no way to learn what had failed short of adding this.
+   *
+   * The `request_id` in the response body is the correlation id logged here, so
+   * an operator reporting "I got an error, request 9da048…" is enough to find
+   * the stack. That is the trade this restores: the client learns nothing, and
+   * the people running the gateway learn everything.
+   *
+   * 4xx is not logged. Those are statements about the request, the response
+   * already says exactly what was wrong, and logging each one turns a client
+   * looping on a bad payload into a log flood.
+   */
+  private record(exception: unknown, request: ContextRequest, status: number) {
+    if (status < 500) return;
+    const where = `${request.method ?? '?'} ${request.url ?? '?'}`;
+    const context = `${where} correlation=${request.correlationId ?? 'none'}`;
+    if (exception instanceof Error) this.logger.error(`${context}: ${exception.message}`, exception.stack);
+    // A thrown non-Error has no stack to give. Serialise what there is rather
+    // than logging "[object Object]", which is the same dead end one step later.
+    else this.logger.error(`${context}: ${safeString(exception)}`);
+  }
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
     const request = http.getRequest<ContextRequest>();
@@ -49,6 +100,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         : exception instanceof HttpException
           ? exception.message
           : 'Request failed';
+    this.record(exception, request, status);
     response.status(status).json({
       success: false,
       request_id: request.requestId,

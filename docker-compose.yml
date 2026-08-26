@@ -524,11 +524,28 @@ services:
         condition: service_healthy
       kamex-bearerbox:
         condition: service_healthy
+    # `kill -0 1` asked only whether the process exists — and it does exist,
+    # holding a socket that a bearerbox restart already severed. That is exactly
+    # why outbound could stop with every indicator green. This checks the thing
+    # that matters: an ESTABLISHED connection to the bearerbox box port (13001,
+    # which is 32C9 in the hex /proc/net/tcp uses). No curl, nc or ss in this
+    # image, hence /proc.
+    #
+    # Measured 2026-08-26: reports 0 while the link is up and 1 against a port
+    # nothing is connected to, so it discriminates rather than always passing.
+    #
+    # The entrypoint supervises the same condition and EXITS when it is lost, so
+    # `restart: unless-stopped` recovers it — Docker does not restart a container
+    # merely for being unhealthy. This healthcheck is what makes it visible in
+    # `docker ps` and on the console's runtime screen in the meantime.
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
+      test:
+        - CMD-SHELL
+        - "kill -0 1 && awk 'NR>1 && $$4==\"01\" && $$3 ~ /:32C9$$/ {f=1} END{exit f?0:1}' /proc/net/tcp"
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 60s
     security_opt:
       - no-new-privileges:true
     mem_limit: 256m

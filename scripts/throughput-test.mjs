@@ -286,7 +286,46 @@ else if (DIRECTION === 'mt' && receivedAtFarEnd < engineDelta)
     `The engine reports ${engineDelta} sent but the far end saw ${receivedAtFarEnd}. Messages ` +
       'left the engine and did not arrive.',
   );
-else
+else {
   console.log(
     `Sustained ${rate(engineDelta, wall)} msg/s end to end against a ${target.tps ?? '(unset)'} TPS ceiling.`,
   );
+  /*
+   * WHETHER THE CEILING WAS TESTED AT ALL, which is a different question from
+   * whether the run stayed under it.
+   *
+   * An earlier run reported 9.5 msg/s against a 10 TPS ceiling and read as
+   * perfect throttle compliance. It was nothing of the kind: the machine was
+   * busy with a container build, the API could only accept 9.6/s, and the
+   * engine was never asked for more than it delivered. The number that looked
+   * like proof of a working limit was a coincidence of a starved client.
+   *
+   * The limit is only exercised when INTAKE outruns it. Below that, the run
+   * says nothing about the ceiling either way, and must not imply otherwise.
+   */
+  const ceiling = Number(target.tps);
+  const engineRate = Number(rate(engineDelta, wall));
+  const intakeRate = Number(rate(accepted, wall));
+  if (!Number.isFinite(ceiling) || ceiling <= 0) {
+    console.log('No TPS ceiling is configured on this SMSC, so none was tested.');
+  } else if (intakeRate <= ceiling * 1.1) {
+    console.log(
+      `Intake only reached ${intakeRate} msg/s, at or below the ${ceiling} TPS ceiling, so the ` +
+        'ceiling was never pushed against. This run does NOT show the limit working — re-run ' +
+        'on an idle machine, or with more submitters, before reading anything into it.',
+    );
+  } else if (engineRate > ceiling * 1.2) {
+    console.log(
+      `THE CEILING IS NOT BEING ENFORCED: intake pushed ${intakeRate} msg/s and the engine ` +
+        `passed ${engineRate} msg/s through an SMSC configured for ${ceiling} TPS. Note that ` +
+        'Kamex implements throughput shaping in the individual SMSC drivers, and the `fake` ' +
+        'driver does not — so a fake SMSC is the wrong instrument for testing a rate limit, ' +
+        'however useful it is for testing delivery.',
+    );
+  } else {
+    console.log(
+      `Intake pushed ${intakeRate} msg/s and the engine held to ${engineRate} against a ` +
+        `${ceiling} TPS ceiling, so the limit is being enforced.`,
+    );
+  }
+}

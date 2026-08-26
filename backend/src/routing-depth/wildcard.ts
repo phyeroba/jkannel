@@ -40,6 +40,36 @@ export const MAX_PATTERN_LENGTH = 512;
 /** Ceiling on alternatives in one pattern. `|`-separated, so easy to abuse. */
 export const MAX_ALTERNATIVES = 64;
 
+/**
+ * Splits on `|` and trims each alternative.
+ *
+ * THE TRIM IS THE POINT. Written on one line, the natural way to space a long
+ * pattern out is around the separator:
+ *
+ *     25677* | 25678* | 25676* | 25679*
+ *
+ * Without trimming, the second alternative is " 25678*" — an alternative that
+ * begins with a literal space, which no MSISDN and no sender id ever does. So
+ * the pattern matched only its FIRST branch and silently dropped the other
+ * three, and `describeWildcardProblem` reported nothing wrong, because nothing
+ * was structurally wrong. Measured: `25677* | 25678* | 25676* | 25679*` against
+ * `256772123456` returned no match.
+ *
+ * That is the exact failure this module's own header calls the worst outcome —
+ * a rule that never matches, with traffic flowing past a block nobody notices
+ * is broken. It is worse for being invisible: the pattern reads correctly to a
+ * human, and the four-branch form is the one an operator is most likely to type
+ * precisely because it is the readable one.
+ *
+ * Only the EDGES of each alternative are trimmed, so an interior space is
+ * preserved — a sender id of "MY BANK" still matches `MY BANK` and `MY B*`.
+ * Nothing is lost: a pattern that genuinely needs a leading or trailing space
+ * cannot be expressed, and no MSISDN, short code or sender id has one.
+ */
+function splitAlternatives(pattern: string): string[] {
+  return pattern.split('|').map((alternative) => alternative.trim());
+}
+
 export interface WildcardProblem {
   code: 'empty' | 'too-long' | 'too-many-alternatives' | 'empty-alternative';
   message: string;
@@ -61,7 +91,7 @@ export function describeWildcardProblem(pattern: string): WildcardProblem | null
       code: 'too-long',
       message: `A pattern may be at most ${MAX_PATTERN_LENGTH} characters; this one is ${text.length}.`,
     };
-  const alternatives = text.split('|');
+  const alternatives = splitAlternatives(text);
   if (alternatives.length > MAX_ALTERNATIVES)
     return {
       code: 'too-many-alternatives',
@@ -115,10 +145,7 @@ function compileAlternative(alternative: string): string {
 export function compileWildcard(pattern: string, caseSensitive = false): RegExp {
   const problem = describeWildcardProblem(pattern);
   if (problem) throw new Error(problem.message);
-  const source = String(pattern)
-    .split('|')
-    .map(compileAlternative)
-    .join('|');
+  const source = splitAlternatives(String(pattern)).map(compileAlternative).join('|');
   return new RegExp(`^(?:${source})$`, caseSensitive ? '' : 'i');
 }
 
@@ -155,7 +182,7 @@ export function describeWildcard(pattern: string): string {
   const text = String(pattern ?? '').trim();
   if (!text) return 'nothing';
   if (text === '*') return 'anything';
-  const parts = text.split('|').map((alternative) => {
+  const parts = splitAlternatives(text).map((alternative) => {
     if (alternative === '*') return 'anything';
     if (alternative.endsWith('*') && !alternative.slice(0, -1).match(/[*#$]/))
       return `anything starting with "${alternative.slice(0, -1)}"`;

@@ -162,6 +162,59 @@
   --control-pad-x: 10px;
 }
 
+/* ---------------------------------------------------------------------------
+   THE CONTROL-HEIGHT FLOOR MUST NOT REACH CONTROLS THE DESIGN SYSTEM SIZES
+
+   `design-authority.css` gives every input, select and textarea
+   `padding: 0 var(--control-pad-x)` and `min-height: var(--control-h)`. That
+   pairing is self-consistent — zero vertical padding, so the floor is what
+   creates the height — and it is how a bare `<input>` the design system does
+   not name still matches the fields beside it.
+
+   It is wrong the moment the design system HAS named the control. The package
+   sizes by padding and sets no min-height anywhere, so a compact control is
+   compact by having small padding. The floor then overrides that and nothing
+   else does, leaving the padding correct and the height not.
+
+   Measured against the rendered kit: the topbar range select is 28px there and
+   was 42px here — half as tall again — on identical padding (5px 8px) and an
+   identical 12px font. Every compact control in the package had the same 14px
+   added to it.
+
+   `rendered-diff.mjs` did not catch this. It compares typography, colour,
+   border, radius and padding, and deliberately not geometry, so it reported the
+   `line-height` difference that came along for the ride and said nothing about
+   the height. The comparison has since been extended; the lesson is that
+   "every compared property matches" is only as strong as the property list.
+
+   So: where the design system states a control's padding, the floor is released
+   and the padding decides, exactly as in the kit. Fields sized `padding: 10px`
+   at the 15px body size still land at ~42px on their own, so nothing that was
+   right changes.
+   --------------------------------------------------------------------------- */
+.filter-search input,
+.filter-select select,
+.filter-select input,
+.composer input,
+.field input,
+.field select,
+.field textarea,
+.topbar-range select {
+  min-height: 0;
+  /* `normal`, which is what the kit renders, and the reason is the same story
+     one layer down. `base.css` gives every control `font: inherit`, and the
+     `font` shorthand carries LINE-HEIGHT as well as family and size — so a
+     control silently took the body's 1.6 and leaded its text at 19.2px against
+     a 12px font.
+
+     That was reported as a `line-height` difference and read as cosmetic, on
+     the grounds that a select's height comes from padding. It does not: with
+     the min-height floor removed the box is padding + border + content, and the
+     content box is the line box. 5 + 5 + 2 + 19.2 came to 31.2px where the kit
+     is 5 + 5 + 2 + 16 = 28. The "cosmetic" property WAS the height. */
+  line-height: normal;
+}
+
 /* Re-made room for the custom chevron, which the vendored `padding` shorthand
    resets. Without this the longest option label runs under the arrow. */
 .filter-select select,
@@ -397,11 +450,33 @@ h3 {
    SMSC register stood about 200px tall — a four-row table filling the screen.
    The cell was doing what CSS told it to; nothing had told it anything.
 
-   `flex-wrap` rather than `nowrap`: on a narrow viewport the buttons should
-   still wrap rather than force a horizontal scrollbar across the whole table.
    `width: 1%` with `white-space: nowrap` is the standard way to make a table
    column shrink to its content, so the action column stops stealing width from
    the columns carrying the data.
+
+   AND THAT PAIRING IS WHY THE FIRST FIX DID NOT WORK. `display: flex` with
+   `flex-wrap: wrap` was chosen so a narrow viewport would wrap the buttons
+   rather than force a horizontal scrollbar. Reasonable alone — but a WRAPPING
+   flex container's minimum content width is its widest single ITEM, not the sum
+   of them, so `width: 1%` was free to shrink the column to one button and stack
+   the rest. `white-space: nowrap` does not stop it: that governs text, not flex
+   wrapping.
+
+   Measured by `scripts/row-actions-audit.mjs`, which renders every route and
+   compares the buttons' real bounding boxes: 39 of 40 multi-button cells were
+   stacked, every one of them in a cell exactly 36px wide — one button. The
+   Configuration grid put five buttons on five lines. Reading the CSS could not
+   find this; both declarations are individually correct and only the pair is
+   wrong.
+
+   So a table cell gets `nowrap`. Its min-content width then becomes the sum of
+   the buttons, `width: 1%` shrinks the column to exactly that, and the row is
+   one line high. The wrap is kept for `.row-actions` used as a plain div
+   (Analytics uses it for a toolbar), where nothing constrains the width and
+   wrapping is the right behaviour.
+
+   The narrow-viewport worry the wrap was meant to answer is already handled:
+   grids sit inside `.table-wrap`, which scrolls horizontally on its own.
    --------------------------------------------------------------------------- */
 td.row-actions {
   width: 1%;
@@ -412,6 +487,9 @@ td.row-actions {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-3);
+}
+td.row-actions {
+  flex-wrap: nowrap;
 }
 /* Row buttons are secondary to the row itself: the kit sizes an in-table
    control down from the page's primary actions. */

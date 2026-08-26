@@ -17,6 +17,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "20px",
       "paddingLeft": "20px",
+      "height": "1097.58px",
       "__classes": "panel"
     },
     "got": {
@@ -32,6 +33,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
       "paddingLeft": "14px",
+      "height": "134px",
       "__classes": "toolbar panel grid-toolbar"
     }
   },
@@ -53,6 +55,7 @@
       "borderTopColor": "rgb(68, 64, 80)",
       "paddingTop": "0px",
       "paddingLeft": "0px",
+      "height": "27.1875px",
       "__classes": "(none)"
     },
     "got": {
@@ -68,6 +71,7 @@
       "borderTopColor": "rgb(68, 64, 80)",
       "paddingTop": "0px",
       "paddingLeft": "0px",
+      "height": "27.1875px",
       "__classes": "(none)"
     }
   },
@@ -89,6 +93,7 @@
       "borderTopColor": "rgb(26, 134, 200)",
       "paddingTop": "10px",
       "paddingLeft": "15px",
+      "height": "46px",
       "__classes": "primary-button"
     },
     "got": {
@@ -104,6 +109,7 @@
       "borderTopColor": "rgb(26, 134, 200)",
       "paddingTop": "10px",
       "paddingLeft": "15px",
+      "height": "46px",
       "__classes": "primary-button"
     }
   },
@@ -126,6 +132,7 @@
       "borderTopColor": "rgb(235, 233, 241)",
       "paddingTop": "10px",
       "paddingLeft": "15px",
+      "height": "46px",
       "__classes": "secondary-button"
     }
   },
@@ -147,6 +154,7 @@
       "borderTopColor": "rgb(165, 162, 173)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "46.8906px",
       "__classes": "(none)"
     },
     "got": {
@@ -162,6 +170,7 @@
       "borderTopColor": "rgb(165, 162, 173)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "46.8906px",
       "__classes": "(none)"
     }
   },
@@ -183,6 +192,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "72.1875px",
       "__classes": "(none)"
     },
     "got": {
@@ -198,6 +208,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "129.156px",
       "__classes": "(none)"
     }
   },
@@ -219,6 +230,7 @@
       "borderTopColor": "rgb(234, 84, 85)",
       "paddingTop": "4px",
       "paddingLeft": "8px",
+      "height": "27.1875px",
       "__classes": "status-badge bad"
     },
     "got": {
@@ -234,6 +246,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "4px",
       "paddingLeft": "8px",
+      "height": "27.1875px",
       "__classes": "status-badge"
     }
   },
@@ -255,6 +268,7 @@
       "borderTopColor": "rgb(255, 255, 255)",
       "paddingTop": "9px",
       "paddingLeft": "12px",
+      "height": "36.2188px",
       "__classes": "active"
     },
     "got": {
@@ -270,6 +284,7 @@
       "borderTopColor": "rgb(207, 211, 236)",
       "paddingTop": "9px",
       "paddingLeft": "12px",
+      "height": "36.2188px",
       "__classes": "(none)"
     }
   },
@@ -291,12 +306,13 @@
       "borderTopColor": "rgb(219, 218, 222)",
       "paddingTop": "10px",
       "paddingLeft": "10px",
+      "height": "39px",
       "__classes": "(none)"
     },
     "got": {
       "fontSize": "13px",
       "fontWeight": "400",
-      "lineHeight": "20.8px",
+      "lineHeight": "normal",
       "letterSpacing": "normal",
       "textTransform": "none",
       "color": "rgb(68, 64, 80)",
@@ -306,6 +322,7 @@
       "borderTopColor": "rgb(219, 218, 222)",
       "paddingTop": "10px",
       "paddingLeft": "10px",
+      "height": "39px",
       "__classes": "(none)"
     }
   },
@@ -327,6 +344,7 @@
       "borderTopColor": "rgb(235, 233, 241)",
       "paddingTop": "9px",
       "paddingLeft": "13px",
+      "height": "41.5938px",
       "__classes": "chip"
     },
     "got": {
@@ -342,6 +360,7 @@
       "borderTopColor": "rgb(235, 233, 241)",
       "paddingTop": "9px",
       "paddingLeft": "13px",
+      "height": "41px",
       "__classes": "chip"
     }
   },
@@ -363,6 +382,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "67.0938px",
       "__classes": "metric-card"
     },
     "got": {
@@ -378,6 +398,7 @@
       "borderTopColor": "rgb(111, 107, 125)",
       "paddingTop": "14px",
       "paddingLeft": "16px",
+      "height": "87.5938px",
       "__classes": "metric-card metric-card-link"
     }
   },

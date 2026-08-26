@@ -260,7 +260,13 @@ describe('ConfigurationDeploymentService', () => {
     const result: any = await runDeploy(new ConfigurationDeploymentService(), 'group = core\n');
     expect(result).toMatchObject({ written: true, reloaded: true, boxesBefore: 2, boxesAfter: 1 });
     expect(result.warning).toContain('OUTBOUND DELIVERY HAS STOPPED');
-    expect(result.warning).toContain('Restart the SQLBox container');
+    // The remedy has to be in the warning itself. It is now hedged with "if it
+    // is still true a minute later", because the measurement on 2026-08-26
+    // showed SQLBox reattaching on its own within about twelve seconds after a
+    // bearerbox container restart — telling an operator to intervene during a
+    // recovery that is already happening is its own kind of wrong answer.
+    expect(result.warning).toContain('restart the SQLBox container');
+    expect(result.warning).toContain('on its own');
     // Deployed, not rolled back: one rename.
     expect(mockedRename).toHaveBeenCalledTimes(1);
   });

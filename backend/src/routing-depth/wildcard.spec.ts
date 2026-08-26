@@ -171,3 +171,43 @@ describe('describeWildcard', () => {
     expect(describeWildcard('256##*77')).toBe('the pattern "256##*77"');
   });
 });
+
+describe('spacing around the | separator', () => {
+  /*
+   * The readable way to write a long pattern is with spaces around the pipes,
+   * and until this was fixed that silently disabled every branch but the first:
+   * " 25678*" is an alternative starting with a literal space, which no MSISDN
+   * has. Nothing reported a problem, because structurally there was none.
+   */
+  const SPACED = '25677* | 25678* | 25676* | 25679*';
+  const TIGHT = '25677*|25678*|25676*|25679*';
+
+  it('treats a spaced pattern exactly like a tight one', () => {
+    for (const msisdn of ['256772123456', '256782123456', '256762123456', '256792123456']) {
+      expect(matchesWildcard(msisdn, SPACED)).toBe(true);
+      expect(matchesWildcard(msisdn, TIGHT)).toBe(true);
+    }
+  });
+
+  it('still does not match a number outside the set', () => {
+    // Guards the opposite failure: trimming must not widen the pattern.
+    expect(matchesWildcard('256752123456', SPACED)).toBe(false);
+    expect(matchesWildcard('256702123456', SPACED)).toBe(false);
+  });
+
+  it('reports a whitespace-only alternative rather than accepting it', () => {
+    // "a|  |b" used to be three valid alternatives, the middle one matching a
+    // pair of spaces. Trimmed, it is empty — and an empty alternative matches
+    // everything, which is the one outcome that must never happen quietly.
+    expect(describeWildcardProblem('25677*|   |25678*')?.code).toBe('empty-alternative');
+  });
+
+  it('keeps spaces INSIDE an alternative, which a sender id can have', () => {
+    expect(matchesWildcard('MY BANK', 'MY BANK')).toBe(true);
+    expect(matchesWildcard('MY BANK', 'MY B*')).toBe(true);
+  });
+
+  it('describes a spaced pattern without the stray spaces', () => {
+    expect(describeWildcard(SPACED)).toBe(describeWildcard(TIGHT));
+  });
+});

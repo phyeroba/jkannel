@@ -108,6 +108,7 @@ export const PARALLEL_CARRIER: EngineConfiguration = {
     {
       id: 'carrier-primary',
       type: 'smpp',
+      systemType: 'SMPP',
       host: 'smpp.primary.example',
       port: 2775,
       enabled: true,
@@ -133,6 +134,7 @@ export const PARALLEL_CARRIER: EngineConfiguration = {
     {
       id: 'carrier-standby',
       type: 'smpp',
+      systemType: 'SMPP',
       host: 'smpp.standby.example',
       port: 2775,
       enabled: true,
@@ -168,6 +170,7 @@ export const MULTI_SMSC: EngineConfiguration = {
     {
       id: 'zeta-transmitter',
       type: 'smpp',
+      systemType: 'SMPP',
       host: 'smpp.zeta.example',
       port: 2775,
       enabled: true,
@@ -181,6 +184,7 @@ export const MULTI_SMSC: EngineConfiguration = {
     {
       id: 'alpha-receiver',
       type: 'smpp',
+      systemType: 'SMPP',
       host: 'smpp.alpha.example',
       port: 2775,
       receivePort: 2776,
@@ -204,6 +208,7 @@ export const MULTI_SMSC: EngineConfiguration = {
     {
       id: 'retired-carrier',
       type: 'smpp',
+      systemType: 'SMPP',
       host: 'smpp.retired.example',
       port: 2775,
       enabled: false,

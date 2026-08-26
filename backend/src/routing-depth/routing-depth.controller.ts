@@ -16,6 +16,7 @@ import { PermissionsGuard, RequirePermissions } from '../security/permissions.gu
 import { Actor, RouteInput, RoutingDepthRepository, TargetInput } from './routing-depth.repository';
 import { RoutingDepthService } from './routing-depth.service';
 import { RouteType, SelectionStrategy } from './route-selection';
+import { describeWildcardProblem } from './wildcard';
 
 type Request = AuthenticatedRequest;
 const actor = (r: Request): Actor => ({
@@ -23,7 +24,27 @@ const actor = (r: Request): Actor => ({
   userId: r.principal!.userId,
 });
 
-const ROUTE_TYPES: RouteType[] = ['static', 'prefix', 'country', 'operator', 'weighted'];
+/*
+ * `wildcard` was missing from this list, and that alone made the whole wildcard
+ * feature unreachable.
+ *
+ * Everything else for it was already in place: `wildcard.ts` implements the
+ * grammar, `route-selection.ts` has a `case 'wildcard'` with its own specificity
+ * scoring, both are covered by tests, and the `routing_rules` CHECK constraint
+ * in the database already permits the value. One array in one controller was the
+ * only thing standing between an operator and `25677*|25678*|25676*|25679*`, and
+ * the error it produced — "routeType must be one of static, prefix, country,
+ * operator, weighted" — read like a deliberate design decision rather than an
+ * omission, so nothing about it invited a second look.
+ */
+const ROUTE_TYPES: RouteType[] = [
+  'static',
+  'prefix',
+  'country',
+  'operator',
+  'weighted',
+  'wildcard',
+];
 const STRATEGIES: SelectionStrategy[] = [
   'priority',
   'least-cost',
@@ -247,6 +268,35 @@ export class RoutingDepthController {
     if ((value.routeType ?? (requireCore ? 'static' : undefined)) === 'weighted') {
       if (requireCore && (!value.targets || value.targets.length === 0))
         throw new BadRequestException('a weighted route requires at least one target');
+    }
+    /*
+     * A wildcard route's pattern is checked HERE, not only at match time.
+     *
+     * `matchesWildcard` swallows an invalid pattern and returns false, which is
+     * the right call on the send path — a broken block rule that blocks nothing
+     * beats one that blocks everything. But it means a bad pattern is saved
+     * without complaint and then quietly matches no traffic for as long as
+     * nobody looks. `wildcard.ts` names that outcome as the worst one, and the
+     * moment the operator presses Save is the only moment they can act on it.
+     *
+     * `sender` is checked too, on every route type: the selector matches it as
+     * a wildcard regardless of the route's type, so the same silent-miss applies
+     * to a sender constraint on an ordinary prefix route.
+     */
+    const declaredType = value.routeType ?? (requireCore ? 'static' : undefined);
+    if (declaredType === 'wildcard') {
+      const pattern = value.matchPrefix ?? value.destinationPrefix;
+      if (requireCore && !pattern)
+        throw new BadRequestException(
+          'a wildcard route requires a pattern in matchPrefix — for example ' +
+            '25677*|25678*|25676*|25679*',
+        );
+      const problem = pattern ? describeWildcardProblem(pattern) : null;
+      if (problem) throw new BadRequestException(`matchPrefix: ${problem.message}`);
+    }
+    if (value.sender) {
+      const problem = describeWildcardProblem(value.sender);
+      if (problem) throw new BadRequestException(`sender: ${problem.message}`);
     }
     return value;
   }

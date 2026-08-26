@@ -321,7 +321,8 @@ export class ConfigurationGeneratorService {
        * PARSES, not that every group it contains can start. Anything the engine
        * only discovers at runtime has to be caught here instead.
        */
-      // Both checks below apply to ENABLED links only. A disabled SMSC is not
+      // The three runtime-validity checks below apply to ENABLED links only. A
+      // disabled SMSC is not
       // rendered at all, so its runtime validity cannot matter — and refusing
       // the whole deployment over a half-configured carrier somebody switched
       // off is the opposite of helpful: it makes disabling a broken link stop
@@ -343,6 +344,43 @@ export class ConfigurationGeneratorService {
         errors.push(
           `${smsc.id} is an SMPP bind and requires a system id or a username secret reference — ` +
             'without one the engine logs "Configuration file does not specify username" and never binds',
+        );
+      /*
+       * An SMPP bind needs a SYSTEM TYPE, and this one is not like the two
+       * above: it does not break the link, it stops the entire gateway.
+       *
+       * `smsc_smpp_create()` treats a missing `system-type` as a construction
+       * failure rather than a default — it logs "SMPP: Configuration file
+       * doesn't specify system-type." and returns NULL. `smsc2_start()` does not
+       * skip a connection it could not build; it calls `panic()`. So one SMPP
+       * carrier saved without a system type takes down every OTHER carrier too,
+       * including the fake links that were already listening, and bearerbox then
+       * restart-loops on the same file.
+       *
+       * MEASURED, and it is the reason this check exists: the local engine sat
+       * in "Restarting (1)" with three healthy fake SMSCs in the same file, and
+       * the only distinguishing line in a backtrace-filled log was that one
+       * error. The console had accepted the carrier record with system type
+       * blank, and nothing between the form and the panic disagreed.
+       *
+       * NATIVE VALIDATION DOES NOT CATCH THIS — verified by posting the exact
+       * file that panics to the validator, which answered `valid: true`. That is
+       * not a bug in the validator: it runs a real bearerbox PARSE, and the file
+       * genuinely parses. `smsc2_start` runs afterwards, and by then the process
+       * is the production one. Everything the engine only discovers at start has
+       * to be caught here, and this is the most expensive member of that family
+       * found so far.
+       *
+       * No default is emitted instead. "kannel" is what the HTTP renderer falls
+       * back to, but on a real SMPP bind the system type is assigned by the
+       * carrier and a wrong one is rejected at bind — which would trade a loud
+       * failure at deploy for a quiet one at 3am against the carrier's ESME.
+       */
+      if (smsc.enabled && smsc.type === 'smpp' && !smsc.systemType?.trim())
+        errors.push(
+          `${smsc.id} is an SMPP bind and requires a system type — without one bearerbox ` +
+            'panics on startup and takes every other SMSC down with it, not just this one. ' +
+            'The value is assigned by the carrier (commonly "SMPP", "VMA" or a per-account string).',
         );
       if (smsc.usernameSecretRef && !smsc.usernameSecretRef.startsWith('secret://'))
         errors.push(`${smsc.id} credential must be a secret reference`);
