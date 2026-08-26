@@ -114,28 +114,6 @@ export class BackupDrController {
     });
   }
 
-  /**
-   * One backup.
-   *
-   * The repository has had `getBackup` all along; nothing exposed it, so the
-   * register offered Verify and Restore against a row an operator could never
-   * open. Restore is the most consequential button in this console and the
-   * decision behind it — which scope, how old, whether the artifact was ever
-   * verified, and where it actually lives — was only ever visible as a table
-   * row.
-   *
-   * Declared before `:id/verify` and `:id/restore` in the file but after the
-   * literal `export.*` and `schedules` paths, so no static segment is captured.
-   */
-  @Get(':id') @RequirePermissions('system.view') async get(
-    @Req() r: Request,
-    @Param('id') id: string,
-  ) {
-    const record = await this.repository.getBackup(actor(r), id);
-    if (!record) throw new NotFoundException('Backup not found');
-    return record;
-  }
-
   @Post(':id/verify') @RequirePermissions('system.manage') verify(
     @Req() r: Request,
     @Param('id') id: string,
@@ -266,5 +244,42 @@ export class BackupDrController {
     if (!row) throw new NotFoundException('Backup schedule not found');
     setEtagHeader(res, row);
     return row;
+  }
+
+  /**
+   * One backup.
+   *
+   * The repository has had `getBackup` all along; nothing exposed it, so the
+   * register offered Verify and Restore against a row an operator could never
+   * open. Restore is the most consequential button in this console and the
+   * decision behind it — which scope, how old, whether the artifact was ever
+   * verified, and where it actually lives — was only ever visible as a table
+   * row.
+   *
+   * DECLARED LAST, AND THAT IS NOT A STYLE CHOICE.
+   *
+   * Nest matches routes in declaration order, so `:id` swallows every literal
+   * path declared below it. This used to sit above `@Get('schedules')` with a
+   * comment asserting the opposite — "after the literal export.* and schedules
+   * paths, so no static segment is captured" — which was simply not true of the
+   * file it was written in: `schedules` was thirty lines further down.
+   *
+   * The result was that the Backup screen's "Schedules & retention" panel
+   * showed "An internal error occurred" on every visit. `GET /backup-dr/schedules`
+   * reached THIS handler, `schedules` was passed to a uuid column, and Postgres
+   * answered `invalid input syntax for type uuid: "schedules"`. It was a 500
+   * with no cause recorded anywhere until the exception filter started logging
+   * them, and then it named itself on the first try.
+   *
+   * So: every literal path above, the catch-all parameter last. Adding a new
+   * literal route below this line reintroduces the same bug silently.
+   */
+  @Get(':id') @RequirePermissions('system.view') async get(
+    @Req() r: Request,
+    @Param('id') id: string,
+  ) {
+    const record = await this.repository.getBackup(actor(r), id);
+    if (!record) throw new NotFoundException('Backup not found');
+    return record;
   }
 }

@@ -33,7 +33,22 @@ export interface LogQuery {
   limit?: number;
   /** How many of the newest matches to skip, so the result can be paged. */
   offset?: number;
+  /** Which column to order by. Defaults to time. */
+  sort?: LogSortField;
+  /** Defaults to `desc`, which for time means newest first. */
+  direction?: 'asc' | 'desc';
 }
+
+/** The columns the Entries grid can order by. */
+export type LogSortField = 'time' | 'level' | 'component' | 'route' | 'status' | 'duration';
+export const LOG_SORT_FIELDS: readonly LogSortField[] = [
+  'time',
+  'level',
+  'component',
+  'route',
+  'status',
+  'duration',
+];
 
 export interface LogQueryResult {
   items: LogEntry[];
@@ -70,6 +85,56 @@ const NOTICE =
   'In-memory ring buffer: newest-first, capped, and local to THIS process only. ' +
   'It is not durable — entries are lost on restart, are not shared between replicas, ' +
   'and older lines are evicted once the buffer wraps. Ship stdout to a log store for retention.';
+
+/**
+ * Orders the whole match set BEFORE it is paged.
+ *
+ * Sorting has to happen here rather than in the browser. Sorting only the rows
+ * the browser happens to be holding orders one page against itself, so "sort by
+ * duration descending" would show the slowest request ON PAGE FOUR rather than
+ * the slowest request there is — which is worse than no sorting at all, because
+ * it looks like an answer.
+ *
+ * `level` orders by SEVERITY, not alphabetically. Sorting log levels as strings
+ * puts debug above error and warn above trace, which is exactly backwards from
+ * what anybody sorting by level wants.
+ *
+ * Ties break on the original buffer position, so equal keys keep a stable,
+ * chronological order and a row cannot swap pages between two identical
+ * requests for the same page.
+ */
+function sortEntries(entries: LogEntry[], field: LogSortField, direction: 'asc' | 'desc') {
+  const sign = direction === 'asc' ? 1 : -1;
+  const key = (entry: LogEntry): number | string => {
+    switch (field) {
+      case 'level':
+        return LOG_LEVELS[entry.level] ?? 0;
+      case 'component':
+        return (entry.context ?? '').toLowerCase();
+      case 'route':
+        return (entry.route ?? '').toLowerCase();
+      case 'status':
+        return entry.status ?? -1;
+      case 'duration':
+        return entry.durationMs ?? -1;
+      case 'time':
+      default: {
+        const at = Date.parse(entry.timestamp);
+        return Number.isNaN(at) ? 0 : at;
+      }
+    }
+  };
+  // `index` is captured first so the tie-break is the buffer's own order rather
+  // than whatever order the sort happens to visit equal elements in.
+  return entries
+    .map((entry, index) => ({ entry, index, key: key(entry) }))
+    .sort((a, b) => {
+      if (a.key < b.key) return -1 * sign;
+      if (a.key > b.key) return 1 * sign;
+      return (a.index - b.index) * sign;
+    })
+    .map((row) => row.entry);
+}
 
 /**
  * A bounded, newest-first ring buffer of the log lines this process emitted.
@@ -157,8 +222,8 @@ export class LogBufferService {
      * say what it is a page OF rather than implying a stable total.
      */
     const offset = Math.max(Math.floor(filter.offset ?? 0), 0);
-    const newestFirst = matches.slice().reverse();
-    const items = newestFirst.slice(offset, offset + limit);
+    const ordered = sortEntries(matches, filter.sort ?? 'time', filter.direction ?? 'desc');
+    const items = ordered.slice(offset, offset + limit);
     return {
       items,
       matched: matches.length,

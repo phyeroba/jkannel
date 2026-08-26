@@ -135,6 +135,40 @@ const entries = ref<LogEntry[]>([]);
  * narrow the filters, which was honest about the limitation and no help at all.
  */
 const offset = ref(0);
+/*
+ * Sorting, sent to the SERVER rather than applied here.
+ *
+ * Sorting the rows the browser is holding orders one page against itself, so
+ * "slowest first" would show the slowest request on the page you happen to be
+ * on rather than the slowest there is. That is worse than no sorting, because
+ * it looks like an answer. The buffer orders the whole match set and then
+ * pages it.
+ */
+const SORTABLE: { key: string; label: string }[] = [
+  { key: 'time', label: 'Time' },
+  { key: 'level', label: 'Level' },
+  { key: 'component', label: 'Component' },
+  { key: 'route', label: 'Route' },
+  { key: 'status', label: 'Status' },
+  { key: 'duration', label: 'Duration' },
+];
+const sortField = ref('time');
+const sortDirection = ref<'asc' | 'desc'>('desc');
+function toggleSort(field: string) {
+  if (sortField.value === field) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortField.value = field;
+    // Time reads newest-first and everything else reads largest-first, which is
+    // what somebody sorting by duration or status is looking for.
+    sortDirection.value = 'desc';
+  }
+  // Back to page one: page 4 of the old order is not page 4 of the new one.
+  offset.value = 0;
+  void search();
+}
+const sortIndicator = (field: string) =>
+  sortField.value === field ? (sortDirection.value === 'asc' ? ' ↑' : ' ↓') : '';
 /** Any filter change starts again at page one; page 4 of a new query is a lie. */
 function searchFromStart() {
   offset.value = 0;
@@ -192,6 +226,8 @@ function buildParams() {
   // treats a missing offset as "the newest slice" rather than "page one of a
   // pageable result".
   params.set('offset', String(offset.value));
+  params.set('sort', sortField.value);
+  params.set('direction', sortDirection.value);
   return params;
 }
 
@@ -593,15 +629,46 @@ onMounted(() => {
         <div class="table-wrap">
           <table>
             <thead>
+              <!--
+                Only the columns the SERVER can order by are buttons. A header
+                that looks sortable and is not is a worse lie than one that
+                plainly is not: Object is derived from three different fields
+                depending on the line, Message is free text nobody sorts, and
+                Correlation is an opaque id.
+              -->
               <tr>
-                <th scope="col">Time</th>
-                <th scope="col">Level</th>
-                <th scope="col">Component</th>
+                <th scope="col" :aria-sort="sortField === 'time' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-time" @click="toggleSort('time')">
+                    Time{{ sortIndicator('time') }}
+                  </button>
+                </th>
+                <th scope="col" :aria-sort="sortField === 'level' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-level" @click="toggleSort('level')">
+                    Level{{ sortIndicator('level') }}
+                  </button>
+                </th>
+                <th scope="col" :aria-sort="sortField === 'component' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-component" @click="toggleSort('component')">
+                    Component{{ sortIndicator('component') }}
+                  </button>
+                </th>
                 <th scope="col">Object</th>
                 <th scope="col">Message</th>
-                <th scope="col">Route</th>
-                <th scope="col">Status</th>
-                <th scope="col">Duration</th>
+                <th scope="col" :aria-sort="sortField === 'route' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-route" @click="toggleSort('route')">
+                    Route{{ sortIndicator('route') }}
+                  </button>
+                </th>
+                <th scope="col" :aria-sort="sortField === 'status' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-status" @click="toggleSort('status')">
+                    Status{{ sortIndicator('status') }}
+                  </button>
+                </th>
+                <th scope="col" :aria-sort="sortField === 'duration' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
+                  <button type="button" class="th-sort" data-testid="log-sort-duration" @click="toggleSort('duration')">
+                    Duration{{ sortIndicator('duration') }}
+                  </button>
+                </th>
                 <th scope="col">Correlation</th>
               </tr>
             </thead>
@@ -747,6 +814,24 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* A sortable header is a button so it is reachable by keyboard and announced as
+   one, but it must not LOOK like a button — the kit's table head is a quiet
+   band and a row of controls in it would shout. So it inherits the `th`'s own
+   type entirely and only gains a pointer and a hover tint. */
+.th-sort {
+  all: unset;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.th-sort:hover {
+  color: var(--text-strong);
+}
+.th-sort:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
 /* The filter group. A `fieldset` rather than a `div` because it IS one — the
    legend names what the controls do collectively, which is the thing three
    unlabelled toolbar rows could not say. Its own border is removed and the rule

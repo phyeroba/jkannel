@@ -25,6 +25,40 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+/**
+ * The message an operator should actually read.
+ *
+ * A 429 from the auth throttle answers "Too many authentication attempts. Try
+ * again later." — accurate, and reported from the Reports and API Gateway
+ * screens as if THOSE were broken. They are not: the limiter counts failed
+ * SIGN-INS and failed token refreshes, and once it trips it blocks the refresh
+ * that every screen depends on. So whichever screen an operator is looking at
+ * is the one that appears to fail, and the real cause is somewhere they are not
+ * looking.
+ *
+ * The server already knows how long it will last — `retryAfterSeconds` in the
+ * body, `Retry-After` on the response — and nothing was reading either. "Try
+ * again later" with no idea whether later means a minute or a quarter of an
+ * hour is the difference between waiting and filing a bug.
+ */
+function describeFailure(response: Response, body: any): string {
+  const fallback = body.message ?? `Request failed (${response.status})`;
+  if (response.status !== 429) return fallback;
+  const seconds = Number(body.retryAfterSeconds ?? response.headers.get('Retry-After'));
+  const wait = Number.isFinite(seconds) && seconds > 0 ? describeWait(seconds) : null;
+  return (
+    'Sign-in is temporarily locked after repeated failed attempts, so this screen could not ' +
+    'refresh its session. Nothing here is broken' +
+    (wait ? `, and it clears in about ${wait}.` : '. It clears on its own shortly.')
+  );
+}
+
+function describeWait(seconds: number): string {
+  if (seconds < 90) return `${Math.ceil(seconds)} seconds`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 async function unwrap<T>(response: Response): Promise<T> {
   let body: any = {};
   try {
@@ -33,11 +67,7 @@ async function unwrap<T>(response: Response): Promise<T> {
     /* Keep non-JSON failures representable. */
   }
   if (!response.ok || body.success === false)
-    throw new ApiError(
-      response.status,
-      body.message ?? `Request failed (${response.status})`,
-      body.code,
-    );
+    throw new ApiError(response.status, describeFailure(response, body), body.code);
   return (body.data ?? body) as T;
 }
 async function renew() {

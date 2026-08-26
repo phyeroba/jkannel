@@ -410,6 +410,75 @@ main > [data-testid='module-workspace'] > * {
   width: auto;
   min-height: 0;
 }
+/* ---------------------------------------------------------------------------
+   A HEALTH LIST WHOSE INDICATOR IS A BADGE, NOT A DOT
+
+   `components.css` sizes `.health-list li` as `18px 1fr auto` — the first track
+   is an indicator column measured for the kit's small round dot. Services puts
+   a `.status-badge` there instead, which with its pill padding and a word
+   inside is about 59px, so 41px of every badge on that screen was sliced off.
+   Measured by `overflow-audit.mjs` on four rows of Dependencies.
+
+   Both halves are reasonable on their own: an 18px dot column is right for a
+   dot, and a badge says more than a colour does when the states are named
+   ("running", "degraded"). Only the pairing is wrong.
+
+   Matched with `:has()` rather than a modifier class so no call site has to
+   remember to opt in, and so a list that goes back to dots re-tightens on its
+   own. Where `:has()` is unsupported the rule is simply ignored and the layout
+   is what it is today, which is the safe direction to degrade in.
+   --------------------------------------------------------------------------- */
+.health-list li:has(> .status-badge) {
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-3);
+}
+
+/* ---------------------------------------------------------------------------
+   A NAMED GROUP OF FIELDS INSIDE A DIALOG
+
+   Seven fields in one flat list is not a form, it is an inventory. Grouping
+   them says which decisions belong together, and lets the reader skip the two
+   groups they do not care about — which is most of the value a dialog has over
+   the config file it replaced.
+
+   A `fieldset` because it is one: the legend names what the group is FOR, which
+   is the thing an unlabelled run of inputs cannot say. Its own border is
+   dropped and a rule above the legend does the separating, so a dialog gains
+   structure without gaining boxes inside boxes.
+
+   `SmscConfigForm` has carried its own `.cfg-group` doing exactly this since it
+   was written. This is the same idea available to any dialog, so the next form
+   does not invent a third one.
+   --------------------------------------------------------------------------- */
+.dialog-body .dialog-group {
+  margin: 18px 0 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+/* A legend sits ON the border in every browser, so it needs its own clearance
+   or the rule runs into the word. The right padding is what breaks the line
+   cleanly after the text; the bottom margin is what stops the first field
+   crowding it. */
+.dialog-body .dialog-group > legend {
+  padding: 0 10px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+}
+.dialog-body .dialog-group > .dialog-grid {
+  margin-top: 14px;
+}
+/* The first group follows the dialog's own note, which already separates it, so
+   a rule there would read as a double line under the same paragraph. It still
+   needs room: the note and the legend were touching. */
+.dialog-body > .source-note + .dialog-group {
+  border-top: 0;
+  margin-top: 14px;
+  padding-top: 0;
+}
+
 /* A field that holds prose — a note, a URL, a template — is unusable in a
    200px track, so it opts out of the auto-fit and takes the full width. */
 .dialog-body .dialog-grid > .dialog-span {

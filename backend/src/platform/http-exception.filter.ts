@@ -42,6 +42,30 @@ function detailsOf(exception: unknown, status: number): string[] {
   return errors.filter((entry): entry is string => typeof entry === 'string').slice(0, 50);
 }
 
+/**
+ * `retryAfterSeconds` on a 429, and nothing else.
+ *
+ * The auth throttle raises its exception carrying exactly how long the lockout
+ * lasts, and this filter rebuilt the response body from a fixed shape — so the
+ * number was computed, attached, and then discarded on the way out. The console
+ * was left showing "Try again later" with no idea whether later meant a minute
+ * or a quarter of an hour, which is the difference between waiting and filing a
+ * bug against whichever screen happened to be open.
+ *
+ * Narrow on purpose: one numeric field, on one status, from an HttpException.
+ * A general "copy unknown fields through" would undo the reason this filter
+ * builds a fixed body in the first place.
+ */
+function retryAfterOf(exception: unknown, status: number): { retryAfterSeconds?: number } {
+  if (status !== HttpStatus.TOO_MANY_REQUESTS || !(exception instanceof HttpException)) return {};
+  const body = exception.getResponse();
+  if (!body || typeof body !== 'object') return {};
+  const seconds = (body as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+    ? { retryAfterSeconds: Math.ceil(seconds) }
+    : {};
+}
+
 /** Never throws, whatever was thrown — a logger that fails hides the failure. */
 function safeString(value: unknown): string {
   try {
@@ -112,6 +136,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error_category: status >= 500 ? 'Internal' : 'Request',
       message,
       errors: detailsOf(exception, status),
+      ...retryAfterOf(exception, status),
     });
   }
 }

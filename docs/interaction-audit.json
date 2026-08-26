@@ -62,7 +62,7 @@
   {
     "route": "/backup",
     "add": "dialog  (\"Create backup\")",
-    "row": "drawer"
+    "row": "drawer (of 2 tables)"
   },
   {
     "route": "/messages",

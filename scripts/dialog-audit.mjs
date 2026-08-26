@@ -46,6 +46,23 @@ const MIN_TRACK = Number(process.env.MIN_TRACK ?? 260);
 const CASES = [
   { route: '/carriers', button: 'New carrier' },
   { route: '/smsc', button: 'Add SMSC' },
+  /*
+   * EDIT dialogs, reached by a row action rather than a page action.
+   *
+   * "the popup that appears is squashed, same to editing a new carrier" — and
+   * the first version of this opened only the CREATE dialogs, so the second
+   * half of that sentence went unmeasured. Several views share one ModalDialog
+   * between create and edit and swap only the title, which makes it tempting to
+   * assume the two are the same shape. Tempting is not measured: a view is free
+   * to render a different form for editing, and this is how anybody finds out.
+   *
+   * Matched by `data-testid` prefix, because a row action's label is usually
+   * just "Edit" and there is one per row. Reported as not-found rather than
+   * failed when the register is empty — no rows means no row action, which is a
+   * fact about the data and not about the dialog.
+   */
+  { route: '/carriers', selector: '[data-testid^="carrier-edit-"]', label: 'Edit carrier' },
+  { route: '/smsc', selector: '[data-testid^="smsc-edit-"]', label: 'Edit SMSC' },
   { route: '/customers', button: 'Add customer' },
   { route: '/routing-advanced', button: 'New route' },
   { route: '/recipient-policy', button: 'New entry' },
@@ -76,11 +93,21 @@ for (const testCase of CASES) {
   await page.goto(BASE + testCase.route, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
   // Buttons and links both open dialogs in this console.
-  const opener = page
-    .locator('main button, main a', { hasText: new RegExp(`^\\s*${testCase.button}\\s*$`, 'i') })
-    .first();
+  const name = testCase.label ?? testCase.button;
+  const opener = testCase.selector
+    ? page.locator(testCase.selector).first()
+    : page
+        .locator('main button, main a', {
+          hasText: new RegExp(`^\\s*${testCase.button}\\s*$`, 'i'),
+        })
+        .first();
+  // Rows load after the shell, so a row-action opener needs a moment a page
+  // action does not. Waiting rather than checking once is the difference
+  // between "this screen has no Edit button" and "the Edit button had not
+  // rendered yet" — which is exactly the wrong conclusion this drew first time.
+  if (testCase.selector) await opener.waitFor({ timeout: 8000 }).catch(() => undefined);
   if (!(await opener.count())) {
-    notFound.push(`${testCase.route} → "${testCase.button}"`);
+    notFound.push(`${testCase.route} → "${name}"`);
     continue;
   }
   await opener.click();
@@ -132,10 +159,10 @@ for (const testCase of CASES) {
   await page.waitForTimeout(400);
 
   if (!measured) {
-    findings.push({ ...testCase, problem: 'the button did not open a dialog' });
+    findings.push({ ...testCase, button: name, problem: 'the control did not open a dialog' });
     continue;
   }
-  opened.push({ ...testCase, ...measured });
+  opened.push({ ...testCase, button: name, ...measured });
 
   const narrowest = measured.grids
     .map((g) => g.narrowest)

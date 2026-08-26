@@ -1,7 +1,7 @@
 import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
-import { LOG_LEVELS, LogBufferService, LogQuery } from './log-buffer';
+import { LOG_LEVELS, LOG_SORT_FIELDS, LogBufferService, LogQuery } from './log-buffer';
 
 const isoOrThrow = (value: unknown, name: string): string | undefined => {
   if (value === undefined || value === null || value === '') return undefined;
@@ -32,6 +32,22 @@ const levelOrThrow = (value: unknown, name: string): string | undefined => {
  * replicas, and it evicts the oldest lines once `LOG_BUFFER_SIZE` is exceeded.
  * Stdout remains the durable path — ship it somewhere that keeps it.
  */
+/** A sort column, or undefined for the default. Named values only. */
+const sortOrThrow = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const text = String(value);
+  if (!(LOG_SORT_FIELDS as readonly string[]).includes(text))
+    throw new BadRequestException(`sort must be one of ${LOG_SORT_FIELDS.join(', ')}`);
+  return text as (typeof LOG_SORT_FIELDS)[number];
+};
+
+const directionOrThrow = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value !== 'asc' && value !== 'desc')
+    throw new BadRequestException('direction must be asc or desc');
+  return value;
+};
+
 @Controller('observability/logs')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class LogsController {
@@ -60,6 +76,8 @@ export class LogsController {
       until: isoOrThrow(q.until, 'until'),
       limit,
       offset,
+      sort: sortOrThrow(q.sort),
+      direction: directionOrThrow(q.direction),
     };
     return this.buffer.query(filter);
   }

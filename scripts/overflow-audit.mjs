@@ -19,8 +19,12 @@
  * WHAT COUNTS AS CUT OFF
  * ---------------------------------------------------------------------------
  * `scrollWidth > clientWidth` on an element whose computed `overflow-x` is
- * neither `auto` nor `scroll`. Content that overflows a SCROLLING container is
- * fine — that is the fix, not the fault.
+ * neither `auto` nor `scroll`, AND whose content actually reaches past the
+ * nearest ancestor that would clip it. Content that overflows a SCROLLING
+ * container is fine — that is the fix, not the fault — and content that spills
+ * a box while nothing cuts it off is fine too: the design system's
+ * `.table-wrap` does exactly that on purpose, with negative margins that bleed
+ * a table to the panel edge.
  *
  * Tolerance of 2px, because sub-pixel layout routinely puts scrollWidth a
  * fraction over clientWidth on an element that is not actually clipped, and a
@@ -102,6 +106,45 @@ for (const route of routes) {
       // and so does every ancestor, and one finding per screen is the useful
       // number.
       if ([...el.children].some((child) => child.scrollWidth > child.clientWidth + slack)) continue;
+
+      /*
+       * SPILLING IS NOT CLIPPING, and only clipping loses content.
+       *
+       * `overflow-x: visible` means the content paints outside the box. That is
+       * a defect when something cuts it off and a non-event when nothing does —
+       * and the design system relies on the second case deliberately:
+       * `.table-wrap` carries `margin: 16px -20px -20px` so a table bleeds to
+       * the panel edge, which makes it 20px wider than its parent BY DESIGN.
+       *
+       * The first version of this reported 47 of those on the API reference
+       * page alone, all of them the design working correctly, and they buried
+       * the real findings underneath. So the question is not "is this element
+       * wider than its box" but "does its content reach past the nearest thing
+       * that would cut it off".
+       */
+      let clipper = el.parentElement;
+      let reachable = false;
+      while (clipper) {
+        const parentOverflow = getComputedStyle(clipper).overflowX;
+        // A SCROLLING ancestor is the remedy, not the fault: whatever spills is
+        // still reachable. Stopping the walk at one and measuring against its
+        // right edge is what made the code console on the API reference page
+        // look like 182px of lost output, when `.console-body` scrolls
+        // horizontally exactly as a terminal should.
+        if (parentOverflow === 'auto' || parentOverflow === 'scroll') {
+          reachable = true;
+          break;
+        }
+        // `hidden` and `clip` genuinely cut content off with no way to see it.
+        if (parentOverflow !== 'visible') break;
+        clipper = clipper.parentElement;
+      }
+      if (reachable) continue;
+      const limit = clipper
+        ? clipper.getBoundingClientRect().right
+        : document.documentElement.clientWidth;
+      const contentRight = el.getBoundingClientRect().left + el.scrollWidth;
+      if (contentRight <= limit + slack) continue;
       out.push({
         what: el.tagName.toLowerCase() + (el.className ? `.${String(el.className).split(' ')[0]}` : ''),
         label: nameOf(el),

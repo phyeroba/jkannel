@@ -5117,53 +5117,116 @@ onUnmounted(() => {
       wide
       @close="showCreateCustomer = false"
     >
-      <div class="dialog-grid">
-        <label>
-          Name
-          <input v-model="custName" data-testid="customer-name" />
-        </label>
-        <label>
-          Code
-          <input v-model="custCode" data-testid="customer-code" placeholder="Optional short code" />
-        </label>
-        <label>
-          Contact email
-          <input v-model="custEmail" type="email" data-testid="customer-email" />
-        </label>
-        <label>
-          Daily quota
-          <input
-            v-model.number="custQuotaDaily"
-            type="number"
-            min="0"
-            data-testid="customer-quota"
-          />
-        </label>
-        <label>
-          Rate limit / min
-          <input v-model.number="custRateLimit" type="number" min="0" data-testid="customer-rate" />
-        </label>
-        <label class="dialog-span">
-          Allowed sender IDs (comma-separated)
-          <input
-            v-model="custSenderIds"
-            data-testid="customer-senders"
-            placeholder="JKANNEL, INFO"
-          />
-        </label>
-        <label class="dialog-span">
-          Notes
-          <input v-model="custNotes" data-testid="customer-notes" />
-        </label>
-        <label>
-          Status
-          <select v-model="custStatus" data-testid="customer-status">
-            <option value="active">active</option>
-            <option value="suspended">suspended</option>
-            <option value="archived">archived</option>
-          </select>
-        </label>
-      </div>
+      <!--
+        GROUPED, AND EVERY FIELD SAYS WHAT BLANK MEANS.
+
+        Widening the tracks fixed the squashing and left the organisation
+        untouched, which was the larger half of the problem: seven fields in one
+        flat list, "Rate limit / min" orphaned on its own row with a dead gap
+        beside it because the two spanning fields broke the column rhythm, and
+        Status — which decides whether this customer may send at all — last, and
+        rendered as a small inline control unlike every other field on the form.
+
+        Nor did anything say what the numbers meant. "Daily quota" of what, and
+        what happens if it is left empty? The SMSC form answers that for all
+        thirty-eight of its fields by naming the engine's default; a customer
+        record deserves the same, because "blank means unlimited" is not a guess
+        anybody should have to make about a spend control.
+
+        Three groups in the order an operator fills them: who this is, what they
+        may send, and what they may send it as. Notes last, because it is the
+        only optional prose. Status sits with identity, where a state that
+        governs the whole record belongs.
+      -->
+      <p class="source-note">
+        A customer is who traffic is attributed to — for quotas, rate limits and
+        per-customer routing. Creating one does not grant API access on its own; an API
+        client under API Gateway is what carries credentials.
+      </p>
+
+      <fieldset class="dialog-group">
+        <legend>Identity</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Name</span>
+            <input v-model="custName" data-testid="customer-name" placeholder="Stanbic Bank Uganda" />
+            <small>The name shown on every screen and export.</small>
+          </label>
+          <label class="field">
+            <span>Code</span>
+            <input v-model="custCode" data-testid="customer-code" placeholder="STANBIC" />
+            <small>A short handle for reports and filters. Optional.</small>
+          </label>
+          <label class="field">
+            <span>Contact email</span>
+            <input v-model="custEmail" type="email" data-testid="customer-email" />
+            <small>Who to reach about this traffic. Not used for delivery.</small>
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select v-model="custStatus" data-testid="customer-status">
+              <option value="active">active</option>
+              <option value="suspended">suspended</option>
+              <option value="archived">archived</option>
+            </select>
+            <small>Only <span class="mono">active</span> customers may send.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>Limits</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Daily quota</span>
+            <input
+              v-model.number="custQuotaDaily"
+              type="number"
+              min="0"
+              data-testid="customer-quota"
+              placeholder="unlimited"
+            />
+            <small>Messages per calendar day. Leave blank for no limit.</small>
+          </label>
+          <label class="field">
+            <span>Rate limit</span>
+            <input
+              v-model.number="custRateLimit"
+              type="number"
+              min="0"
+              data-testid="customer-rate"
+              placeholder="unlimited"
+            />
+            <small>
+              Messages per minute. This is the customer's own ceiling — it does not raise the
+              carrier's.
+            </small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>Sending</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>Allowed sender IDs</span>
+            <input
+              v-model="custSenderIds"
+              data-testid="customer-senders"
+              placeholder="JKANNEL, INFO"
+            />
+            <small>
+              Comma-separated. A submission with any other sender is refused. Leave blank to allow
+              any sender.
+            </small>
+          </label>
+          <label class="field dialog-span">
+            <span>Notes</span>
+            <input v-model="custNotes" data-testid="customer-notes" />
+            <small>Free text for whoever picks this up next.</small>
+          </label>
+        </div>
+      </fieldset>
       <template #footer>
         <button class="secondary-button" @click="showCreateCustomer = false">Cancel</button>
         <button
