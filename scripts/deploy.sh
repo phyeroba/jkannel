@@ -68,6 +68,10 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 [ "$OVERRIDE_BEFORE" = "$(sha256sum docker-compose.override.yml | cut -d' ' -f1)" ] \
   || { echo "   !! override changed during pull"; exit 1; }
+test -f runtime/kamex/kamex.conf \
+  || { echo "   !! the pull REMOVED runtime/kamex/kamex.conf — bearerbox would die on its next restart"; exit 1; }
+[ "$CONF_BEFORE" = "$(sha256sum runtime/kamex/kamex.conf | cut -d' ' -f1)" ] \
+  || echo "   note: the engine configuration changed during the pull"
 
 say "BUILD $SERVICES"
 # shellcheck disable=SC2086

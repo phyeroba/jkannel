@@ -66,6 +66,32 @@ function retryAfterOf(exception: unknown, status: number): { retryAfterSeconds?:
     : {};
 }
 
+/**
+ * Is this the connection pool being exhausted rather than a fault?
+ *
+ * `pg` answers "timeout exceeded when trying to connect" when every connection
+ * in the pool is busy for longer than `connectionTimeoutMillis`. Nothing is
+ * broken: the gateway is simply taking more concurrent work than it has
+ * connections for, and the request that lost the race is perfectly valid.
+ *
+ * It was being reported as 500 "An internal error occurred". That is wrong in
+ * the way that matters most to a client: a 500 says "we are broken, your
+ * request may have been half-applied, do not assume anything", while a 503 says
+ * "not now, try again" — and a sender integrating against an SMS API will
+ * reasonably alert a human on the first and back off and retry on the second.
+ *
+ * Found under load: a 500-message burst produced nine of these while the other
+ * 491 succeeded, which is exactly the shape of contention rather than failure.
+ *
+ * Matched on the message because `pg` does not give this a code. Narrow enough
+ * that a genuine fault cannot be mistaken for capacity — the alternative,
+ * treating unknown errors as retryable, is the dangerous direction.
+ */
+function saturated(exception: unknown): boolean {
+  if (!(exception instanceof Error)) return false;
+  return /timeout exceeded when trying to connect/i.test(exception.message);
+}
+
 /** Never throws, whatever was thrown — a logger that fails hides the failure. */
 function safeString(value: unknown): string {
   try {
@@ -117,13 +143,19 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const request = http.getRequest<ContextRequest>();
     const response = http.getResponse<ErrorResponse>();
     const status =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : saturated(exception)
+          ? HttpStatus.SERVICE_UNAVAILABLE
+          : HttpStatus.INTERNAL_SERVER_ERROR;
     const message =
-      status >= 500
-        ? 'An internal error occurred'
-        : exception instanceof HttpException
-          ? exception.message
-          : 'Request failed';
+      status === HttpStatus.SERVICE_UNAVAILABLE && saturated(exception)
+        ? 'The gateway is at capacity and could not take this request. Nothing was lost — retry it.'
+        : status >= 500
+          ? 'An internal error occurred'
+          : exception instanceof HttpException
+            ? exception.message
+            : 'Request failed';
     this.record(exception, request, status);
     response.status(status).json({
       success: false,
