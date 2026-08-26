@@ -71,3 +71,8 @@ e2e/*.tmp.mjs
 # committed them. Seeded from infrastructure/kannel/kamex.local-seed.conf.
 runtime/kamex/kamex.conf
 runtime/kamex/*.tmp
+
+# Audit scripts are copied into frontend/ to run, because ESM resolves
+# @playwright/test relative to the script file and only frontend/ has it
+# installed. The copies are disposable and must never be committed.
+frontend/.*.mjs
