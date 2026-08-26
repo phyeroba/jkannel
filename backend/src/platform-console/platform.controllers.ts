@@ -336,8 +336,42 @@ export class BackupsController {
       requester(r),
     );
   }
-  @Post() @RequirePermissions('system.manage') create(@Req() r: Request, @Body() b: any = {}) {
-    return this.repository.createBackup(actor(r), b);
+  /**
+   * REFUSES, and says where to go.
+   *
+   * This used to call `PlatformConsoleRepository.createBackup`, which writes a
+   * row-count manifest: it counts the rows in every table, checksums that
+   * count, and inserts a `backup_records` row with `status = 'completed'`,
+   * `encrypted = true`, a `catalog://` location and the row total in a column
+   * named `size_bytes`. No pg_dump runs. No artifact is written. Nothing is
+   * encrypted, because there is nothing to encrypt.
+   *
+   * The repository's own docstring says it "catalogs and tracks it honestly
+   * rather than claiming to have dumped bytes", and that intention did not
+   * survive contact with the schema — the row it writes is indistinguishable in
+   * the register from one produced by a real pg_dump, and the register puts a
+   * Restore button next to it. Believing you hold a backup you do not hold is
+   * the worst outcome a backup system has.
+   *
+   * Found by taking one: `POST /backups` returned 201 `completed` with a
+   * checksum and a size, and the row landed with an EMPTY `artifact_path` and
+   * no file anywhere on disk. The two July artifacts sitting beside it in the
+   * same directory were real.
+   *
+   * The comment above about write paths delegating to the same repository as
+   * the replacement was simply wrong, and is the reason this sat here through a
+   * deprecation. Reads still work — the records are shared and a caller
+   * listing them is a caller who will see the Deprecation header.
+   */
+  @Post() @RequirePermissions('system.manage') create(@Req() _r: Request, @Body() _b: any = {}) {
+    throw new BadRequestException(
+      'This deprecated path does not take a backup. It recorded a row-count manifest and ' +
+        'marked it completed, with no dump, no artifact and nothing encrypted — a record ' +
+        'indistinguishable from a real backup, next to a Restore button. Use POST ' +
+        '/api/v1/backup-dr, which runs pg_dump, encrypts the artifact with ' +
+        'BACKUP_ENCRYPTION_KEY, replicates it offsite when a destination is configured, and ' +
+        'fails loudly when it cannot.',
+    );
   }
   @Post(':id/verify') @RequirePermissions('system.manage') verify(
     @Req() r: Request,
