@@ -64,12 +64,12 @@ echo "   sha256 ${OVERRIDE_BEFORE:0:16}"
 # Checked before AND after the pull, like the override above, and as a FILE
 # rather than merely present: the directory Docker leaves behind would pass a
 # bare existence test.
-test -f runtime/kamex/kamex.conf || {
-  echo "   !! runtime/kamex/kamex.conf is missing or is not a file — bearerbox cannot start"
-  echo "      restore: cp infrastructure/kannel/kamex.conf runtime/kamex/kamex.conf && chmod 644 runtime/kamex/kamex.conf"
+test -f runtime/kamex/engine/kamex.conf || {
+  echo "   !! runtime/kamex/engine/kamex.conf is missing or is not a file — bearerbox cannot start"
+  echo "      restore: mkdir -p runtime/kamex/engine && cp infrastructure/kannel/kamex.conf runtime/kamex/engine/kamex.conf && chmod 644 runtime/kamex/engine/kamex.conf"
   exit 1
 }
-CONF_BEFORE=$(sha256sum runtime/kamex/kamex.conf | cut -d' ' -f1)
+CONF_BEFORE=$(sha256sum runtime/kamex/engine/kamex.conf | cut -d' ' -f1)
 echo "   engine conf ${CONF_BEFORE:0:16}"
 
 say "PULL"
@@ -87,9 +87,9 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 [ "$OVERRIDE_BEFORE" = "$(sha256sum docker-compose.override.yml | cut -d' ' -f1)" ] \
   || { echo "   !! override changed during pull"; exit 1; }
-test -f runtime/kamex/kamex.conf \
-  || { echo "   !! the pull REMOVED runtime/kamex/kamex.conf — bearerbox would die on its next restart"; exit 1; }
-[ "$CONF_BEFORE" = "$(sha256sum runtime/kamex/kamex.conf | cut -d' ' -f1)" ] \
+test -f runtime/kamex/engine/kamex.conf \
+  || { echo "   !! the pull REMOVED runtime/kamex/engine/kamex.conf — bearerbox would die on its next restart"; exit 1; }
+[ "$CONF_BEFORE" = "$(sha256sum runtime/kamex/engine/kamex.conf | cut -d' ' -f1)" ] \
   || echo "   note: the engine configuration changed during the pull"
 
 say "BUILD $SERVICES"

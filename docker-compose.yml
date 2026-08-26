@@ -177,7 +177,9 @@ services:
       KAMEX_BASE_URL: http://kamex-bearerbox:13000
       KAMEX_STATUS_PASSWORD: ${KAMEX_STATUS_PASSWORD}
       KAMEX_ADMIN_PASSWORD: ${KAMEX_ADMIN_PASSWORD}
-      KAMEX_CONFIG_PATH: /var/lib/jkannel/kamex.conf
+      # runtime/kamex is mounted here, so this is runtime/kamex/engine/kamex.conf
+      # — the directory bearerbox mounts. See the note on that mount.
+      KAMEX_CONFIG_PATH: /var/lib/jkannel/engine/kamex.conf
       KAMEX_VALIDATOR_URL: http://kamex-validator:8080
       KAMEX_VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
       KAMEX_SQLBOX_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -414,7 +416,24 @@ services:
       # uptime spans the reload. Plan that with the traffic, not against it.
       CARRIER_KOLOLO_PASSWORD: ${CARRIER_KOLOLO_PASSWORD:-}
     volumes:
-      - ./runtime/kamex/kamex.conf:/etc/kamex/kamex.conf:ro
+      # A DIRECTORY, not the file — and that distinction is load-bearing.
+      #
+      # A bind-mounted FILE is pinned to its INODE. The deployment service
+      # writes a temp file and renames it over the target, which is atomic for
+      # a reader and gives a NEW inode — so a container mounting the file keeps
+      # reading the old one for as long as it lives. Measured on production
+      # 2026-08-26: the host file had the carrier group and inode 2021675, the
+      # container had the seed and inode 2007963, and the deploy had reported
+      # success. Every configuration deploy since this mount was written has
+      # been invisible to the engine unless the container happened to be
+      # recreated afterwards.
+      #
+      # Mounting the directory means the rename happens INSIDE the mount, where
+      # the container sees it. Its own `engine/` subdirectory rather than
+      # `runtime/kamex` itself, because that path is also the backend's
+      # /var/lib/jkannel and holds the encrypted database backups — which the
+      # engine has no business being able to read.
+      - ./runtime/kamex/engine:/etc/kamex:ro
       - kamex-spool:/var/spool/kamex
       - kamex-logs:/var/log/kamex
     ports:

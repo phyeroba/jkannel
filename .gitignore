@@ -70,6 +70,7 @@ e2e/*.tmp.mjs
 # replaced tracked content with carrier details and the next `git add -A`
 # committed them. Seeded from infrastructure/kannel/kamex.local-seed.conf.
 runtime/kamex/kamex.conf
+runtime/kamex/engine/kamex.conf
 runtime/kamex/*.tmp
 
 # Audit scripts are copied into frontend/ to run, because ESM resolves
