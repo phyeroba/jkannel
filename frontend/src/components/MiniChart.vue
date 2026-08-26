@@ -61,12 +61,41 @@ function yFor(value: number): number {
   return y + h - (value / maxValue.value) * h;
 }
 
+/**
+ * An axis label with enough precision to be a different number from the one
+ * above it.
+ *
+ * `Math.round` was doing this, and on a rate series it produced an axis reading
+ * 0, 0, 0, 0, 0 — five gridlines, all zero, under a curve with a clear spike in
+ * it. Gateway throughput averaged over six-hour buckets is a fraction of a
+ * message per second, so every tick rounded to nothing, and the chart said "no
+ * traffic" while drawing traffic. The screen next door plotted the same window
+ * against a 40/s ceiling and labelled itself 0/10/20/30/40 perfectly, which is
+ * how the fault stayed invisible: only the small-numbered chart was wrong.
+ *
+ * The precision comes from the STEP rather than the maximum, because the job of
+ * the label is to distinguish one gridline from the next. Capped at three
+ * decimals: below that the number is noise and the shape of the curve is the
+ * real information.
+ */
+function tickLabel(value: number, step: number): string {
+  if (!Number.isFinite(value)) return '0';
+  if (step >= 1) return String(Math.round(value));
+  if (step >= 0.1) return value.toFixed(1);
+  if (step >= 0.01) return value.toFixed(2);
+  // A step of zero means every value is the same — a flat series, usually all
+  // zero. `toFixed(3)` on that gives "0.000", which reads like a measurement
+  // rather than an absence, so a genuinely flat axis stays plain.
+  return step > 0 ? value.toFixed(3) : String(Math.round(value));
+}
+
 const gridLines = computed(() => {
   if (!props.grid) return [];
   const lines = [];
-  for (let step = 0; step <= 4; step += 1) {
-    const value = (maxValue.value / 4) * step;
-    lines.push({ y: yFor(value), value: Math.round(value) });
+  const step = maxValue.value / 4;
+  for (let index = 0; index <= 4; index += 1) {
+    const value = step * index;
+    lines.push({ y: yFor(value), value: tickLabel(value, step) });
   }
   return lines;
 });

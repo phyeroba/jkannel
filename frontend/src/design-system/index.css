@@ -511,6 +511,43 @@ td.row-actions {
 td.row-actions {
   flex-wrap: nowrap;
 }
+/* ---------------------------------------------------------------------------
+   AND THE TABLE HAS TO BE ALLOWED TO BE AS WIDE AS IT NEEDS
+
+   `nowrap` above stopped the buttons stacking. On its own it replaced stacking
+   with CLIPPING, which is worse: `table { width: 100% }` pins the table to its
+   wrapper, so a column that cannot shrink any further just has its content
+   sliced off at the edge, silently. `overflow-audit.mjs` caught it immediately —
+   Roles lost 408px of its action cell, Configuration 358px, and nine other
+   grids something between 34 and 193px. Stacked buttons at least remain
+   clickable.
+
+   `.table-wrap` has scrolled since the kit, and nothing was reaching it because
+   the table was never allowed to exceed it. `min-width: max-content` lets the
+   table be as wide as its narrowest honest layout and hands the overflow to the
+   wrapper, which is what the wrapper is for.
+
+   The floor goes on the CELL, not on the table. `min-width: max-content` on the
+   table was the first attempt and it is far too blunt: `max-content` means
+   "never wrap anything", so a Roles grid with a long permissions column went
+   from 1292px to 4386px and every text column in the console stopped wrapping.
+   Scrolling a table sideways to read a sentence that used to wrap is not an
+   improvement.
+
+   On the cell it says only "this column may not be squeezed below its buttons".
+   Prose columns wrap exactly as before, the table grows by whatever the action
+   column was being denied, and `.table-wrap` scrolls only in the rare grid that
+   still does not fit.
+
+   Why the floor is needed at all: the `<td>` is itself the flex container, and
+   a table's auto layout does not derive a flex container's intrinsic width from
+   its items the way it does for text. Combined with `width: 1%` — which is what
+   asks the column to shrink to its content — the column was free to collapse to
+   36px and clip 444px of buttons. Measured on /roles.
+   --------------------------------------------------------------------------- */
+td.row-actions {
+  min-width: max-content;
+}
 /* Row buttons are secondary to the row itself: the kit sizes an in-table
    control down from the page's primary actions. */
 td.row-actions .primary-button,
