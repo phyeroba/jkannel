@@ -402,6 +402,17 @@ services:
       # match the secret:// reference on the SMSC record — secret://kamex/foo
       # renders as ${KAMEX_FOO}. Empty by default so the stack starts without one.
       KAMEX_CARRIER_PASSWORD: ${KAMEX_CARRIER_PASSWORD:-}
+      # A named slot per carrier, rather than reusing the generic one above.
+      # `secret://carrier/kololo-password` on the SMSC record derives to this
+      # name, the generator renders ${CARRIER_KOLOLO_PASSWORD} into kamex.conf,
+      # and bearerbox expands it from here — so the value exists in .env and in
+      # this process's environment, and nowhere else.
+      #
+      # NOTE FOR THE NEXT CARRIER: adding a variable here means RECREATING
+      # bearerbox, because a container's environment is fixed at creation. A
+      # restart will not pick it up and neither will `graceful-restart`, whose
+      # uptime spans the reload. Plan that with the traffic, not against it.
+      CARRIER_KOLOLO_PASSWORD: ${CARRIER_KOLOLO_PASSWORD:-}
     volumes:
       - ./runtime/kamex/kamex.conf:/etc/kamex/kamex.conf:ro
       - kamex-spool:/var/spool/kamex

@@ -376,11 +376,26 @@ export class ConfigurationGeneratorService {
        * carrier and a wrong one is rejected at bind — which would trade a loud
        * failure at deploy for a quiet one at 3am against the carrier's ESME.
        */
-      if (smsc.enabled && smsc.type === 'smpp' && !smsc.systemType?.trim())
+      /*
+       * ABSENT is the failure, not EMPTY.
+       *
+       * This used to refuse an empty string too, which is wrong: `system-type
+       * = ""` is accepted by bearerbox (verified) and is what a carrier that
+       * does not issue one expects. Refusing it forced operators to invent a
+       * value, and an invented system type is rejected at bind with
+       * ESME_RINVSYSTYP — trading a loud failure here for a quiet one against
+       * the carrier's ESME.
+       *
+       * What must never happen is the directive being MISSING, because
+       * `smsc_smpp_create()` treats that as a construction failure and
+       * `smsc2_start()` panics rather than skipping the connection.
+       */
+      if (smsc.enabled && smsc.type === 'smpp' && smsc.systemType == null)
         errors.push(
-          `${smsc.id} is an SMPP bind and requires a system type — without one bearerbox ` +
-            'panics on startup and takes every other SMSC down with it, not just this one. ' +
-            'The value is assigned by the carrier (commonly "SMPP", "VMA" or a per-account string).',
+          `${smsc.id} is an SMPP bind and needs its system type set — without the directive ` +
+            'bearerbox panics on startup and takes every other SMSC down with it, not just ' +
+            'this one. Use the value the carrier issued, or an empty one if they issue none; ' +
+            'empty is a valid answer, absent is not.',
         );
       if (smsc.usernameSecretRef && !smsc.usernameSecretRef.startsWith('secret://'))
         errors.push(`${smsc.id} credential must be a secret reference`);
@@ -867,7 +882,24 @@ export class ConfigurationGeneratorService {
     );
     if (smsc.passwordSecretRef)
       push('smsc-password', this.secrets.placeholder(smsc.passwordSecretRef));
-    push('system-type', smsc.systemType);
+    /*
+     * An EMPTY system type is a real answer, not a missing one.
+     *
+     * SMPP's `system_type` is an optional field and plenty of carriers expect
+     * it blank — the one being brought up on 2026-08-27 supplied a system id
+     * and password and no system type at all. `push` drops empty strings, so
+     * an operator who deliberately wants a blank one could not express it, and
+     * the guard in `validate()` refused the record outright. Between them they
+     * forced a value the carrier may reject with ESME_RINVSYSTYP.
+     *
+     * Verified against a real bearerbox: `system-type = ""` starts cleanly and
+     * draws no complaint. So the DIRECTIVE must be present — its absence is
+     * what panics `smsc2_start` — while its VALUE may be empty.
+     */
+    // `push` drops an empty string, so an explicitly empty system type is sent
+    // as the two-character literal `""` — which is what the directive needs to
+    // look like in the file, and keeps this to the one emitter in scope here.
+    push('system-type', smsc.systemType === '' ? '""' : smsc.systemType);
     push('interface-version', smsc.interfaceVersion);
     push('address-range', smsc.addressRange);
     push('transceiver-mode', bindMode === 'transceiver' ? 1 : 0);

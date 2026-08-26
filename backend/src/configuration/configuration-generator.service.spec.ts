@@ -114,22 +114,45 @@ describe('ConfigurationGeneratorService', () => {
       ],
     };
     expect(service.validate(withoutSystemType)).toContainEqual(
-      expect.stringContaining('requires a system type'),
+      expect.stringContaining('needs its system type set'),
     );
-    // Whitespace is not a system type. The engine reads the directive as present
-    // and binds with a blank one, which the carrier rejects.
+    /*
+     * An EMPTY system type is accepted, and that reversal is deliberate.
+     *
+     * This used to also refuse `''`, on the reasoning that a blank value is as
+     * good as none. It is not: SMPP's `system_type` is optional, plenty of
+     * carriers issue none, and `system-type = ""` starts a real bearerbox
+     * cleanly — verified against one. Refusing it forced operators to invent a
+     * value, and an invented system type is rejected at bind time with
+     * ESME_RINVSYSTYP, which trades a loud failure here for a quiet one against
+     * the carrier.
+     *
+     * The directive being ABSENT is still fatal, and that is what is checked
+     * above.
+     */
     expect(
       service.validate({
         ...withoutSystemType,
-        smsc: [{ ...withoutSystemType.smsc[0], systemType: '   ' }],
+        smsc: [{ ...withoutSystemType.smsc[0], systemType: '' }],
       }),
-    ).toContainEqual(expect.stringContaining('requires a system type'));
+    ).toEqual([]);
     expect(
       service.validate({
         ...withoutSystemType,
         smsc: [{ ...withoutSystemType.smsc[0], systemType: 'SMPP' }],
       }),
     ).toEqual([]);
+    // An empty system type must still EMIT the directive, because its absence is
+    // what panics smsc2_start. `push` drops empty strings, so this is the line
+    // that proves the empty case is not silently omitted.
+    const rendered = service.generate({
+      ...withoutSystemType,
+      smsc: [{ ...withoutSystemType.smsc[0], systemType: '' }],
+    });
+    expect(String((rendered as { content?: string }).content ?? rendered)).toContain(
+      'system-type = ""',
+    );
+
     // Only SMPP. The HTTP renderer supplies its own default and `fake` has no
     // bind at all, so demanding it there would reject valid configurations.
     expect(
