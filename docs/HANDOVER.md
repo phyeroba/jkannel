@@ -186,10 +186,31 @@ has been made must stop reading as a defect nobody has looked at.
 
 ## 6. Hard constraints — never violate
 
-- **Never recreate `jkannel-kamex-bearerbox-1`.** sqlbox does not reconnect when
-  bearerbox restarts: sending wedges silently with every metric still green.
-  `deploy.sh` aborts if the container id changes. Starting a stopped container
-  with `docker start` is fine — that keeps the same container.
+- **Never recreate `jkannel-kamex-bearerbox-1`.** `deploy.sh` aborts if the
+  container id changes. Starting a stopped container with `docker start` is
+  fine — that keeps the same container.
+
+  The reason used to be stated as "sqlbox does not reconnect", which was true
+  but not an explanation, and the real mechanism was found on 2026-08-26 by
+  breaking production. **SQLBox opens TWO connections to bearerbox.**
+  `sql_to_bearerbox` drains `send_sms` into the engine; `bearerbox_to_smsbox`
+  carries the other direction. The first DOES NOT RETRY — if it cannot resolve
+  or reach bearerbox the instant it starts, the thread logs `gethostbyname
+  failed` and TERMINATES for the life of the process, while the second connects
+  moments later once DNS is up. What you are left with is one connection
+  attached, the container running, every healthcheck satisfied, and outbound
+  completely dead.
+
+  Both halves are now handled in `infrastructure/kannel/sqlbox/entrypoint.sh`:
+  it WAITS for bearerbox to accept a TCP connection before starting SQLBox at
+  all, so the race cannot occur, and the supervisor reads SQLBox's own log for
+  that thread's death continuously, because both connections go to the same
+  address and port and no socket count can tell them apart.
+
+  Verified on production: a bearerbox restart now recovers unattended with the
+  send path attached, and a message submitted straight afterwards is delivered
+  in under three seconds. The rule stays anyway — a restart is recoverable, a
+  recreate is still not worth finding out about.
 - **Never touch `cpaas-*` containers, the 3 PM2 processes (`auth-service`,
   `messaging-service`, `console-web`), or `/etc/nginx/sites-available/speedamobile`.**
 - **Never commit the carrier's bind details** — hostname, port, bind username or
