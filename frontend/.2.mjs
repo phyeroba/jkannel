@@ -1,0 +1,310 @@
+#!/usr/bin/env node
+/**
+ * DOES IT LOOK LIKE THE KIT — measured on the rendered page, not in the CSS.
+ *
+ * WHY `design-diff` IS NOT ENOUGH
+ * ---------------------------------------------------------------------------
+ * `design-diff.mjs` compares stylesheets and now reports 622 declarations
+ * matching and none diverging. That is necessary and it is not sufficient: it
+ * proves the RULES agree, not that the PIXELS do. A rule can match perfectly
+ * and still lose at runtime — outranked by `style.css`, by a scoped component
+ * style, by an inline style, or by a selector that never matches the markup we
+ * actually render. Every one of those produces a screen that looks wrong while
+ * the CSS audit stays green.
+ *
+ * So this opens the kit and the console side by side in one browser, finds the
+ * same component in each, and compares `getComputedStyle` — the value the
+ * browser resolved after the whole cascade, which is the only thing an operator
+ * ever sees.
+ *
+ * WHAT IT COMPARES, AND WHY THOSE
+ * ---------------------------------------------------------------------------
+ * The properties that carry a design's identity: type size and weight, colour,
+ * background, radius, border and padding — plus HEIGHT.
+ *
+ * Width and position are still excluded, and for a good reason: they
+ * legitimately differ between a click-through with three fake rows and a
+ * console with a real register, so comparing them would bury the signal.
+ * Height was excluded on the same reasoning and should not have been. A
+ * control's height is not a consequence of how much data is on the page; it is
+ * the design, and it is the first thing an eye notices.
+ *
+ * That exclusion cost something real. The topbar range select rendered 28px in
+ * the kit and 42px here — half as tall again — because a blanket
+ * `min-height: var(--control-h)` overrode the padding the package sizes
+ * controls with. Every compared property matched except `line-height`, so the
+ * report named a cosmetic difference and stayed silent about the visible one.
+ * "All properties match" is only ever as strong as the property list.
+ *
+ * Height is compared only for elements whose height does not depend on content
+ * length — see HEIGHT_EXEMPT below.
+ *
+ *   node scripts/rendered-diff.mjs
+ */
+import { chromium } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const KIT = 'd:/JKANNEL/design/JKANNEL design system/ui_kits/console/index.html';
+const BASE = process.env.BASE ?? 'http://127.0.0.1:15173';
+const ROOT = 'd:/JKANNEL';
+
+/**
+ * A component, the selector that finds it in each place, and the route to be on
+ * when looking. Selectors are the design system's own class names, which is the
+ * point: if our markup does not carry them, the component is not the kit's
+ * component however similar it looks.
+ */
+const COMPONENTS = [
+  { name: 'panel', selector: '.panel', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'panel heading', selector: '.panel h2', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'primary button', selector: '.primary-button', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'secondary button', selector: '.secondary-button', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'table header cell', selector: 'table th', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'table body cell', selector: 'table td', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'status badge', selector: '.status-badge', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'sidebar link', selector: '.sidebar nav a', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'filter select', selector: '.filter-select select', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'chip', selector: '.chip', kitScreen: 'SMSCs', route: '/smsc' },
+  { name: 'metric card', selector: '.metric-card', kitScreen: 'Dashboard', route: '/dashboard/operations' },
+  { name: 'source note', selector: '.source-note', kitScreen: 'Dashboard', route: '/dashboard/operations' },
+];
+
+/** The properties that carry identity. Width and position stay excluded. */
+const PROPS = [
+  'fontSize',
+  'fontWeight',
+  'lineHeight',
+  'letterSpacing',
+  'textTransform',
+  'color',
+  'backgroundColor',
+  'borderRadius',
+  'borderTopWidth',
+  'borderTopColor',
+  'paddingTop',
+  'paddingLeft',
+  'height',
+];
+
+/**
+ * Components whose height legitimately depends on how much content is in them,
+ * so a height difference says nothing about the design.
+ *
+ * A panel is taller when it holds a real register than when it holds three fake
+ * rows; a table cell is taller when its text wraps, and ours wraps because a
+ * real carrier name is longer than "Acme SMSC" (measured: 129px against the
+ * kit's 72px, on identical padding). A CONTROL is not content-dependent — a
+ * select is the height the design says it is, whatever is in the list — which
+ * is why this is a named list rather than a blanket exclusion of geometry.
+ *
+ * The names must match the `name` field in the component table below. A typo
+ * here does not fail; it silently starts comparing a height that cannot match,
+ * which is why the list is short enough to check by eye.
+ */
+const HEIGHT_EXEMPT = new Set([
+  'panel',
+  'table header cell',
+  'table body cell',
+  'metric card',
+  'source note',
+  'panel heading',
+]);
+
+/**
+ * Are two computed values the same, allowing for sub-pixel layout?
+ *
+ * Height comes back fractional — 41.5938px against 41px — because a line box is
+ * a font metric and fractional positions do not round the same way in two
+ * documents with different surrounding content. Under a pixel is not a design
+ * difference and reporting it teaches everyone to skim the report, which is how
+ * a real difference gets skimmed too.
+ *
+ * A pixel is the threshold rather than a percentage: the mistake worth catching
+ * is the 3px one that turns out to be a line-height, and a percentage would let
+ * that pass on a tall element.
+ */
+function same(prop, want, got) {
+  if (want === got) return true;
+  if (prop !== 'height') return false;
+  const a = Number.parseFloat(want);
+  const b = Number.parseFloat(got);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1;
+}
+
+/**
+ * The most REPRESENTATIVE element for a selector, not the first one in the DOM.
+ *
+ * `querySelector` returns the first match, and the first match is routinely a
+ * variant: our first `.panel` on the SMSC screen is `toolbar panel
+ * grid-toolbar`, and the first `select` on any screen is the topbar's time
+ * range. Comparing a toolbar against the kit's plain panel produced four
+ * "rendered differences" that were really the tool comparing two different
+ * components — the same class of false reading as everywhere else in this
+ * tooling.
+ *
+ * So: prefer an element inside `main`, which excludes the topbar and sidebar
+ * chrome, and among those take the one carrying the FEWEST classes — the
+ * plainest instance, which is what the design system's base rule describes.
+ * The chosen instance is reported alongside any difference, so a comparison
+ * between two differently-modified elements stays visible instead of being
+ * quietly counted as a divergence in the design.
+ */
+const read = (page, selector) =>
+  page.evaluate(
+    ({ selector, props }) => {
+      const all = [...document.querySelectorAll(selector)];
+      if (!all.length) return null;
+      const scoped = all.filter((el) => el.closest('main'));
+      // Never an edge cell. The design system gives `th:first-child` and
+      // `td:last-child` extra side padding — in the kit too — so measuring a
+      // first cell on one side and a middle cell on the other reported a 20px
+      // vs 16px padding difference that both stylesheets agree on.
+      const interior = (scoped.length ? scoped : all).filter(
+        (el) => !el.matches(':first-child') && !el.matches(':last-child'),
+      );
+      const pool = interior.length ? interior : scoped.length ? scoped : all;
+      const el = pool.reduce((best, candidate) =>
+        candidate.classList.length < best.classList.length ? candidate : best,
+      );
+      const style = getComputedStyle(el);
+      return {
+        ...Object.fromEntries(props.map((p) => [p, style[p]])),
+        __classes: el.className || '(none)',
+      };
+    },
+    { selector, props: PROPS },
+  );
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+
+// --- the kit ----------------------------------------------------------------
+const kitPage = await context.newPage();
+await kitPage.goto(pathToFileURL(KIT).href, { waitUntil: 'load' });
+await kitPage.waitForTimeout(8000);
+// The kit boots on its own login screen and its sidebar is an accordion, so a
+// component has to be navigated to before it exists in the DOM. Reading the
+// landing page and calling everything "not present in the kit" is how this
+// silently compared one button and declared the rest unavailable.
+const signIn = kitPage.locator('button', { hasText: /^Sign in$/i }).first();
+if (await signIn.count()) {
+  await signIn.click();
+  await kitPage.waitForTimeout(2500);
+}
+async function kitGoto(label) {
+  const groups = kitPage.locator('.nav-label');
+  for (let i = 0; i < (await groups.count()); i += 1) {
+    if (await kitPage.locator('.sidebar a', { hasText: new RegExp(`^${label}$`, 'i') }).count())
+      break;
+    await groups.nth(i).click();
+    await kitPage.waitForTimeout(200);
+  }
+  const link = kitPage.locator('.sidebar a', { hasText: new RegExp(`^${label}$`, 'i') }).first();
+  if (!(await link.count())) return false;
+  await link.click();
+  await kitPage.waitForTimeout(1200);
+  return true;
+}
+
+// --- ours -------------------------------------------------------------------
+const appPage = await context.newPage();
+await appPage.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+await appPage.fill('[data-testid="username"]', process.env.U ?? 'operator');
+await appPage.fill('[data-testid="password"]', process.env.P ?? 'JkannelLocal2026!');
+await Promise.all([
+  appPage.waitForURL((u) => !u.pathname.includes('/login'), { timeout: 20000 }),
+  appPage.click('[data-testid="login-submit"]'),
+]);
+
+const rows = [];
+let currentRoute = '';
+let currentKitScreen = '';
+for (const component of COMPONENTS) {
+  if (component.kitScreen !== currentKitScreen) {
+    await kitGoto(component.kitScreen);
+    currentKitScreen = component.kitScreen;
+  }
+  if (component.route !== currentRoute) {
+    await appPage.goto(BASE + component.route, { waitUntil: 'domcontentloaded' });
+    await appPage.waitForTimeout(3000);
+    currentRoute = component.route;
+  }
+  // Park the pointer off every row before measuring. The pointer sits at the
+  // origin by default and `tbody tr:hover td { background: var(--surface-2) }`
+  // is real CSS in both the kit and the console — so a cell that happened to be
+  // under it reported a filled background and was counted as a divergence from
+  // the kit's transparent one. A hover state is not a design difference.
+  await Promise.all([
+    kitPage.mouse.move(1598, 2),
+    appPage.mouse.move(1598, 2),
+  ]);
+  await appPage.waitForTimeout(200);
+  const [want, got] = await Promise.all([
+    read(kitPage, component.selector),
+    read(appPage, component.selector),
+  ]);
+  rows.push({ ...component, want, got });
+}
+await browser.close();
+
+// --- report -----------------------------------------------------------------
+console.log('='.repeat(92));
+console.log('RENDERED DIFF — computed styles, kit vs console');
+console.log('='.repeat(92));
+
+let diffCount = 0;
+let absent = 0;
+let incomparable = 0;
+let compared = 0;
+for (const row of rows) {
+  if (!row.want) {
+    console.log(`\n  ${row.name}  — not present in the kit at this screen, skipped`);
+    continue;
+  }
+  if (!row.got) {
+    absent += 1;
+    console.log(`\n  ${row.name}  — MISSING from the console (${row.selector})`);
+    continue;
+  }
+  /*
+   * NOT COMPARABLE when the two sides measured different VARIANTS.
+   *
+   * The kit's first status badge carries its `bad` modifier and ours does not;
+   * its first sidebar link is the active one and ours is not. Those render
+   * differently because they are in different STATES, which is the design
+   * working — and counting the resulting colour and weight deltas as design
+   * divergences buried the real findings underneath them.
+   *
+   * Said out loud rather than silently dropped, so a component that can never
+   * be compared shows up as a gap in this audit rather than passing quietly.
+   */
+  if (row.want.__classes !== row.got.__classes) {
+    incomparable += 1;
+    console.log(
+      `\n  ${row.name}  — not comparable: kit rendered "${row.want.__classes}", ours "${row.got.__classes}"`,
+    );
+    continue;
+  }
+  // Height is skipped for the components whose height is a function of their
+  // content rather than of the design — see HEIGHT_EXEMPT.
+  const props = HEIGHT_EXEMPT.has(row.name) ? PROPS.filter((p) => p !== 'height') : PROPS;
+  const differences = props.filter((p) => !same(p, row.want[p], row.got[p]));
+  compared += props.length;
+  if (!differences.length) continue;
+  diffCount += differences.length;
+  console.log(`\n  ${row.name}   (${row.selector})`);
+  for (const prop of differences)
+    console.log(`      ${prop.padEnd(18)} kit ${String(row.want[prop]).padEnd(26)} ours ${row.got[prop]}`);
+}
+
+console.log(`\n${'='.repeat(92)}`);
+console.log(
+  diffCount === 0 && absent === 0
+    ? `Every comparable component renders identically to the kit across ${compared} computed ` +
+      `properties (${incomparable} not comparable — a different variant on each side).`
+    : `${diffCount} rendered difference(s) across ${compared} properties · ${absent} missing · ` +
+      `${incomparable} not comparable.`,
+);
+fs.writeFileSync(path.join(ROOT, 'docs/rendered-diff.json'), JSON.stringify(rows, null, 2));

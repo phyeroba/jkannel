@@ -694,12 +694,16 @@ const openMessageId = ref('');
 const openMessage_ = ref<RecordValue | null>(null);
 const redispatchBusy = ref('');
 
+/** Closes the message sheet. */
+function closeMessage() {
+  openMessageId.value = '';
+  openMessage_.value = null;
+}
+
 async function openMessage(id: string) {
-  if (openMessageId.value === id) {
-    openMessageId.value = '';
-    openMessage_.value = null;
-    return;
-  }
+  // No longer a toggle: the button says "Open" and the sheet has its own Close,
+  // so a second press on the same row should re-open it rather than dismiss a
+  // sheet the operator cannot see the button behind.
   openMessageId.value = id;
   openMessage_.value = null;
   try {
@@ -1634,6 +1638,41 @@ onMounted(() => {
       </div>
     </DetailDrawer>
 
+    <!-- One inbound message -----------------------------------------------------
+         A SHEET, NOT AN EXTRA ROW.
+
+         Opening a message used to insert a `<tr colspan="8">` under the one
+         clicked, holding the record as raw JSON. That is the inline-panel
+         pattern the kit does not have, and `interaction-audit.mjs` was still
+         reporting it as the last screen in the console doing it. It is also the
+         worst place for it: the expansion pushes every following row down, so
+         the list an operator is scanning rearranges itself under their eyes,
+         and a second click is needed to put it back.
+
+         The sheet keeps the register still and puts the record beside it, which
+         is what the Destinations sheet above already does on the same page.
+         The JSON stays — an MO record is a payload and reading it whole is the
+         point — but it now has room and a heading rather than being wedged into
+         a table cell. -->
+    <DetailDrawer
+      :open="Boolean(openMessageId)"
+      title="Inbound message"
+      eyebrow="MO"
+      :subtitle="openMessageId"
+      wide
+      @close="closeMessage"
+    >
+      <div data-testid="mo-message-panel">
+        <pre
+          v-if="openMessage_"
+          class="json-block"
+          :data-testid="`mo-message-detail-${openMessageId}`"
+          >{{ JSON.stringify(openMessage_, null, 2) }}</pre
+        >
+        <p v-else class="source-note">Reading the message…</p>
+      </div>
+    </DetailDrawer>
+
     <!-- Inbound messages -------------------------------------------------------- -->
     <section class="panel" data-testid="mo-messages-panel" aria-label="Inbound messages">
       <header class="panel-header">
@@ -1750,7 +1789,7 @@ onMounted(() => {
                     :data-testid="`mo-message-open-${text(message.id)}`"
                     @click="openMessage(text(message.id, ''))"
                   >
-                    {{ openMessageId === text(message.id) ? 'Hide' : 'Expand' }}
+                    Open
                   </button>
                   <!--
                     Re-runs matching and fan-out for a message already received.
@@ -1769,16 +1808,6 @@ onMounted(() => {
                   >
                     Re-run matching
                   </button>
-                </td>
-              </tr>
-              <tr v-if="openMessageId === text(message.id)">
-                <td colspan="8">
-                  <pre
-                    v-if="openMessage_"
-                    class="json-block"
-                    :data-testid="`mo-message-detail-${text(message.id)}`"
-                    >{{ JSON.stringify(openMessage_, null, 2) }}</pre>
-                  <p v-else class="source-note">Reading the message…</p>
                 </td>
               </tr>
             </template>

@@ -97,7 +97,7 @@
   {
     "route": "/mo-routing",
     "add": "dialog  (\"New rule\")",
-    "row": "no rows"
+    "row": "nothing (of 3 tables)"
   },
   {
     "route": "/content-rules",
