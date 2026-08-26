@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
+import ModalDialog from '../components/ModalDialog.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
@@ -1482,53 +1483,75 @@ onMounted(() => void refreshAll());
         {{ defError }}
       </p>
 
-      <section
-        v-if="showDefForm"
-        class="composer"
-        aria-label="Create report definition"
-        data-testid="definition-form"
+      <!--
+        A DIALOG, BECAUSE CREATING SOMETHING IS A DIALOG.
+
+        This was a `.composer` section that appeared BELOW the register when
+        "New definition" was pressed — the inline-panel pattern the kit does not
+        have and the console has been removing everywhere else. Add / New /
+        Create opens a centred dialog; a record opens a sheet; a controlled
+        action opens a confirmation. Nothing opens a div under the list.
+
+        It also read as broken rather than merely inconsistent: `dialog-audit`
+        pressed the button and reported "the button did not open a dialog",
+        which is what an operator experiences too — a page that shifts and a
+        form somewhere below the fold.
+      -->
+      <ModalDialog
+        :open="showDefForm"
+        title="New report definition"
+        wide
+        testid="definition-dialog"
+        @close="showDefForm = false"
       >
-        <label>
-          Name
-          <input
-            v-model="newDefName"
-            data-testid="definition-name"
-            placeholder="Daily volume CSV"
-          />
-        </label>
-        <label>
-          Report type
-          <select v-model="newDefType" data-testid="definition-type">
-            <option v-for="kind in availableKinds" :key="kind.key" :value="kind.key">
-              {{ kind.label }}
-            </option>
-          </select>
-          <small class="source-note" data-testid="definition-type-note"
-            >Only the kinds the scheduler can run are listed. Other catalog panels can be read on
-            this page but cannot be saved as a definition.</small
-          >
-        </label>
-        <label>
-          Schedule
-          <select v-model="newDefSchedule" data-testid="definition-schedule">
-            <option value="">Manual (no schedule)</option>
-            <option value="hourly">Hourly</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-          </select>
-        </label>
-        <label>
-          Format
-          <select v-model="newDefFormat" data-testid="definition-format">
-            <option value="summary">Summary</option>
-            <option value="csv">CSV</option>
-          </select>
-        </label>
-        <label class="checkbox-row">
-          <input v-model="newDefEnabled" type="checkbox" data-testid="definition-enabled" />
-          Enabled
-        </label>
-        <div>
+        <p class="source-note">
+          A definition is a saved report the scheduler can run on its own. Only the kinds the
+          scheduler can actually run are offered — other panels on this page can be read here but
+          not saved as a definition.
+        </p>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Name</span>
+            <input
+              v-model="newDefName"
+              data-testid="definition-name"
+              placeholder="Daily volume CSV"
+            />
+          </label>
+          <label class="field">
+            <span>Report type</span>
+            <select v-model="newDefType" data-testid="definition-type">
+              <option v-for="kind in availableKinds" :key="kind.key" :value="kind.key">
+                {{ kind.label }}
+              </option>
+            </select>
+            <small data-testid="definition-type-note">
+              Only the kinds the scheduler can run are listed.
+            </small>
+          </label>
+          <label class="field">
+            <span>Schedule</span>
+            <select v-model="newDefSchedule" data-testid="definition-schedule">
+              <option value="">Manual (no schedule)</option>
+              <option value="hourly">Hourly</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Format</span>
+            <select v-model="newDefFormat" data-testid="definition-format">
+              <option value="summary">Summary</option>
+              <option value="csv">CSV</option>
+            </select>
+          </label>
+          <label class="field checkbox-row dialog-span">
+            <input v-model="newDefEnabled" type="checkbox" data-testid="definition-enabled" />
+            <span>Enabled — the scheduler may run this definition</span>
+          </label>
+        </div>
+        <template #footer>
+          <button class="secondary-button" @click="showDefForm = false">Cancel</button>
           <button
             class="primary-button"
             data-testid="definition-submit"
@@ -1537,9 +1560,8 @@ onMounted(() => void refreshAll());
           >
             Create definition
           </button>
-          <button class="secondary-button" @click="showDefForm = false">Cancel</button>
-        </div>
-      </section>
+        </template>
+      </ModalDialog>
 
       <p
         v-if="defState === 'error' && defMissing"

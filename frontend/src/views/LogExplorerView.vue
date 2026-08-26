@@ -126,6 +126,32 @@ const until = ref('');
 const limit = ref(100);
 
 const entries = ref<LogEntry[]>([]);
+/*
+ * Paging state for the Entries grid.
+ *
+ * It reported "100 shown of 4,312 matching" and offered no way to reach line
+ * 101 — the only control was Rows, and raising a limit is not paging. The panel
+ * even had a standing notice telling the operator to raise the row count or
+ * narrow the filters, which was honest about the limitation and no help at all.
+ */
+const offset = ref(0);
+/** Any filter change starts again at page one; page 4 of a new query is a lie. */
+function searchFromStart() {
+  offset.value = 0;
+  return search();
+}
+function turnPage(direction: number) {
+  const next = Math.max(0, offset.value + direction * limit.value);
+  if (direction > 0 && offset.value + limit.value >= num(result.value?.matched)) return;
+  if (next === offset.value) return;
+  offset.value = next;
+  void search();
+}
+const pageLabel = computed(() => {
+  const matched = num(result.value?.matched);
+  if (!matched || !entries.value.length) return 'Showing 0 of 0';
+  return `Showing ${offset.value + 1}–${offset.value + entries.value.length} of ${matched}`;
+});
 const result = ref<LogQueryResult | null>(null);
 const state = ref<LoadState>('loading');
 const error = ref('');
@@ -162,6 +188,10 @@ function buildParams() {
   if (sinceIso) params.set('since', sinceIso);
   if (untilIso) params.set('until', untilIso);
   params.set('limit', String(limit.value));
+  // Always sent, including zero: this is what pages the buffer, and the server
+  // treats a missing offset as "the newest slice" rather than "page one of a
+  // pageable result".
+  params.set('offset', String(offset.value));
   return params;
 }
 
@@ -378,10 +408,10 @@ onMounted(() => {
             data-testid="log-correlation-id"
             type="search"
             placeholder="Paste the correlation id from an error response or a header"
-            @keyup.enter="search"
+            @keyup.enter="searchFromStart"
           />
         </label>
-        <button class="primary-button" data-testid="log-search-submit" @click="search">
+        <button class="primary-button" data-testid="log-search-submit" @click="searchFromStart">
           {{ state === 'loading' ? 'Searching…' : 'Search' }}
         </button>
         <button class="secondary-button" data-testid="log-reset" @click="resetFilters">
@@ -389,83 +419,115 @@ onMounted(() => {
         </button>
       </div>
 
-      <div class="grid-toolbar">
-        <label class="filter-select">
-          <span>Request ID</span>
-          <input
-            v-model="requestId"
-            data-testid="log-request-id"
-            type="search"
-            @keyup.enter="search"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Minimum level</span>
-          <select v-model="minLevel" data-testid="log-min-level" @change="search">
-            <option value="">Any</option>
-            <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Exact level</span>
-          <select v-model="level" data-testid="log-level" @change="search">
-            <option value="">Any</option>
-            <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Route contains</span>
-          <input
-            v-model="routeFilter"
-            data-testid="log-route"
-            type="search"
-            placeholder="/api/v1/messages"
-            @keyup.enter="search"
-          />
-        </label>
-        <label class="filter-select filter-search">
-          <span>Message contains</span>
-          <input
-            v-model="contains"
-            data-testid="log-contains"
-            type="search"
-            placeholder="timeout, refused, …"
-            @keyup.enter="search"
-          />
-        </label>
-      </div>
+      <!--
+        NARROWING, AS A LABELLED GROUP OF EQUAL FIELDS.
 
-      <div class="grid-toolbar">
-        <label class="filter-select">
-          <span>Tenant ID</span>
-          <input v-model="tenantId" data-testid="log-tenant" type="search" @keyup.enter="search" />
-        </label>
-        <label class="filter-select">
-          <span>User ID</span>
-          <input v-model="userId" data-testid="log-user" type="search" @keyup.enter="search" />
-        </label>
-        <label class="filter-select">
-          <span>Since</span>
-          <input v-model="since" data-testid="log-since" type="datetime-local" />
-        </label>
-        <label class="filter-select">
-          <span>Until</span>
-          <input v-model="until" data-testid="log-until" type="datetime-local" />
-        </label>
-        <label class="filter-select">
-          <span>Rows</span>
-          <select v-model.number="limit" data-testid="log-limit" @change="search">
-            <option v-for="choice in LIMIT_CHOICES" :key="choice" :value="choice">
-              {{ choice }}
-            </option>
-          </select>
-        </label>
-        <button class="secondary-button" data-testid="log-apply" @click="search">
-          Apply filters
-        </button>
-      </div>
+        This was three `.grid-toolbar` rows holding eleven controls: a flex row
+        that packs `label · control` pairs left to right at whatever width each
+        happens to want. Nine fields on two lines, no two the same width, the
+        labels sitting inline so the eye cannot find the start of a field, and
+        the auto-refresh controls in the same visual run as the filters despite
+        having nothing to do with narrowing a search.
 
-      <div class="grid-toolbar">
+        A toolbar is the right component for three or four controls above a
+        grid. It is the wrong one for a form, and this is a form.
+
+        So: a `.field` grid, which is the design system's form pattern — label
+        ABOVE control, every column the same width, and the fields in the order
+        somebody actually narrows a search. The identifiers come first because
+        they answer the question outright; the coarse filters follow; the time
+        window is last because it is a qualifier on the rest. Refresh moves to
+        its own footer, since it governs the RESULT and not the QUERY.
+      -->
+      <fieldset class="log-filters" data-testid="log-filter-group">
+        <legend>Or narrow it down</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Request ID</span>
+            <input
+              v-model="requestId"
+              data-testid="log-request-id"
+              type="search"
+              @keyup.enter="searchFromStart"
+            />
+          </label>
+          <label class="field">
+            <span>Tenant ID</span>
+            <input
+              v-model="tenantId"
+              data-testid="log-tenant"
+              type="search"
+              @keyup.enter="searchFromStart"
+            />
+          </label>
+          <label class="field">
+            <span>User ID</span>
+            <input v-model="userId" data-testid="log-user" type="search" @keyup.enter="searchFromStart" />
+          </label>
+          <label class="field">
+            <span>Minimum level</span>
+            <select v-model="minLevel" data-testid="log-min-level" @change="searchFromStart">
+              <option value="">Any</option>
+              <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Exact level</span>
+            <select v-model="level" data-testid="log-level" @change="searchFromStart">
+              <option value="">Any</option>
+              <option v-for="choice in LEVELS" :key="choice" :value="choice">{{ choice }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Rows</span>
+            <select v-model.number="limit" data-testid="log-limit" @change="searchFromStart">
+              <option v-for="choice in LIMIT_CHOICES" :key="choice" :value="choice">
+                {{ choice }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Route contains</span>
+            <input
+              v-model="routeFilter"
+              data-testid="log-route"
+              type="search"
+              placeholder="/api/v1/messages"
+              @keyup.enter="searchFromStart"
+            />
+          </label>
+          <label class="field">
+            <span>Message contains</span>
+            <input
+              v-model="contains"
+              data-testid="log-contains"
+              type="search"
+              placeholder="timeout, refused, …"
+              @keyup.enter="searchFromStart"
+            />
+          </label>
+          <label class="field">
+            <span>Since</span>
+            <input v-model="since" data-testid="log-since" type="datetime-local" />
+          </label>
+          <label class="field">
+            <span>Until</span>
+            <input v-model="until" data-testid="log-until" type="datetime-local" />
+          </label>
+        </div>
+        <div class="log-filter-actions">
+          <button class="secondary-button" data-testid="log-apply" @click="searchFromStart">
+            Apply filters
+          </button>
+          <span v-if="activeFilters.length" class="source-note">
+            {{ activeFilters.length }} filter{{ activeFilters.length === 1 ? '' : 's' }} applied
+          </span>
+        </div>
+      </fieldset>
+
+      <!-- Refresh governs the RESULT, not the query, so it sits apart from the
+           filters and reads as a footer to the panel. -->
+      <div class="log-refresh" data-testid="log-refresh-bar">
         <label class="filter-select">
           <span>Auto refresh</span>
           <select v-model="autoRefresh" data-testid="log-auto-toggle">
@@ -518,9 +580,15 @@ onMounted(() => {
         {{ missing ? 'The log query API is not available in this deployment.' : error }}
       </p>
       <template v-else>
-        <p v-if="truncated" class="warn-notice" data-testid="log-truncated">
-          {{ num(result?.matched) }} entries match, but only {{ entries.length }} are shown. Raise
-          the row count or narrow the filters — this is the newest slice, not the whole match.
+        <!-- The notice that used to live here told the operator to raise the
+             row count or narrow the filters, because there was no other way
+             past the newest slice. There is now: the pager below reaches every
+             matching line. What remains worth saying is the thing paging does
+             NOT fix — the buffer is one process's memory and evicts. -->
+        <p v-if="truncated" class="source-note" data-testid="log-truncated">
+          Paging through {{ num(result?.matched) }} matching lines held by THIS process. The buffer
+          keeps {{ num(result?.capacity) }} and has already evicted {{ num(result?.dropped) }}, so
+          an absence here is not proof the event did not happen.
         </p>
         <div class="table-wrap">
           <table>
@@ -602,6 +670,27 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <footer class="pager" data-testid="log-pager">
+          <span data-testid="log-range">{{ pageLabel }}</span>
+          <div class="pager-buttons">
+            <button
+              class="secondary-button"
+              data-testid="log-prev"
+              :disabled="state === 'loading' || offset === 0"
+              @click="turnPage(-1)"
+            >
+              Previous
+            </button>
+            <button
+              class="secondary-button"
+              data-testid="log-next"
+              :disabled="state === 'loading' || offset + limit >= num(result?.matched)"
+              @click="turnPage(1)"
+            >
+              Next
+            </button>
+          </div>
+        </footer>
       </template>
     </section>
 
@@ -657,4 +746,47 @@ onMounted(() => {
   </div>
 </template>
 
+<style scoped>
+/* The filter group. A `fieldset` rather than a `div` because it IS one — the
+   legend names what the controls do collectively, which is the thing three
+   unlabelled toolbar rows could not say. Its own border is removed and the rule
+   above the legend does the separating, so the panel keeps one visual language
+   rather than gaining a box inside a box. */
+.log-filters {
+  margin: 4px 0 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.log-filters > legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-medium);
+}
+/* `.dialog-grid` is the design system's equal-column field grid and is already
+   sized so a label, a control and a hint fit in one track. Reused here rather
+   than reinvented: the same form pattern should look the same in a panel as it
+   does in a dialog. */
+.log-filters .dialog-grid {
+  margin-top: 12px;
+}
+.log-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: 16px;
+}
+/* Refresh is a footer to the panel, not another filter row, so it is separated
+   by a rule and its controls stay compact. */
+.log-refresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+</style>
 <style src="./workspace-extras.css"></style>

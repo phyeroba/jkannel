@@ -381,8 +381,14 @@ main > [data-testid='module-workspace'] > * {
    that ports faithfully is the one that reproduces the kit's OUTPUT at the
    kit's width, not the one that copies its input.
    --------------------------------------------------------------------------- */
-.dialog-body .dialog-grid,
-.drawer-body .dialog-grid {
+/* Unscoped, because it is the design system's FIELD GRID and a form looks the
+   same wherever it is. It was written for `.dialog-body` and `.drawer-body`
+   only, so a panel wanting the same equal-column layout had to reinvent it —
+   which is how the Log Explorer's search ended up as three flex toolbars
+   packing nine differently-sized controls left to right. The dialog-specific
+   rules below (`.dialog-span`, the sibling spacing) stay scoped, because those
+   really are about being in a dialog. */
+.dialog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--sp-4); /* 12px — the kit's inline value */

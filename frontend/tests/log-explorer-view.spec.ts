@@ -180,11 +180,23 @@ describe('Log explorer view', () => {
     wrapper.unmount();
   });
 
-  it('warns when the match set is larger than the page returned', async () => {
+  it('says what a page is a page OF, and pages to the rest of it', async () => {
+    /*
+     * This used to assert the notice said "940 entries match ... raise the row
+     * count or narrow the filters", which was the honest thing to say while
+     * there was no way to reach line 101. There is now a pager, so the advice
+     * would be wrong; what stays worth saying is the part paging does not fix,
+     * which is that the buffer is one process's memory and evicts.
+     */
     stubApi(() => apiResponse(result(ENTRIES, { matched: 940 })));
     const wrapper = mount(LogExplorerView);
     await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="log-truncated"]')).toBe(true));
-    expect(overlay(wrapper, '[data-testid="log-truncated"]').text()).toContain('940 entries match');
+    const notice = overlay(wrapper, '[data-testid="log-truncated"]').text();
+    expect(notice).toContain('940');
+    expect(notice).toContain('evicted');
+    // The pager is the thing that makes the rest of the match reachable.
+    expect(overlayHas(wrapper, '[data-testid="log-next"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="log-range"]').text()).toContain('of 940');
     wrapper.unmount();
   });
 

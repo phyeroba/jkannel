@@ -31,6 +31,8 @@ export interface LogQuery {
   since?: string;
   until?: string;
   limit?: number;
+  /** How many of the newest matches to skip, so the result can be paged. */
+  offset?: number;
 }
 
 export interface LogQueryResult {
@@ -135,9 +137,28 @@ export class LogBufferService {
       return true;
     });
 
-    // Newest first: the operator asking this question wants the last thing that
-    // happened, not the first thing still in memory.
-    const items = matches.slice(-limit).reverse();
+    /*
+     * Newest first: the operator asking this question wants the last thing that
+     * happened, not the first thing still in memory.
+     *
+     * OFFSET, so the result can be PAGED. Without it the only way past the most
+     * recent `limit` lines was to raise `limit`, which is not a smaller version
+     * of paging — the console reported "100 shown of 4,312 matching" and had no
+     * control that could reach line 101. Raising the limit to reach it also
+     * re-renders every line before it.
+     *
+     * Applied AFTER the reverse, so page 2 is the 101st-newest onwards. Doing it
+     * before would page from the oldest end and make "newest first" true only of
+     * the first page.
+     *
+     * The buffer is a ring and the process keeps writing to it, so a line can
+     * move between pages while somebody is reading — the same is true of `tail`
+     * on a live file. `matched` is returned with every page so the screen can
+     * say what it is a page OF rather than implying a stable total.
+     */
+    const offset = Math.max(Math.floor(filter.offset ?? 0), 0);
+    const newestFirst = matches.slice().reverse();
+    const items = newestFirst.slice(offset, offset + limit);
     return {
       items,
       matched: matches.length,

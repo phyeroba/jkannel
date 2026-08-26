@@ -449,10 +449,12 @@ describe('Analytics & Reports view', () => {
     );
     await overlay(wrapper, '[data-testid="definition-new"]').trigger('click');
 
-    const options = wrapper
-      .get('[data-testid="definition-type"]')
+    // `overlay`, not `wrapper.get`: the create form is a ModalDialog now rather
+    // than a section rendered under the register, so its controls are teleported
+    // out of the component's own subtree.
+    const options = overlay(wrapper, '[data-testid="definition-type"]')
       .findAll('option')
-      .map((option) => option.element.value);
+      .map((option) => (option.element as HTMLOptionElement).value);
     expect(options).toEqual(['daily_volume', 'hourly_heatmap']);
     // Not offered: not in the create endpoint's whitelist.
     expect(options).not.toContain('queue_status');

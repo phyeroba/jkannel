@@ -43,6 +43,10 @@ export class LogsController {
     const limit = q.limit === undefined ? undefined : Number(q.limit);
     if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0))
       throw new BadRequestException('limit must be a positive number');
+    // Zero is valid here and `limit`'s rule is not: page one is offset 0.
+    const offset = q.offset === undefined ? undefined : Number(q.offset);
+    if (offset !== undefined && (!Number.isFinite(offset) || offset < 0))
+      throw new BadRequestException('offset must be zero or a positive number');
     const filter: LogQuery = {
       correlationId: q.correlationId || undefined,
       requestId: q.requestId || undefined,
@@ -55,6 +59,7 @@ export class LogsController {
       since: isoOrThrow(q.since, 'since'),
       until: isoOrThrow(q.until, 'until'),
       limit,
+      offset,
     };
     return this.buffer.query(filter);
   }
