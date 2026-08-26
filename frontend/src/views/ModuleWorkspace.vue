@@ -1717,6 +1717,28 @@ function messageParams(limitOverride?: number) {
   if (Number.isFinite(from)) params.set('from', new Date(from).toISOString());
   if (Number.isFinite(to)) params.set('to', new Date(to).toISOString());
   params.set('limit', String(limitOverride ?? msgLimit.value));
+  /*
+   * `offset`, so the Messages grid can be paged.
+   *
+   * It had a Rows selector and no pager, which is not a smaller version of
+   * pagination — it is a different thing. The only way to reach a message that
+   * was not in the most recent N was to raise N, and with 17,689 rows in the
+   * spool on the local stack alone, "raise the limit until your row appears" is
+   * not a way to find anything.
+   *
+   * ALWAYS SENT, including `offset=0`, and that is not a detail. The repository
+   * runs two different paging modes: with no `offset` it uses a keyset cursor
+   * and returns `total: null`, and only an explicit `offset` switches it to
+   * offset paging with a `count(*) OVER()`. So the tidy-looking version of this
+   * line — omit the parameter when it is zero — left page one with no total,
+   * which left Next permanently disabled, which meant the pager could never be
+   * used at all. Measured: "Showing 1–100 of 100" against 17,689 rows.
+   *
+   * Not sent on an export: `limitOverride` is how the export asks for its own
+   * (larger) page, and an export that started from page 4 would silently omit
+   * the first three pages of what the operator was looking at.
+   */
+  if (limitOverride === undefined) params.set('offset', String(offset.value));
   applyReveal(params);
   return params;
 }
@@ -1744,6 +1766,12 @@ const messageFilterError = ref('');
 /** Human summary of the filter set the API echoed back, proving what it applied. */
 const messageAppliedFilters = ref('');
 function applyMessageFilters() {
+  // Back to the first page. Changing a filter while on page 4 would ask the
+  // server for rows 300–400 of a result set that may have fewer than 300 rows,
+  // and the operator would be shown an empty grid for a filter that matches
+  // plenty. Every other register already does this on a filter change; the
+  // messages path did not, because until now it had no pages to be on.
+  offset.value = 0;
   void load();
 }
 /**
@@ -1997,9 +2025,18 @@ function toggleSortDirection() {
   if (sortField.value) applyGrid();
 }
 
+/**
+ * The page size actually in force.
+ *
+ * Messages has its own Rows selector (`msgLimit`) and every other register uses
+ * the shared `limit`. The pager has to step by whichever one the request used,
+ * or Next would skip or repeat rows — a pager that lies about where it is.
+ */
+const pageSize = computed(() => (key.value === 'messages' ? msgLimit.value : limit.value));
+
 function turnPage(direction: number) {
-  const next = Math.max(0, offset.value + direction * limit.value);
-  if (direction > 0 && offset.value + limit.value >= total.value) return;
+  const next = Math.max(0, offset.value + direction * pageSize.value);
+  if (direction > 0 && offset.value + pageSize.value >= total.value) return;
   if (next === offset.value) return;
   offset.value = next;
   void load();
@@ -6660,7 +6697,40 @@ onUnmounted(() => {
                 record, and a destructive control one careless click away in a
                 dense grid is the wrong place for them.
               -->
+              <!--
+                OPEN AND EDIT ARE IN THE ROW; DELETE IS NOT.
+
+                The reasoning below — that a destructive control one careless
+                click away in a dense grid is in the wrong place — still holds,
+                and Delete / Archive stays on the record with its impact review.
+                What it got wrong was leaving nothing in the row to say the
+                record HAS more actions. Reported from the running console:
+                "there is no ability to modify the smsc, there is just add smsc,
+                test and reconnect". Edit and Delete were both there, in the
+                sheet, and the register gave no sign of it — a capability
+                nobody can find is not a capability. The Carriers register has
+                had Open / Edit / Delete in the row throughout, so the two
+                registers also disagreed about how a record is reached.
+
+                Open is explicit rather than relying on the row being clickable,
+                which is discoverable only by trying it. Edit is safe and is the
+                thing an operator came to do.
+              -->
               <td v-if="key === 'smsc'" class="row-actions" @click.stop>
+                <button
+                  class="secondary-button"
+                  :data-testid="`smsc-open-${row.id}`"
+                  @click="openDetail(row)"
+                >
+                  Open
+                </button>
+                <button
+                  class="secondary-button"
+                  :data-testid="`smsc-edit-${row.id}`"
+                  @click="openDetail(row).then(() => (editing = true))"
+                >
+                  Edit
+                </button>
                 <button class="secondary-button" @click="testSmsc(row)">Test</button>
                 <button
                   class="secondary-button"
@@ -6804,7 +6874,10 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
-      <footer v-if="grid" class="pager">
+      <!-- `key === 'messages'` as well as `grid`: the messages endpoint pages
+           on limit/offset and reports a real total, it simply was not built on
+           the shared grid config. -->
+      <footer v-if="grid || key === 'messages'" class="pager">
         <span data-testid="grid-range">{{ rangeLabel }}</span>
         <div class="pager-buttons">
           <button
@@ -6818,7 +6891,7 @@ onUnmounted(() => {
           <button
             class="secondary-button"
             data-testid="grid-next"
-            :disabled="loading || offset + limit >= total"
+            :disabled="loading || offset + pageSize >= total"
             @click="turnPage(1)"
           >
             Next

@@ -361,10 +361,30 @@ main > [data-testid='module-workspace'] > * {
    or a narrow viewport collapses to a single column on its own, and a field
    never drops below a typable 200px.
    --------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   THE FIELD TRACK IS SIZED FROM THE KIT'S RENDERED WIDTH, NOT ITS SOURCE
+
+   The kit's Add SMSC dialog lays its fields out with
+   `repeat(auto-fit, minmax(200px, 1fr))`, and copying that number verbatim is
+   what made these dialogs squashed. The kit's card is `min(620px, ...)`, so
+   200px yields TWO tracks of about 283px. Ours is 900px for a create form —
+   deliberately, a grouped form wraps into unreadability at 620px — and the same
+   200px yields FOUR tracks of 205px. A label, a control and a hint do not fit
+   in 205px, which is exactly what "squashed" was.
+
+   Measured before this: Add SMSC and Add customer both came out
+   `205.5px 205.5px 205.5px 205.5px`.
+
+   So the minimum is raised to the width the kit actually renders. At the kit's
+   620px this still produces two ~283px tracks — identical to the kit — and at
+   900px it produces three of about 278px instead of four of 205px. The rule
+   that ports faithfully is the one that reproduces the kit's OUTPUT at the
+   kit's width, not the one that copies its input.
+   --------------------------------------------------------------------------- */
 .dialog-body .dialog-grid,
 .drawer-body .dialog-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--sp-4); /* 12px — the kit's inline value */
 }
 /* `.field` carries an 18px bottom margin for stacked forms. Inside a grid that

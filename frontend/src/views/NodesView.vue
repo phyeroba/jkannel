@@ -90,10 +90,28 @@ async function load() {
   if (state.value !== 'live') state.value = 'loading';
   try {
     payload.value = await apiRequest<NodesPayload>('/nodes');
-    // `partial` and not `live`: one measurable node out of an unknown number is
-    // by definition an incomplete picture, and the state model has a word for
-    // that. Calling it `live` would imply the inventory is the whole estate.
-    state.value = 'partial';
+    /*
+     * `live`, because the read succeeded.
+     *
+     * This was `partial`, on the reasoning that one measurable node out of an
+     * unknown number is an incomplete picture and the state model has a word
+     * for that. It has a word for a different thing. `partial` renders "Some
+     * node resource usage could not be loaded", and it is for a read where some
+     * parts genuinely failed — its detail line even offers to list which ones.
+     * Nothing here failed: every node this deployment can measure was read, in
+     * full, first time.
+     *
+     * So the screen reported a failure that had not happened, on every visit,
+     * for ever. Reported from the running console as an error to fix — which is
+     * exactly the cost of a false alarm: somebody's attention, every time, and
+     * eventually the assumption that the banner means nothing.
+     *
+     * The honesty the `partial` was reaching for is still on the screen, and
+     * better placed: the `nodes-inventory-limit` panel below states the scope
+     * in its own words, is not dismissible, and says WHY the list is short
+     * rather than implying something broke.
+     */
+    state.value = 'live';
     error.value = '';
   } catch (reason) {
     payload.value = null;
