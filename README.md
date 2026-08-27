@@ -27,13 +27,28 @@ engine names.
 
 ## Screenshots
 
-Captured from a development stack: the binds are Kannel's own `fake` SMSCs, the
-traffic is synthetic, and any real carrier hostname is replaced before the
-shutter by `scripts/readme-shots.mjs`. Regenerate them with:
+Captured from a development stack: the binds are Kannel's own `fake` SMSCs, the traffic
+is synthetic, and any real carrier hostname is replaced **in the DOM before the shutter**
+by `scripts/readme-shots.mjs`. Regenerate them with:
 
 ```bash
-node scripts/readme-shots.mjs        # copy into e2e/ first to resolve Playwright
+# Copy into frontend/ or e2e/ first — ESM resolves @playwright/test relative to
+# the script file, and only those two packages have it installed.
+cp scripts/readme-shots.mjs frontend/.shots.mjs && (cd frontend && node .shots.mjs)
 ```
+
+The replacement list lives in the gitignored `.env` as `SHOT_REDACTIONS`, never in the
+script — a redaction list that names the hostname it protects publishes the hostname it
+protects. **The script refuses to run if it cannot find that list**, because from inside
+it "this deployment has no carrier configured" and "the list did not load" look
+identical, and only one of those is safe to guess at. Pass
+`SHOT_ALLOW_NO_REDACTION=true` to say the former deliberately.
+
+Note what this does and does not guarantee. The check runs while the page is still
+text: it replaces the values in the DOM and refuses to continue if any survives.
+`scripts/secret-scan.mjs` **cannot** back it up — a PNG holds compressed pixels, so a
+hostname *drawn* into an image is not the byte sequence anywhere in the file, and the
+scan will report a leaking screenshot clean. Both of those were learned the hard way.
 
 ### Operations dashboard
 
@@ -143,7 +158,7 @@ The summary:
 |---|---|
 | **Messaging** | Send single, bulk or over the REST API; one transactional send pipeline (normalise → blocklist → route → entitlements → record → submit); message explorer with CSV/PDF export; replay, clone and requeue. |
 | **Live Queue** | Per-bind status, queue depth, failures and throughput; start/stop/reconnect a *single* bind without restarting the gateway; reroute the pending spool; bulk-resend failed traffic to a healthy bind. |
-| **Routing** | Static, prefix, country, operator and weighted routes; priority, least-cost, load-balance, round-robin and time-based strategies; health-aware failover; a resolve/preview that explains why a destination took a given bind; per-message decision audit. |
+| **Routing** | Static, prefix, country, operator, weighted and **wildcard** routes (see below); priority, least-cost, load-balance, round-robin and time-based strategies; health-aware failover; a resolve/preview that explains why a destination took a given bind; per-message decision audit. |
 | **SMSC connections** | Every one of the 38 settable attributes has a control — no config file, no curl — grouped as a carrier onboarding sheet and each field naming the `kannel.conf` directive it becomes. Enable/disable/reconnect against the live engine, bind-state polling and transition history. |
 | **Configuration** | Generates a complete working gateway config from the database, with credentials emitted as secret *references*; immutable versions, diff, approval, atomic deploy, native validation, drift detection and automatic rollback on a failed health check. |
 | **Monitoring & alerts** | Bind poller with anti-flap alerting, scheduled alert-rule evaluation, a full alert lifecycle (acknowledge, resolve, assign, suppress, reopen, close, comments), escalation policies with a deliverability check, maintenance windows, Prometheus metrics and an SMS-focused Grafana dashboard. |
@@ -153,14 +168,40 @@ The summary:
 | **Security** | RBAC on every endpoint with eight seeded roles and editable permission grants, PostgreSQL row-level security forced on all tenant tables, TOTP MFA, refresh-token family revocation, an enforced per-tenant password and session policy, and a database-enforced tamper-evident audit hash chain. |
 | **Backup & DR** | Scheduled encrypted `pg_dump` backups with retention classes, integrity verification, restore into an isolated verification database, and local or S3-compatible offsite destinations. |
 
-**Scale:** 39 API controllers · ~250 endpoints · 34 database migrations · 26 console
-screens · 100 backend test suites (836 tests) · 18 frontend suites (112 tests).
+The **wildcard** match type deserves a line of its own, because it is the one an SMS
+operator writes constantly and it is easy to get subtly wrong:
+
+```
+25677* | 25678* | 25676* | 25679*      all MTN Uganda, as one rule
+
+  *   any run of characters, including none
+  #   exactly one digit
+  $   exactly one letter
+  |   alternation between whole patterns
+```
+
+Everything outside those four characters is escaped, so `.` is a literal dot and a
+pattern cannot become a regex by accident or hang the send path. Spaces around the
+separator are trimmed — written without that, `25677* | 25678*` silently matched only
+its first branch and reported no problem, which is the worst failure a routing rule has.
+
+**Scale:** 47 API controllers · 353 endpoints · 52 database migrations (through `054`) ·
+50 console screens · 175 backend test suites (2,052 tests) · 61 frontend suites
+(698 tests).
+
+Every figure above is countable from the repository rather than remembered:
+`find backend/src -name '*.controller*.ts' ! -name '*.spec.ts'`,
+`scripts/route-shadow-audit.mjs` (which walks every route), `ls database/migrations/*.up.sql`,
+`docs/route-smoke.json`, and the two test runners. They were last recounted on
+2026-08-27, and the previous set had drifted by roughly a factor of two.
 
 ### Known limits worth knowing before you plan around them
 
-Read [FEATURES.md § Not yet implemented](FEATURES.md#not-yet-implemented) in full — but
-note that it was written against commit `eefa320` and a later commit closed several of
-the gaps it lists. The limits that still hold, and that surprise people most:
+Read [FEATURES.md § Not yet implemented](FEATURES.md#not-yet-implemented) in full. It is
+re-verified by `scripts/features-verify.mjs`, which probes each claim against the running
+code rather than trusting the prose — at the last run, 11 of the listed gaps were real,
+5 had since been built, and 4 were awaiting evidence rather than code. The limits that
+still hold, and that surprise people most:
 
 - **A fresh install pages nobody.** A default in-app channel is seeded, so alerts always
   reach the console — but no email, webhook or SMS destination exists until you add one.
@@ -172,9 +213,14 @@ the gaps it lists. The limits that still hold, and that surprise people most:
   HTTP by design and the certificate lives on your own edge — that is how the live
   deployment runs. An opt-in `tls` profile lets JKANNEL terminate it instead. See
   [`infrastructure/nginx/README.md`](infrastructure/nginx/README.md).
-- **A generated configuration has never bound to a real carrier.** The render is
-  complete and natively validated, but the create → deploy → **bind** chain is unproven
-  because it needs carrier-side IP allow-listing.
+- **A generated configuration has never bound to a real carrier.** As of 2026-08-27 the
+  chain is proven up to the last link: a carrier SMPP group is generated from the
+  database, natively validated by a real bearerbox, deployed, and *held open by the
+  running engine*, which reports the bind as `re-connecting` and retries every ten
+  seconds. What has never happened is the TCP connection succeeding — the carrier has
+  not allow-listed the deployment's egress address, so `Couldn't connect to server` is
+  as far as it gets. Everything between the console and the engine is exercised; the
+  bind handshake, DLR correlation and throughput shaping against a real ESME are not.
 - **Some workflows have no console screen.** Customer quotas and credit, API-key
   issuance and notification channels are API-only. The guides give you the `curl`.
 - **Plugins register and validate but do not execute** — there is no plugin runtime.
@@ -216,6 +262,22 @@ rather than fixed.
 - **SQLBox** (`send_sms` / `sent_sms`) is the engine's own message store. JKANNEL reads
   and writes it as an external, engine-owned source; it does not fork the data into
   tables of its own.
+
+  Two properties of it are worth knowing before you operate this, because both fail
+  silently and both were found the hard way. SQLBox opens **two** connections to
+  bearerbox, and the one that drains `send_sms` **does not retry** — if it cannot
+  resolve or reach bearerbox the instant it starts, that thread terminates for the life
+  of the process while the other connects seconds later, leaving the container running,
+  every healthcheck satisfied, and outbound completely dead. The container therefore
+  waits for bearerbox to accept a connection before starting SQLBox at all, and
+  supervises that thread by reading SQLBox's own log; a socket count cannot help,
+  because both connections go to the same address and port.
+
+  And the engine's configuration is mounted as a **directory**, never as a file. The
+  deployment writes a temp file and renames it over the target, which is atomic for a
+  reader and produces a new inode — and a file bind-mount is pinned to its inode, so a
+  container mounting the file goes on reading the old one. Every deploy reported success
+  while the engine never saw the change.
 - **Redis** backs rate limiting, idempotency and auth throttling. It is optional for
   liveness — if it is down the limiters fail open and `/health` says so.
 
@@ -228,6 +290,15 @@ Requires Docker with the Compose plugin.
 
 ```bash
 cp .env.example .env        # then fill in the replace-with-… values
+
+# Seed the engine configuration. This step is REQUIRED and is easy to miss:
+# runtime/ is gitignored, so a fresh clone has no engine config, and bearerbox
+# is started with /etc/kamex/kamex.conf as its argument. The console rewrites
+# this file every time you deploy a configuration; the template is the starting
+# point, not the source of truth.
+mkdir -p runtime/kamex/engine
+cp infrastructure/kannel/kamex.conf runtime/kamex/engine/kamex.conf
+chmod 644 runtime/kamex/engine/kamex.conf   # bearerbox runs unprivileged and must read it
 
 docker compose --profile engine-kamex up -d --build
 
@@ -323,7 +394,7 @@ profile-gated `reverse-proxy-tls` service. Both topologies are documented in
 ## Running the tests
 
 ```bash
-# Backend — 100 suites / 836 tests
+# Backend — 175 suites / 2,052 tests
 cd backend && npm ci && npm test
 npm run test:cov            # with the coverage gate
 npm run typecheck && npm run lint
@@ -331,7 +402,7 @@ npm run typecheck && npm run lint
 # Backend integration (needs a live database; skips honestly without one)
 npm run test:integration
 
-# Frontend — 18 suites / 112 tests
+# Frontend — 61 suites / 698 tests
 cd frontend && npm ci && npm test
 npm run test:cov && npm run typecheck && npm run lint
 
@@ -381,14 +452,27 @@ reconnect cycle, an S3 backup destination, container resource limits, an opt-in 
 profile, and a queryable log endpoint — with console screens for the Roles admin, Alert
 Lifecycle and Log Explorer following shortly after.
 
-**`FEATURES.md` and the verification report predate that work and now understate the
-product.** Read them with their date in mind; `/api/v1/openapi.json` is generated from
-the live route table and is never stale.
+`FEATURES.md` was rewritten on 2026-08-25 and is machine-checked by
+`scripts/features-verify.mjs`, so it no longer understates the product. The older
+verification report still predates the work described above — read that one with its
+date in mind. `/api/v1/openapi.json` is generated from the live route table and is never
+stale.
 
 Four release gates remain **outstanding evidence, not code**, and are not fabricated
-anywhere in this repository: a live carrier SMPP bind (blocked on carrier-side IP
-allow-listing of the deployment's egress IP), an independent penetration test, a
-production-scale soak, and a multi-node HA failover drill with measured RPO/RTO.
+anywhere in this repository:
+
+- **A live carrier SMPP bind.** The configuration is deployed and the engine is holding
+  the group open and retrying; the TCP connection is refused because the carrier has not
+  allow-listed the deployment's egress address. Nothing further can be proven from this
+  side.
+- **An independent penetration test.**
+- **A production-scale soak.** Note that the per-SMSC TPS ceiling is *unproven where it
+  matters*: Kamex shapes throughput in the individual SMSC drivers and the `fake` driver
+  does not, so a fake bind will happily pass 30 msg/s through a 10 TPS SMSC.
+  `scripts/throughput-test.mjs` now says so rather than reporting the flattering number.
+- **A multi-node HA failover drill with measured RPO/RTO.** Backups are host-local until
+  an offsite destination is configured, which is a restore point rather than disaster
+  recovery.
 
 ## Licence
 
