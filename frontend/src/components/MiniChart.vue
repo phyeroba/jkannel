@@ -151,17 +151,63 @@ const barGroups = computed(() => {
   return groups;
 });
 
+/*
+ * Roughly how wide one axis-label character is, in viewBox units.
+ *
+ * `.mini-chart-tick` is 10px with tabular numerals, so every digit is the same
+ * width and about 6 units of it. The viewBox is a fixed 640 and the SVG scales
+ * to its container, so measuring in viewBox units holds at any rendered size —
+ * a narrower container shrinks the text by exactly the same factor as the
+ * spacing between labels.
+ */
+const AXIS_CHAR_WIDTH = 6;
+/** Clear space demanded between two neighbouring labels. */
+const AXIS_LABEL_GAP = 10;
+
 const axisLabels = computed(() => {
   const count = pointCount.value;
   if (!count || !props.labels.length) return [];
-  // Thin out labels so they do not overlap.
-  const stride = Math.max(1, Math.ceil(count / 6));
+  if (count === 1) return [{ x: xFor(0), text: props.labels[0] ?? '' }];
+
+  /*
+   * TWO CONSTRAINTS, AND THE TIGHTER ONE WINS.
+   *
+   * A fixed target of six labels was the only rule here, which is a rule about
+   * COUNT on an axis whose problem is WIDTH. It holds for "07:43" and fails for
+   * "Sep 3, 07 AM" — the wide-window form of the same axis, four times longer,
+   * thinned exactly as much.
+   */
+  const widest = props.labels
+    .slice(0, count)
+    .reduce((wide, label) => Math.max(wide, String(label ?? '').length), 0);
+  const needed = widest * AXIS_CHAR_WIDTH + AXIS_LABEL_GAP;
+  const fits = Math.max(2, Math.floor(plot.value.w / needed) + 1);
+  const stride = Math.max(1, Math.ceil(count / 6), Math.ceil((count - 1) / (fits - 1)));
+
   const out = [];
-  for (let index = 0; index < count; index += 1) {
-    if (index % stride === 0 || index === count - 1) {
-      out.push({ x: xFor(index), text: props.labels[index] ?? '' });
-    }
-  }
+  for (let index = 0; index < count; index += 1)
+    if (index % stride === 0) out.push({ x: xFor(index), text: props.labels[index] ?? '' });
+
+  /*
+   * THE LAST LABEL, BUT ONLY IF THERE IS ROOM FOR IT.
+   *
+   * This condition used to be `index % stride === 0 || index === count - 1`,
+   * which forces the final label unconditionally. Whenever the point count is
+   * not a multiple of the stride — which is most of the time — the last two
+   * labels land a fraction of a stride apart and collide, so the axis reads
+   * evenly spaced all the way across and then bunches up at the right edge.
+   *
+   * Reported on three separate charts: the SMPP throttling pane, Live Traffic's
+   * throughput and the Performance capacity graph. One component, one cause.
+   *
+   * Where the series ENDS is still worth labelling, so it is kept when it has
+   * half a stride of clearance and dropped when it does not. Dropping it costs
+   * nothing: the final point is still plotted, and a `clearance` of zero means
+   * the stride already emitted that label.
+   */
+  const last = count - 1;
+  const clearance = last % stride;
+  if (clearance >= stride / 2) out.push({ x: xFor(last), text: props.labels[last] ?? '' });
   return out;
 });
 
