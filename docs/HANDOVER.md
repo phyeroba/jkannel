@@ -284,9 +284,23 @@ has been made must stop reading as a defect nobody has looked at.
 
 ```powershell
 cd d:\JKANNEL
-scp scripts/deploy.sh hyeroba@gw1.speedamobile.com:/tmp/deploy.sh
-ssh hyeroba@gw1.speedamobile.com "bash /tmp/deploy.sh; rm -f /tmp/deploy.sh"
+powershell -NoProfile -File scripts\prod-ssh.ps1 -Script scripts\deploy.sh
 ```
+
+**Go through the wrapper, not through `ssh` directly.** The previous form here
+was `scp ... hyeroba@gw1.speedamobile.com` followed by `ssh hyeroba@...`, and it
+works — but only because the username is typed inline every single time. Drop
+the `hyeroba@`, or run it from the Bash tool instead of PowerShell, and it fails
+in a way that looks exactly like the server revoking access while quietly
+earning fail2ban strikes. On 2026-09-03 that banned the office IP from port 22
+for the rest of the day.
+
+`prod-ssh.ps1` runs six local checks — right ssh binary, agent reachable,
+expected key fingerprint, resolved username, publickey-only, port open — and
+refuses to connect if any fails, so a mistake never reaches the server. It also
+refuses to connect when port 22 is dark, because retrying a banned port is what
+turns an hour's ban into a week's. `docs/` and the project memory carry the full
+account.
 
 `deploy.sh` repairs file ownership **before** pulling (a `sudo git` run leaves
 root-owned files and `git merge` then fails partway through checkout, which
