@@ -450,6 +450,77 @@ main > [data-testid='module-workspace'] > * {
    was written. This is the same idea available to any dialog, so the next form
    does not invent a third one.
    --------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   THE SAME GROUPING, IN A PANEL
+
+   `.grid-toolbar` is a flex run that packs `label · control` pairs left to
+   right at whatever width each happens to want. That is the right component
+   for three or four controls above a grid, and the wrong one for a form.
+
+   Live Queue used it for both, twice per panel. Message log & resend had
+   Status, Search and Bind on one line and then "Resend to bind", two action
+   buttons and a sentence of prose on the next; Pending spool's second run held
+   FIVE controls, in which the thing immediately to the right of the "Set
+   priority" label is a button that cancels messages. Labels sit INLINE in a
+   toolbar, so the eye pairs each label with whatever control is to its right,
+   and in a run of five that is a coin toss.
+
+   Reported as "things supposed to occupy a row each are cramped together",
+   which is an exact description of an inline label in a flex run.
+
+   Log Explorer already solved this once, locally, with a `.log-filters`
+   fieldset around a `.dialog-grid`. This is that pattern lifted into the design
+   system so the next panel does not invent a third one — and so that a form
+   looks the same in a panel as it does in a dialog, which is the whole point of
+   having a design system.
+
+   Filters and the actions those filters feed are SEPARATE groups, because they
+   are separate decisions: one narrows what you are looking at, the other
+   changes it.
+   --------------------------------------------------------------------------- */
+.panel-form {
+  margin: var(--sp-7) 0 0;
+  padding: var(--sp-6) 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  /* A fieldset's default min-width is its content, which stops a grid inside it
+     from ever shrinking and makes the panel scroll sideways instead. */
+  min-width: 0;
+}
+/* The first group in a panel follows the heading, which already separates it. */
+.panel-form:first-of-type {
+  border-top: 0;
+  margin-top: var(--sp-5);
+  padding-top: 0;
+}
+.panel-form > legend {
+  padding: 0 10px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+}
+.panel-form > .dialog-grid {
+  margin-top: var(--sp-5);
+}
+/* Buttons get their own line under the fields they act on. In the toolbar they
+   sat in the same run as the controls, so "Apply filters" and "Cancel selected"
+   read as two more filters. */
+.panel-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: var(--sp-6);
+}
+/* Prose explaining an action belongs under the action, not beside it — in the
+   toolbar it was a flex item competing with the buttons for width. */
+.panel-form-actions + .source-note,
+.panel-form > .source-note {
+  display: block;
+  margin-top: var(--sp-4);
+}
+
 .dialog-body .dialog-group {
   margin: 18px 0 0;
   padding: 16px 0 0;
@@ -583,8 +654,53 @@ td.row-actions {
   align-items: center;
   gap: var(--sp-3);
 }
+
+/* ---------------------------------------------------------------------------
+   AND A TABLE CELL HAS TO STAY A TABLE CELL
+
+   `display: flex` on the rule above also applied to `td.row-actions`, and a
+   `<td>` that is not `display: table-cell` STOPS BEING A CELL. The browser
+   keeps the table valid by wrapping it in an anonymous cell, so the row now
+   contains a mixture of real cells and block boxes in generated ones, and the
+   row's height stops being the height of its tallest content.
+
+   On Operational events — the only grid in the console with THREE action
+   columns in one row — that made every row 169px tall for a single line of
+   text in each cell. Six events filled the screen. Reported as "make the rows
+   of the operational events list be smaller", which is the symptom; the cause
+   is that those rows were never being laid out as table rows.
+
+   Measured on the live console, one declaration at a time, because five
+   plausible suspects sat in the same rule:
+
+       baseline                            169px
+       display: table-cell                  61px   <-- the whole of it
+       drop min-width: max-content         169px
+       flex-wrap: wrap instead of nowrap   169px
+       drop width: 1%                      169px
+       align-items: stretch                169px
+
+   So the flex container moves off the cell and onto its contents: inline-flex
+   children on a `nowrap` cell sit on one line exactly as the flex row did, and
+   the cell participates in its own table again. Checked across ten populated
+   grids on production — no cell gained a stacked button and none began to clip,
+   which are the two failures the flex version was introduced to fix.
+
+   `.row-actions` used as a plain DIV keeps flex and keeps wrapping: nothing
+   constrains its width there, and Analytics uses it as a toolbar.
+   --------------------------------------------------------------------------- */
 td.row-actions {
-  flex-wrap: nowrap;
+  display: table-cell;
+  vertical-align: middle;
+}
+td.row-actions > * {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-right: var(--sp-3);
+}
+td.row-actions > :last-child {
+  margin-right: 0;
 }
 /* ---------------------------------------------------------------------------
    AND THE TABLE HAS TO BE ALLOWED TO BE AS WIDE AS IT NEEDS
@@ -659,4 +775,108 @@ td.row-actions .danger-button {
 .panel > .form-error:last-child,
 .panel > .stale-banner:last-child {
   margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   TABS THAT LOOK LIKE TABS
+
+   `TabStrip` renders the kit's `.range-select` / `.range-button` pair, which is
+   the time-range picker's segmented control. The reasoning was that both are
+   "pick one of these" — but a range picker FILTERS what a screen shows and a
+   tab strip SWAPS the screen, and the segmented treatment gives an inactive
+   option no border, no ground and no underline. Five of them in a row is five
+   pieces of grey text, and Test Tools was reported as exactly that: "the tabs
+   look like links, they need to look like tabs".
+
+   The affordance a tab needs and a segment does not is a rule along the bottom
+   of the strip that every tab sits ON, so the selected one can break it with an
+   indicator. That is what says "these are the faces of one thing" rather than
+   "these are five places you could go".
+
+   Only `.tab-strip` gets this. The time-range picker keeps the trough it was
+   designed with — it is a filter, and it should not start looking like
+   navigation.
+   --------------------------------------------------------------------------- */
+.tab-strip {
+  display: flex;
+  gap: var(--sp-1);
+  /* The segmented control's trough, padding and corners all have to go: a rule
+     cannot run under a strip that sits inside a rounded grey box. */
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  /* A narrow viewport scrolls the strip rather than wrapping it — a tab bar on
+     two lines stops reading as one bar. */
+  overflow-x: auto;
+}
+.tab-strip .range-button {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 10px 16px;
+  /* Overlap the strip's own rule, so the indicator replaces it rather than
+     sitting above it. */
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tab-strip .range-button:hover {
+  background: none;
+  color: var(--text-strong);
+  border-bottom-color: var(--border);
+}
+.tab-strip .range-button.active {
+  background: none;
+  box-shadow: none;
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+}
+/* The kit's focus ring is a box-shadow, which the rule above clears. A keyboard
+   user needs it more here than anywhere: the strip is a single tab stop and the
+   arrow keys move within it, so the ring is the only thing saying where you
+   are. */
+.tab-strip .range-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------------------
+   A LONE FIELD IN A PANEL KEEPS ITS TRACK
+
+   `.dialog-grid` is `repeat(auto-fit, minmax(280px, 1fr))`. `auto-fit`
+   COLLAPSES the tracks it does not fill, so the one field left in the row
+   stretches across all of them. In a 620px dialog that is barely noticeable.
+   In a 1250px panel it is a "Connection" dropdown eleven hundred pixels wide
+   holding the words "Local Fake".
+
+   `auto-fill` keeps the empty tracks, so one field occupies one field's worth
+   of width and three fields lay out exactly as they did. Same grid, same
+   fields, and the difference is only visible when a row is not full — which is
+   precisely the case that looked wrong.
+
+   Scoped to panels: a dialog is sized to its form, so a field that fills the
+   row there is filling a row that was built for it.
+   --------------------------------------------------------------------------- */
+.panel > .dialog-grid,
+.panel-form > .dialog-grid {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+/* ---------------------------------------------------------------------------
+   A FIELD IS AS TALL AS ITS OWN CONTENT
+
+   Grid items stretch to the tallest item in their row by default. That is
+   invisible while every field is one label and one control, and grotesque as
+   soon as one is not: on Live Queue's resend group, "Replay priority" carries
+   three paragraphs of guidance and a callout, so the plain "Resend to bind"
+   select beside it grew to a hundred and fifty pixels tall with its label
+   marooned at the top of an empty box.
+
+   `align-self: start` makes each field its own height and leaves the short
+   ones at the top of the row, which is what a form is supposed to look like.
+   --------------------------------------------------------------------------- */
+.dialog-grid > * {
+  align-self: start;
 }
