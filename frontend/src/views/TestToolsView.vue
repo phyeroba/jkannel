@@ -484,8 +484,8 @@ onMounted(() => {
         </div>
       </header>
 
-      <div class="grid-toolbar">
-        <label class="filter-select filter-search">
+      <div class="dialog-grid">
+        <label class="field">
           <span>Number</span>
           <input
             v-model="lookupInput"
@@ -731,8 +731,8 @@ onMounted(() => {
         {{ smscError }}
       </p>
 
-      <div class="grid-toolbar">
-        <label class="filter-select">
+      <div class="dialog-grid">
+        <label class="field">
           <span>Connection</span>
           <select v-model="testSmscId" data-testid="connectivity-smsc" :disabled="!canTest">
             <option v-for="option in smscs" :key="option.id" :value="option.id">
@@ -862,8 +862,8 @@ onMounted(() => {
       </p>
 
       <template v-else>
-        <div class="field-grid">
-          <label class="filter-select">
+        <div class="dialog-grid">
+          <label class="field">
             <span>Destination</span>
             <input
               v-model="sendTo"
@@ -872,16 +872,22 @@ onMounted(() => {
               placeholder="+256772000118"
             />
           </label>
-          <label class="filter-select">
-            <span>Sender</span>
+          <!--
+            "Sender ID", not "Sender". On an SMPP bind this is the source
+            address the carrier stamps on the message, and on this deployment a
+            message carrying the wrong one is accepted, billed, and never
+            delivered. "Sender" invites the name of the person sending it.
+          -->
+          <label class="field">
+            <span>Sender ID</span>
             <input
               v-model="sendFrom"
               type="text"
               data-testid="test-sms-from"
-              placeholder="JKANNEL"
+              placeholder="8888"
             />
           </label>
-          <label class="filter-select">
+          <label class="field">
             <span>Pin to connection</span>
             <select v-model="sendSmscId" data-testid="test-sms-smsc">
               <option value="">let the router choose</option>
@@ -892,7 +898,7 @@ onMounted(() => {
           </label>
         </div>
 
-        <label class="analyzer-field">
+        <label class="field analyzer-field">
           <span>Message body</span>
           <textarea
             v-model="sendBody"
@@ -969,8 +975,8 @@ onMounted(() => {
         </div>
       </header>
 
-      <div class="grid-toolbar">
-        <label class="filter-select filter-search">
+      <div class="dialog-grid">
+        <label class="field">
           <span>Message or carrier reference</span>
           <input
             v-model="dlrQuery"
@@ -980,6 +986,11 @@ onMounted(() => {
             @keyup.enter="lookupDlr"
           />
         </label>
+      </div>
+      <!-- The button moves out of the field run and into the footer every other
+           tab on this screen already uses, so the five tabs stop each having
+           their own idea of where the action lives. -->
+      <footer class="detail-actions">
         <button
           class="primary-button"
           type="button"
@@ -989,7 +1000,7 @@ onMounted(() => {
         >
           {{ dlrState === 'loading' ? 'Reading…' : 'Look up' }}
         </button>
-      </div>
+      </footer>
 
       <p v-if="dlrError" class="form-error" role="alert" data-testid="dlr-lookup-error">
         {{ dlrError }}

@@ -123,7 +123,15 @@ const tenantId = ref('');
 const userId = ref('');
 const since = ref('');
 const until = ref('');
-const limit = ref(100);
+/*
+ * Fifty, not a hundred.
+ *
+ * The buffer holds thousands of lines and the grid renders a whole page of
+ * them, so the default decides how much of the screen the first result fills.
+ * A hundred rows is several screens of scrolling before you reach the pager,
+ * which is the wrong first impression of a search you have not narrowed yet.
+ */
+const limit = ref(50);
 
 const entries = ref<LogEntry[]>([]);
 /*
@@ -436,8 +444,17 @@ onMounted(() => {
         </div>
       </header>
 
-      <div class="grid-toolbar">
-        <label class="filter-select filter-search">
+      <!--
+        The primary field, in the same shape as the narrowing fields below it.
+
+        It was a `.grid-toolbar`: label inline, then the input, then two buttons,
+        all on one line. That put the correlation search in a different visual
+        language from the nine fields immediately under it, which are the same
+        kind of thing — and made the panel read as a toolbar with a form stuck
+        underneath rather than as one form with a headline field.
+      -->
+      <div class="dialog-grid">
+        <label class="field">
           <span>Correlation ID</span>
           <input
             v-model="correlationId"
@@ -447,6 +464,8 @@ onMounted(() => {
             @keyup.enter="searchFromStart"
           />
         </label>
+      </div>
+      <div class="log-filter-actions">
         <button class="primary-button" data-testid="log-search-submit" @click="searchFromStart">
           {{ state === 'loading' ? 'Searching…' : 'Search' }}
         </button>
@@ -679,7 +698,15 @@ onMounted(() => {
                 :data-testid="`log-row-${index}`"
                 @click="selected = entry"
               >
-                <td class="mono">{{ text(entry.timestamp) }}</td>
+                <!--
+                  A timestamp is one value and must not be broken across two
+                  lines. `2026-09-03T08:49:24.452Z` was wrapping after the
+                  month, so the column read "2026-09-" above "03T08:49:24.452Z"
+                  and every row in the buffer was two lines tall for it. It also
+                  makes the column impossible to scan: the eye follows the left
+                  edge, and the left edge alternates between a date and a time.
+                -->
+                <td class="mono log-time">{{ text(entry.timestamp) }}</td>
                 <td>
                   <span class="status-badge" :class="levelTone(entry.level)">
                     {{ text(entry.level) }}
@@ -855,6 +882,9 @@ onMounted(() => {
    does in a dialog. */
 .log-filters .dialog-grid {
   margin-top: 12px;
+}
+.log-time {
+  white-space: nowrap;
 }
 .log-filter-actions {
   display: flex;

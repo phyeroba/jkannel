@@ -1204,80 +1204,103 @@ onMounted(() => {
         </button>
       </div>
 
-      <div class="grid-toolbar">
-        <label class="filter-select">
-          <span>Status</span>
-          <select v-model="logStatus" data-testid="log-status-filter" @change="loadLog">
-            <option v-for="choice in statusChoices" :key="choice.value" :value="choice.value">
-              {{ choice.label }} ({{ statusCount(choice.value) }})
-            </option>
-          </select>
-        </label>
-        <label class="filter-select filter-search">
-          <span>Search</span>
-          <input
-            v-model="logQuery"
-            data-testid="log-search"
-            type="search"
-            placeholder="Sender, receiver, reference, or text"
-            @keyup.enter="loadLog"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Bind</span>
-          <select v-model="logSmscFilter" data-testid="log-smsc-filter" @change="loadLog">
-            <option value="">All binds</option>
-            <option v-for="option in bindOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <button class="secondary-button" data-testid="log-apply" @click="loadLog">
-          Apply filters
-        </button>
-      </div>
+      <!--
+        NARROWING, THEN ACTING — two groups, because they are two decisions.
 
-      <div v-if="canOperate" class="grid-toolbar" data-testid="log-bulk-actions">
-        <label class="filter-select">
-          <span>Resend to bind</span>
-          <select v-model="resendTarget" data-testid="log-resend-target">
-            <option value="" disabled>Select a target bind</option>
-            <option v-for="option in bindOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <button
-          class="primary-button"
-          data-testid="log-resend"
-          :disabled="actionBusy || !resendTarget || !logSelection.length"
-          @click="resendSelected"
-        >
-          {{ actionBusy ? 'Working…' : `Resend ${logSelection.length} selected` }}
-        </button>
-        <button
-          v-if="logStatus !== 'all'"
-          class="secondary-button"
-          data-testid="log-resend-matching"
-          :disabled="actionBusy || !resendTarget || !statusCount(logStatus)"
-          @click="resendMatching"
-        >
-          Resend all {{ statusCount(logStatus) }} matching
-        </button>
-        <span class="source-note">
+        These were two `.grid-toolbar` runs. A toolbar puts its labels INLINE
+        and sizes each control to taste, so "Status", its select, "Search", its
+        input and "Bind" ran together on one line with no two fields the same
+        width; the resend controls did the same on the next line, with a
+        sentence of prose competing with the buttons for the leftover space.
+      -->
+      <fieldset class="panel-form" data-testid="log-filter-group">
+        <legend>Narrow the log</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Status</span>
+            <select v-model="logStatus" data-testid="log-status-filter" @change="loadLog">
+              <option v-for="choice in statusChoices" :key="choice.value" :value="choice.value">
+                {{ choice.label }} ({{ statusCount(choice.value) }})
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Search</span>
+            <input
+              v-model="logQuery"
+              data-testid="log-search"
+              type="search"
+              placeholder="Sender, receiver, reference, or text"
+              @keyup.enter="loadLog"
+            />
+          </label>
+          <label class="field">
+            <span>Bind</span>
+            <select v-model="logSmscFilter" data-testid="log-smsc-filter" @change="loadLog">
+              <option value="">All binds</option>
+              <option v-for="option in bindOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-form-actions">
+          <button class="secondary-button" data-testid="log-apply" @click="loadLog">
+            Apply filters
+          </button>
+        </div>
+      </fieldset>
+
+      <fieldset v-if="canOperate" class="panel-form" data-testid="log-bulk-actions">
+        <legend>Resend the selected messages</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Resend to bind</span>
+            <select v-model="resendTarget" data-testid="log-resend-target">
+              <option value="" disabled>Select a target bind</option>
+              <option v-for="option in bindOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <!-- Replay priority belongs WITH the target bind: both are settings
+               for the resend the buttons below then perform. It used to sit in
+               a block of its own AFTER those buttons, so the control that
+               changes the outcome came after the control that commits it. -->
+          <div class="field" data-testid="log-resend-priority-block">
+            <MessagePriority
+              v-model="resendPriority"
+              testid="log-resend-priority"
+              label="Replay priority"
+              :caveat="PRIORITY_RESEND_CAVEAT"
+              :busy="actionBusy"
+            />
+          </div>
+        </div>
+        <div class="panel-form-actions">
+          <button
+            class="primary-button"
+            data-testid="log-resend"
+            :disabled="actionBusy || !resendTarget || !logSelection.length"
+            @click="resendSelected"
+          >
+            {{ actionBusy ? 'Working…' : `Resend ${logSelection.length} selected` }}
+          </button>
+          <button
+            v-if="logStatus !== 'all'"
+            class="secondary-button"
+            data-testid="log-resend-matching"
+            :disabled="actionBusy || !resendTarget || !statusCount(logStatus)"
+            @click="resendMatching"
+          >
+            Resend all {{ statusCount(logStatus) }} matching
+          </button>
+        </div>
+        <p class="source-note">
           Resending re-queues a fresh copy of each message on the chosen bind; the original history
           row is left untouched.
-        </span>
-      </div>
-      <div v-if="canOperate" class="resend-priority" data-testid="log-resend-priority-block">
-        <MessagePriority
-          v-model="resendPriority"
-          testid="log-resend-priority"
-          label="Replay priority"
-          :caveat="PRIORITY_RESEND_CAVEAT"
-          :busy="actionBusy"
-        />
-      </div>
+        </p>
+      </fieldset>
       <p v-else class="source-note" data-testid="log-readonly">
         Resending messages requires the messages.send permission.
       </p>
@@ -1416,86 +1439,105 @@ onMounted(() => {
         only the <em>pending</em> tier, never traffic that has already been dispatched.
       </p>
 
-      <div class="grid-toolbar">
-        <label class="filter-select filter-search">
-          <span>Search</span>
-          <input
-            v-model="spoolQuery"
-            data-testid="spool-search"
-            type="search"
-            placeholder="Sender, receiver, or message text"
-            @keyup.enter="applySpoolFilters"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Target bind</span>
-          <select
-            v-model="spoolSmscFilter"
-            data-testid="spool-smsc-filter"
-            @change="applySpoolFilters"
-          >
-            <option value="">All binds</option>
-            <option v-for="option in bindOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <button class="secondary-button" data-testid="spool-apply" @click="applySpoolFilters">
-          Apply filters
-        </button>
-      </div>
+      <fieldset class="panel-form" data-testid="spool-filter-group">
+        <legend>Narrow the spool</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Search</span>
+            <input
+              v-model="spoolQuery"
+              data-testid="spool-search"
+              type="search"
+              placeholder="Sender, receiver, or message text"
+              @keyup.enter="applySpoolFilters"
+            />
+          </label>
+          <label class="field">
+            <span>Target bind</span>
+            <select
+              v-model="spoolSmscFilter"
+              data-testid="spool-smsc-filter"
+              @change="applySpoolFilters"
+            >
+              <option value="">All binds</option>
+              <option v-for="option in bindOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-form-actions">
+          <button class="secondary-button" data-testid="spool-apply" @click="applySpoolFilters">
+            Apply filters
+          </button>
+        </div>
+      </fieldset>
 
-      <div v-if="canOperate" class="grid-toolbar" data-testid="spool-bulk-actions">
-        <label class="filter-select">
-          <span>Reroute to bind</span>
-          <select v-model="rerouteTarget" data-testid="spool-reroute-target">
-            <option value="" disabled>Select a target bind</option>
-            <option v-for="option in bindOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <button
-          class="primary-button"
-          data-testid="spool-reroute"
-          :disabled="actionBusy || !rerouteTarget || !spoolSelection.length"
-          @click="rerouteSelected"
-        >
-          {{ actionBusy ? 'Working…' : `Reroute ${spoolSelection.length} selected` }}
-        </button>
-        <!--
-          Raising priority is the recovery that changes nothing else: the spool
-          drains in priority order, so an urgent message stuck behind a bulk
-          campaign gets out without cancelling the campaign or rerouting it to a
-          different carrier.
-        -->
-        <label class="filter-select">
-          <span>Set priority</span>
-          <select v-model.number="reprioritiseTo" data-testid="spool-priority">
-            <option :value="null" disabled>Choose a priority</option>
-            <option :value="3">3 — highest</option>
-            <option :value="2">2 — high</option>
-            <option :value="1">1 — normal</option>
-            <option :value="0">0 — bulk</option>
-          </select>
-        </label>
-        <button
-          class="secondary-button"
-          data-testid="spool-reprioritise"
-          :disabled="actionBusy || reprioritiseTo === null || !spoolSelection.length"
-          @click="reprioritiseSelected"
-        >
-          Reprioritise selected
-        </button>
-        <button
-          class="secondary-button danger-button"
-          data-testid="spool-cancel"
-          :disabled="actionBusy || !spoolSelection.length"
-          @click="cancelSelected"
-        >
-          Cancel selected
-        </button>
-      </div>
+      <!--
+        THE THREE RECOVERIES, AS SETTINGS AND THEN ACTIONS.
+
+        This was ONE flex run of five controls: a label, a select, a button,
+        another label, another select, then two more buttons — the last of
+        which cancels messages. A toolbar sets its labels inline, so the
+        control immediately to the right of "Set priority" is whatever came
+        next in the markup, and here that was "Reroute N selected".
+      -->
+      <fieldset v-if="canOperate" class="panel-form" data-testid="spool-bulk-actions">
+        <legend>Act on the selected rows</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Reroute to bind</span>
+            <select v-model="rerouteTarget" data-testid="spool-reroute-target">
+              <option value="" disabled>Select a target bind</option>
+              <option v-for="option in bindOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <!--
+            Raising priority is the recovery that changes nothing else: the
+            spool drains in priority order, so an urgent message stuck behind a
+            bulk campaign gets out without cancelling the campaign or rerouting
+            it to a different carrier.
+          -->
+          <label class="field">
+            <span>Set priority</span>
+            <select v-model.number="reprioritiseTo" data-testid="spool-priority">
+              <option :value="null" disabled>Choose a priority</option>
+              <option :value="3">3 — highest</option>
+              <option :value="2">2 — high</option>
+              <option :value="1">1 — normal</option>
+              <option :value="0">0 — bulk</option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-form-actions">
+          <button
+            class="primary-button"
+            data-testid="spool-reroute"
+            :disabled="actionBusy || !rerouteTarget || !spoolSelection.length"
+            @click="rerouteSelected"
+          >
+            {{ actionBusy ? 'Working…' : `Reroute ${spoolSelection.length} selected` }}
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="spool-reprioritise"
+            :disabled="actionBusy || reprioritiseTo === null || !spoolSelection.length"
+            @click="reprioritiseSelected"
+          >
+            Reprioritise selected
+          </button>
+          <button
+            class="secondary-button danger-button"
+            data-testid="spool-cancel"
+            :disabled="actionBusy || !spoolSelection.length"
+            @click="cancelSelected"
+          >
+            Cancel selected
+          </button>
+        </div>
+      </fieldset>
       <p v-else class="source-note" data-testid="spool-readonly">
         Rerouting, reprioritising and cancelling pending messages requires the messages.send
         permission.

@@ -74,7 +74,26 @@ function onKeydown(event: KeyboardEvent, index: number) {
 </script>
 
 <template>
-  <div class="range-select" role="tablist" :aria-label="label" :data-testid="testid ?? 'tab-strip'">
+  <!--
+    `tab-strip` alongside `range-select`, not instead of it.
+
+    The kit styles this as its time-range picker — a segmented control on a
+    grey trough — because both are "pick one of these". They are not the same
+    thing. A range picker filters what a screen shows; a tab strip swaps the
+    screen. Rendered, the segmented treatment gives inactive tabs no border, no
+    ground and no underline, so a five-tab strip reads as a row of text links,
+    which is what it was reported as.
+
+    `tab-strip` keeps the kit's geometry and layers the one affordance a tab
+    needs and a segment does not: a rule along the bottom of the strip that
+    each tab sits ON, and an indicator under the selected one.
+  -->
+  <div
+    class="range-select tab-strip"
+    role="tablist"
+    :aria-label="label"
+    :data-testid="testid ?? 'tab-strip'"
+  >
     <button
       v-for="(tab, index) in tabs"
       :id="`${testid ?? 'tab'}-${tab.id}`"
