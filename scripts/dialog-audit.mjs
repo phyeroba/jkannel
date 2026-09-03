@@ -35,6 +35,8 @@ const BASE = process.env.BASE ?? 'http://127.0.0.1:15173';
 /** The kit renders its dialog fields at about 283px. Anything much under that
  *  is narrower than the design it is meant to reproduce. */
 const MIN_TRACK = Number(process.env.MIN_TRACK ?? 260);
+/** Below this many inputs a dialog may reasonably be a component, not a form. */
+const MIN_INPUTS_NEEDING_A_GRID = Number(process.env.MIN_INPUTS ?? 3);
 
 /**
  * The openers, by the button an operator clicks.
@@ -152,6 +154,7 @@ for (const testCase of CASES) {
       bodyClientWidth: body?.clientWidth ?? null,
       grids,
       overflowing,
+      inputs: card.querySelectorAll('input:not([type=hidden]), select, textarea').length,
     };
   });
 
@@ -182,6 +185,29 @@ for (const testCase of CASES) {
     });
   if (measured.overflowing)
     findings.push({ ...testCase, problem: `${measured.overflowing} control(s) wider than the field holding them` });
+  /*
+   * A DIALOG WITH FIELDS AND NO FIELD GRID.
+   *
+   * This audit only ever asked whether a grid's TRACKS were wide enough, so a
+   * form with no grid had no tracks to be too narrow and sailed through as
+   * "no field grid" — printed, and not counted as a finding.
+   *
+   * Send message was exactly that: bare `<label>Sender <input></label>` with no
+   * class and no grid, so the label and the control had no layout relationship
+   * and rendered on top of one another. Reported from production, after this
+   * script had passed the same dialog twice.
+   *
+   * A dialog with several inputs and no grid is not a style preference; it is a
+   * form that has not been laid out. Dialogs whose body is a component rather
+   * than a field list (a schedule picker, a confirmation) legitimately have no
+   * grid, so the threshold is the number of INPUTS, not their absence.
+   */
+  if (!measured.grids.length && measured.inputs >= MIN_INPUTS_NEEDING_A_GRID)
+    findings.push({
+      ...testCase,
+      button: name,
+      problem: `${measured.inputs} inputs and no field grid — the labels and controls have no layout relationship`,
+    });
 }
 
 await browser.close();
@@ -197,7 +223,7 @@ for (const dialog of opened)
         ? dialog.grids
             .map((g) => `${g.tracks} track(s) at ${Math.round(g.narrowest ?? 0)}px`)
             .join(', ')
-        : 'no field grid'),
+        : `no field grid (${dialog.inputs} input${dialog.inputs === 1 ? '' : 's'})`),
   );
 
 if (notFound.length) {

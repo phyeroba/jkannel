@@ -6013,45 +6013,85 @@ onUnmounted(() => {
       wide
       @close="showSendForm = false"
     >
-      <label>
-        SMSC connection
-        <select v-model="sendSmscId" data-testid="send-smsc" required>
-          <option value="" disabled>Select an SMSC connection</option>
-          <option v-for="option in smscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <p v-if="smscOptionsError" class="form-hint" role="alert">{{ smscOptionsError }}</p>
-      <label>
-        Sender
-        <input v-model="sendSender" data-testid="send-sender" placeholder="JKANNEL" />
-      </label>
-      <label>
-        Recipient
-        <input v-model="sendReceiver" data-testid="send-receiver" placeholder="+256700000000" />
-      </label>
-      <label>
-        Message text
-        <textarea
-          v-model="sendText"
-          data-testid="send-text"
-          rows="3"
-          placeholder="Message body"
-        ></textarea>
-      </label>
-      <SegmentCounter :text="sendText" testid="send-segment" />
+      <!--
+        BARE `<label>` ELEMENTS WERE THE BUG.
+        
+        Every other form in this console uses `.field` inside `.dialog-grid`,
+        which is what puts a label ABOVE its control. This dialog used plain
+        `<label>Sender <input></label>` — no class, no grid — so the label text
+        and the input had no layout relationship at all and rendered on top of
+        one another. Reported from production as "the sender label and the
+        sender field are in two different rows one overlapping another".
+        
+        `dialog-audit.mjs` measured this dialog as "no field grid" and passed it,
+        because it only asks whether a grid's TRACKS are wide enough. A form with
+        no grid has no tracks to be too narrow, so the check had nothing to fail
+        on — the audit has been extended to say so rather than stay silent.
+        
+        Grouped the same way as the SMSC and customer forms: what to send, then
+        how and when.
+      -->
+      <p class="source-note">
+        Sent through the engine on the connection you pick — this is a real submission,
+        not a simulation. The recipient's number is masked in the message log afterwards
+        unless you hold the reveal permission.
+      </p>
 
-      <h3>Send priority</h3>
-      <MessagePriority v-model="sendPriority" testid="send-priority" :busy="loading" />
+      <fieldset class="dialog-group">
+        <legend>Message</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>SMSC connection</span>
+            <select v-model="sendSmscId" data-testid="send-smsc" required>
+              <option value="" disabled>Select an SMSC connection</option>
+              <option v-for="option in smscOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <small>Which carrier link carries it. A bound link delivers; an unbound one queues.</small>
+          </label>
+          <label class="field">
+            <span>Sender ID</span>
+            <input v-model="sendSender" data-testid="send-sender" placeholder="8888" />
+            <small>
+              What the recipient sees as the sender. It must be one the carrier has
+              registered for you — an unregistered sender id is silently dropped rather
+              than rejected, so the message looks sent and never arrives.
+            </small>
+          </label>
+          <label class="field">
+            <span>Recipient</span>
+            <input v-model="sendReceiver" data-testid="send-receiver" placeholder="+256700000000" />
+            <small>International format. This is a real handset.</small>
+          </label>
+          <label class="field dialog-span">
+            <span>Message text</span>
+            <textarea
+              v-model="sendText"
+              data-testid="send-text"
+              rows="3"
+              placeholder="Message body"
+            ></textarea>
+          </label>
+        </div>
+        <p v-if="smscOptionsError" class="form-hint" role="alert">{{ smscOptionsError }}</p>
+        <SegmentCounter :text="sendText" testid="send-segment" />
+      </fieldset>
 
-      <h3>When to send</h3>
-      <SendSchedule
-        v-model:later="sendLater"
-        v-model:draft="sendSchedule"
-        testid="send-schedule"
-        :busy="loading"
-      />
+      <fieldset class="dialog-group">
+        <legend>Send priority</legend>
+        <MessagePriority v-model="sendPriority" testid="send-priority" :busy="loading" />
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>When to send</legend>
+        <SendSchedule
+          v-model:later="sendLater"
+          v-model:draft="sendSchedule"
+          testid="send-schedule"
+          :busy="loading"
+        />
+      </fieldset>
 
       <template #footer>
         <button class="secondary-button" @click="showSendForm = false">Cancel</button>
