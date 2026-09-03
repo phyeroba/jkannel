@@ -194,6 +194,70 @@ export const DLR_EVENT_REJECTED = 16;
 /** The DLR event that means it did. A retry must never fire past one of these. */
 export const DLR_EVENT_DELIVERED = 1;
 
+/**
+ * The fields inside a standard SMPP delivery receipt body.
+ *
+ * `null` when the body carries none of them, which is a real and common answer:
+ * the carrier on this deployment sends the literal string `ACK/` and no
+ * receipt detail whatsoever. Distinguishing "the carrier sent nothing" from
+ * "we did not look" is the whole reason this exists.
+ */
+export interface DeliveryReceiptDetail {
+  /** The carrier's own id for the message, which is how they will refer to it. */
+  messageId: string | null;
+  /** DELIVRD, UNDELIV, EXPIRED, REJECTD, ACCEPTD, UNKNOWN … */
+  stat: string | null;
+  /** Carrier error code; `000` on success. */
+  err: string | null;
+  submitDate: string | null;
+  doneDate: string | null;
+  /** Messages submitted / delivered, as the carrier counted them. */
+  submitted: number | null;
+  delivered: number | null;
+}
+
+/**
+ * Pulls the receipt fields out of a DLR body.
+ *
+ * The body is URL-encoded on the way through Kannel (`ACK%2F` for `ACK/`), so
+ * it is decoded first — without that, `submit date:` never matches because the
+ * space arrives as `%20`.
+ *
+ * Deliberately tolerant: carriers vary the spacing and the case, several omit
+ * fields, and one missing field must not lose the others.
+ */
+export function parseDeliveryReceipt(body: unknown): DeliveryReceiptDetail | null {
+  if (typeof body !== 'string' || !body) return null;
+  let text = body;
+  try {
+    text = decodeURIComponent(body.replace(/\+/g, ' '));
+  } catch {
+    /* A body that is not valid percent-encoding is used as it stands. */
+  }
+  /*
+   * The leading `\b` matters: without it `id:` also matches inside `msgid:`
+   * and inside the `text:` field of the receipt's own echoed body, so a
+   * receipt quoting the original message could report the wrong id.
+   */
+  const pick = (pattern: RegExp) => pattern.exec(text)?.[1]?.trim() ?? null;
+  const num = (value: string | null) => {
+    const parsed = Number(value);
+    return value !== null && Number.isFinite(parsed) ? parsed : null;
+  };
+  const detail: DeliveryReceiptDetail = {
+    messageId: pick(/\bid:\s*(\S+)/i),
+    stat: pick(/\bstat:\s*([A-Za-z]+)/i),
+    err: pick(/\berr:\s*(\S+)/i),
+    submitDate: pick(/\bsubmit\s*date:\s*(\S+)/i),
+    doneDate: pick(/\bdone\s*date:\s*(\S+)/i),
+    submitted: num(pick(/\bsub:\s*(\d+)/i)),
+    delivered: num(pick(/\bdlvrd:\s*(\d+)/i)),
+  };
+  // All-null means this was not a standard receipt — say so with null rather
+  // than handing back a shape full of blanks that reads like a parse failure.
+  return Object.values(detail).some((v) => v !== null && v !== undefined) ? detail : null;
+}
+
 /** Engine epoch seconds -> ISO instant, or null for an absent/unparseable value. */
 function epochToIso(value: unknown): string | null {
   const epoch = Number(value);
@@ -576,7 +640,36 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
       deliveryStatus: this.deliveryStatusOf(row, source),
       /** Kannel DLR event value behind deliveryStatus, when one was correlated. */
       dlrEvent: Number.isFinite(dlrEvent as number) ? dlrEvent : null,
-      dlrAt: row.dlr_time ? new Date(Number(row.dlr_time) * 1000).toISOString() : null,
+      /*
+       * WHEN THE RECEIPT ARRIVED, falling back to the receipt row's own time.
+       *
+       * Kannel leaves `dlr_time` NULL on every row this deployment has seen —
+       * 33 of 33 receipts from a live carrier, all null, while `time` was set on
+       * every one. So `dlrAt` was always null and the console had no answer to
+       * "when was this delivered", despite the engine knowing to the second.
+       *
+       * A DLR row is WRITTEN when the receipt is received, so its `time` is the
+       * arrival instant. That is a slightly different thing from the carrier's
+       * own `done date` — which this carrier does not send at all — and it is
+       * the honest one to report: it is when WE learned, not when the handset
+       * received. Only used for rows that are actually receipts, so an MT row's
+       * send time can never be mistaken for a delivery time.
+       */
+      dlrAt: epochToIso(row.dlr_time) ?? (row.momt === 'DLR' ? epochToIso(row.time) : null),
+      /*
+       * The carrier's own receipt fields, when it sends any.
+       *
+       * A standard SMPP delivery receipt body carries
+       * `id:… sub:… dlvrd:… submit date:… done date:… stat:DELIVRD err:000 text:…`.
+       * Those are the fields an operator expects to see and they were nowhere in
+       * this console — because nothing parsed them out of the body.
+       *
+       * The carrier in production sends `ACK/` and nothing else, so for this
+       * link the answer is genuinely "the carrier did not send them". Reporting
+       * that explicitly is the point: a null here now means the receipt had no
+       * detail, rather than leaving somebody to wonder whether we dropped it.
+       */
+      dlrReceipt: row.momt === 'DLR' ? parseDeliveryReceipt(row.msgdata) : null,
       // Encoding / segmentation / scheduling / billing (see DETAIL_COLUMN_NAMES).
       /** Kannel DCS coding: 0 = GSM-7, 1 = 8-bit, 2 = UCS-2. */
       coding,
