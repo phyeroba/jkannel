@@ -53,7 +53,19 @@ describe('MiniChart x axis', () => {
   });
 
   it('never places two labels closer than the rest of the axis', () => {
-    for (const count of [7, 12, 13, 24, 25, 37, 48, 72, 145]) {
+    /*
+     * 37 is the live case, reproduced exactly: six hours of ten-minute
+     * buckets. Measured on production it rendered
+     *
+     *     06:00 07:10 08:20 09:30 10:40 11:50 12:00
+     *
+     * with a 16.5px gap between the last two labels on a 115.5px pitch — the
+     * forced final label landing one slot from its neighbour. The same
+     * arithmetic on 73 five-minute buckets is fine by luck, and is kept in
+     * this list so that the case which happens to pass cannot be mistaken for
+     * the case that was reported.
+     */
+    for (const count of [7, 12, 13, 24, 25, 37, 48, 72, 73, 145]) {
       const marks = axisFor(sixHours.slice(0, 1).concat(Array.from({ length: count - 1 }, (_, i) => `${i}:00`)));
       const spacing = gaps(marks);
       const widest = Math.max(...spacing);
