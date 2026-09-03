@@ -173,9 +173,53 @@ export class SmscService {
    */
   attributesFrom(body: Record<string, unknown>): SmscAttributes {
     const attributes: Record<string, unknown> = {};
+    /*
+     * A FIELD CAN BE CLEARED, AND UNTIL NOW IT COULD NOT.
+     *
+     * This skipped every empty value, so `null` and `""` both meant "not
+     * supplied" and the stored value survived. A credential reference, once
+     * set, was therefore permanent through the API: an operator who pasted the
+     * wrong thing had no way to undo it from the console.
+     *
+     * That is not hypothetical. On 2026-09-03 a carrier record was saved with
+     * the PASSWORD ITSELF as the reference — `secret://kololo/<the password>` —
+     * which put the credential in the database, in every `GET /smscs`
+     * response, and into the rendered config as an environment variable NAME
+     * that nothing sets. Repairing it meant clearing the field, and the field
+     * could not be cleared.
+     *
+     * `null` now clears; `undefined` still means "not supplied", which is what
+     * a PATCH of other fields sends. The two were being conflated and they
+     * mean opposite things.
+     *
+     * An empty STRING is deliberately a clear as well, because that is what a
+     * form sends when somebody empties the box — the one gesture that
+     * unambiguously says "I want this gone". `systemType` is the exception and
+     * is handled below: an empty system type is a real, meaningful value there.
+     */
+    const CLEARABLE_AS_EMPTY_STRING = new Set<keyof SmscAttributes>([
+      'systemId',
+      'usernameSecretRef',
+      'addressRange',
+      'altCharset',
+      'sendUrl',
+      'notes',
+    ]);
     const copyString = (key: keyof SmscAttributes) => {
       const value = body[key];
-      if (typeof value === 'string' && value.trim()) attributes[key] = value.trim();
+      if (value === null) {
+        attributes[key] = null;
+        return;
+      }
+      if (typeof value !== 'string') return;
+      const trimmed = value.trim();
+      if (trimmed) {
+        attributes[key] = trimmed;
+        return;
+      }
+      // Empty string: a clear for most fields, a real value for systemType.
+      if (key === 'systemType') attributes[key] = '';
+      else if (CLEARABLE_AS_EMPTY_STRING.has(key)) attributes[key] = null;
     };
     const copyNumber = (key: keyof SmscAttributes) => {
       const value = body[key];

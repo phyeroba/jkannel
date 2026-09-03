@@ -95,3 +95,38 @@ describe('SmscService', () => {
       expect(service.attributesFrom({ host: 'x' })).toEqual({}));
   });
 });
+
+describe('clearing a field', () => {
+  /*
+   * A credential reference was permanent once set: `attributesFrom` skipped every
+   * empty value, so `null` and `""` both read as "not supplied" and the stored
+   * value survived. A carrier record saved with the PASSWORD as its reference
+   * therefore could not be repaired from the console.
+   */
+  const service = new SmscService();
+
+  it('treats null as an explicit clear, not as "not supplied"', () => {
+    expect(service.attributesFrom({ usernameSecretRef: null })).toEqual({
+      usernameSecretRef: null,
+    });
+  });
+
+  it('treats an emptied text box as a clear', () => {
+    // What a form sends when somebody deletes the contents — the one gesture
+    // that unambiguously means "I want this gone".
+    expect(service.attributesFrom({ usernameSecretRef: '   ' })).toEqual({
+      usernameSecretRef: null,
+    });
+  });
+
+  it('still ignores a field that was not supplied at all', () => {
+    // A PATCH of unrelated fields must not wipe everything else.
+    expect(service.attributesFrom({ systemId: 'keep-me' })).toEqual({ systemId: 'keep-me' });
+  });
+
+  it('keeps an EMPTY system type as a real value, because it is one', () => {
+    // SMPP's system_type is optional and plenty of carriers issue none;
+    // `system-type = ""` starts bearerbox cleanly. Only its ABSENCE is fatal.
+    expect(service.attributesFrom({ systemType: '' })).toEqual({ systemType: '' });
+  });
+});
