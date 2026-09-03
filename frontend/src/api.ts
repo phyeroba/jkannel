@@ -70,15 +70,53 @@ async function unwrap<T>(response: Response): Promise<T> {
     throw new ApiError(response.status, describeFailure(response, body), body.code);
   return (body.data ?? body) as T;
 }
+/**
+ * The refresh currently in flight, so concurrent callers share one.
+ *
+ * WHY THIS IS NOT OPTIONAL
+ * ---------------------------------------------------------------------------
+ * The access token lives 15 minutes and every screen in this console fires
+ * several requests at once. When it expires they all get 401 in the same tick,
+ * and without this each one called `renew()` independently with the SAME
+ * refresh token.
+ *
+ * The server rotates the refresh token on first use and treats a second
+ * presentation of a consumed one as replay — which is correct, and is the whole
+ * point of refresh-token family revocation. So the first request succeeded and
+ * every other one revoked the family. The operator was signed out, and because
+ * the screens were mid-load, EVERY panel showed an error at the same moment.
+ *
+ * Reported as "the system seems to log me out and the menus all produce
+ * errors", which is precisely what a self-inflicted replay looks like from the
+ * outside. It would fire roughly every fifteen minutes of active use, and more
+ * reliably the more panels a screen has — the busiest screens broke first.
+ *
+ * One in-flight promise, shared. The winner rotates the token; everyone else
+ * awaits the same result and retries with it.
+ */
+let refreshInFlight: Promise<void> | null = null;
+
 async function renew() {
   if (!refreshToken) throw new Error('Session expired');
-  const response = await fetch(`${base}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refreshToken }),
-  });
-  const tokens = await unwrap<{ accessToken: string; refreshToken: string }>(response);
-  setTokens(tokens.accessToken, tokens.refreshToken);
+  // A refresh already running is the one to wait for — starting a second is
+  // what causes the replay.
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const response = await fetch(`${base}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    const tokens = await unwrap<{ accessToken: string; refreshToken: string }>(response);
+    setTokens(tokens.accessToken, tokens.refreshToken);
+  })();
+  try {
+    await refreshInFlight;
+  } finally {
+    // Cleared whether it worked or not: a failed refresh must not pin every
+    // later request to the same rejected promise for the life of the tab.
+    refreshInFlight = null;
+  }
 }
 export async function apiRequest<T>(
   path: string,
