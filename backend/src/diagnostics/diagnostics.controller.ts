@@ -109,8 +109,17 @@ export class DiagnosticsController {
       if (!Number.isInteger(limit) || limit < 1 || limit > 500)
         throw new BadRequestException('limit must be an integer between 1 and 500');
     }
+    // Same treatment for `offset`: unvalidated, it reaches PostgreSQL as
+    // `OFFSET NaN` and returns a 500 for what is a caller's mistake.
+    let offset: number | undefined;
+    if (query.offset !== undefined && query.offset !== '') {
+      offset = Number(query.offset);
+      if (!Number.isInteger(offset) || offset < 0)
+        throw new BadRequestException('offset must be an integer of 0 or more');
+    }
     return this.events.list(actor(r), {
       limit,
+      offset,
       kindPrefix: query.kind,
       severity: query.severity,
       subjectType: query.subjectType,

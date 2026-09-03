@@ -42,6 +42,8 @@ export interface EventInput {
 
 export interface EventQuery {
   limit?: number;
+  /** Rows to skip. The stream is ordered newest-first, so 0 is the newest. */
+  offset?: number;
   /** Prefix match, so `smsc.` returns every SMSC event. */
   kindPrefix?: string;
   severity?: string;
@@ -98,8 +100,23 @@ export class OperationalEventsService {
     }
   }
 
+  /**
+   * A PAGE of the event stream, plus how many rows the filters actually match.
+   *
+   * This used to return `LIMIT n` and nothing else, so the newest n events were
+   * the only ones an operator could ever see. The console said so honestly —
+   * "this page is full, raise the row count or narrow the filters" — but that
+   * is a workaround offered in place of a feature, and it stops working at the
+   * 500-row ceiling. On a busy gateway the stream is the first thing to grow
+   * past that, and it is the screen you go to precisely when a lot has just
+   * happened.
+   *
+   * `total` is counted under the same WHERE clause in the same transaction, so
+   * the count and the page cannot disagree about what was filtered.
+   */
   async list(actor: Actor, query: EventQuery = {}) {
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+    const offset = Math.max(query.offset ?? 0, 0);
     const params: unknown[] = [];
     const where: string[] = [];
     const add = (clause: string, value: unknown) => {
@@ -112,19 +129,24 @@ export class OperationalEventsService {
     if (query.subjectId) add('subject_id = ?', query.subjectId);
     if (query.correlationId) add('correlation_id = ?::uuid', query.correlationId);
     if (query.since) add('observed_at >= ?::timestamptz', query.since);
-    params.push(limit);
+    const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const pageParams = [...params, limit, offset];
 
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const { rows } = await client.query(
         `SELECT id::text, kind, severity, summary, detail, subject_type, subject_id,
                 correlation_id::text, observed_at
            FROM operational_events
-          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+          ${filter}
           ORDER BY observed_at DESC
-          LIMIT $${params.length}`,
+          LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}`,
+        pageParams,
+      );
+      const counted = await client.query(
+        `SELECT count(*)::text AS total FROM operational_events ${filter}`,
         params,
       );
-      return { items: rows, limit };
+      return { items: rows, limit, offset, total: Number(counted.rows[0]?.total ?? 0) };
     });
   }
 

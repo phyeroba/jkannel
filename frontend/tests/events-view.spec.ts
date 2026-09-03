@@ -50,6 +50,8 @@ const queueWarning = {
 
 interface Options {
   items?: unknown[];
+  /** What the API says MATCHES, as opposed to what this page holds. */
+  total?: number;
   bundle?: Record<string, unknown> | null;
   logs?: unknown[] | 'forbidden' | 'error';
   permissions?: string[];
@@ -89,7 +91,8 @@ const mountView = async (options: Options = {}) => {
             note: NOTE,
           },
         );
-      return envelope({ items: options.items ?? [bindLost, queueWarning], limit: 100 });
+      const items = options.items ?? [bindLost, queueWarning];
+      return envelope({ items, limit: 100, total: options.total ?? items.length });
     }),
   );
   const wrapper = mount(EventsView);
@@ -155,12 +158,40 @@ describe('Events — the stream and its filters', () => {
     );
   });
 
-  it('warns that a full page is the newest slice, not the whole window', async () => {
-    const { wrapper } = await mountView({
+  /*
+   * This replaces a test that asserted the console WARNED you were only seeing
+   * the newest slice. The warning was true and its advice — raise the row
+   * count — stops working at the 500-row ceiling, on the screen you open
+   * precisely when a lot has just happened. The stream pages now.
+   */
+  it('pages through a stream longer than one page', async () => {
+    const { wrapper, calls } = await mountView({
       items: Array.from({ length: 100 }, (_, index) => ({ ...bindLost, id: `e${index}` })),
+      total: 240,
     });
-    expect(overlay(wrapper, '[data-testid="events-trimmed"]').text()).toContain(
-      'newest slice of the window',
+    expect(overlay(wrapper, '[data-testid="events-range"]').text()).toBe('1–100 of 240');
+    expect(overlay(wrapper, '[data-testid="events-prev"]').attributes('disabled')).toBeDefined();
+
+    await overlay(wrapper, '[data-testid="events-next"]').trigger('click');
+    await vi.waitFor(() => expect(calls.some((url) => url.includes('offset=100'))).toBe(true));
+  });
+
+  it('returns to the first page when the filters change', async () => {
+    // Page 3 of the old filter is not page 3 of the new one. Keeping the
+    // offset shows an empty table for a filter that matches plenty, which
+    // reads as "no such events".
+    const { wrapper, calls } = await mountView({
+      items: Array.from({ length: 100 }, (_, index) => ({ ...bindLost, id: `e${index}` })),
+      total: 240,
+    });
+    await overlay(wrapper, '[data-testid="events-next"]').trigger('click');
+    await vi.waitFor(() => expect(calls.some((url) => url.includes('offset=100'))).toBe(true));
+
+    await overlay(wrapper, '[data-testid="events-filter-severity"]').setValue('critical');
+    await vi.waitFor(() =>
+      expect(
+        calls.some((url) => url.includes('severity=critical') && url.includes('offset=0')),
+      ).toBe(true),
     );
   });
 

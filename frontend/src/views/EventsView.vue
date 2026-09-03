@@ -55,6 +55,10 @@ const subjectType = ref('');
 const subjectId = ref('');
 const correlationFilter = ref('');
 const limit = ref(100);
+/** Rows skipped. The stream is newest-first, so 0 is the newest page. */
+const offset = ref(0);
+/** How many events match the filters, not how many are on this page. */
+const total = ref(0);
 
 const events = ref<OperationalEvent[]>([]);
 const state = ref<State>('loading');
@@ -100,6 +104,7 @@ function failureState(reason: unknown): State {
 function buildParams(): URLSearchParams {
   const params = new URLSearchParams();
   params.set('limit', String(limit.value));
+  params.set('offset', String(offset.value));
   if (kind.value.trim()) params.set('kind', kind.value.trim());
   if (severity.value) params.set('severity', severity.value);
   if (subjectType.value) params.set('subjectType', subjectType.value);
@@ -140,10 +145,13 @@ async function load() {
   }
   state.value = 'loading';
   try {
-    const page = await apiRequest<{ items?: OperationalEvent[]; limit?: number }>(
-      `/diagnostics/events?${buildParams().toString()}`,
-    );
+    const page = await apiRequest<{
+      items?: OperationalEvent[];
+      limit?: number;
+      total?: number;
+    }>(`/diagnostics/events?${buildParams().toString()}`);
     events.value = Array.isArray(page?.items) ? page.items : [];
+    total.value = Number.isFinite(page?.total) ? Number(page?.total) : events.value.length;
     error.value = '';
     state.value = events.value.length ? 'live' : 'empty';
   } catch (reason) {
@@ -153,8 +161,28 @@ async function load() {
   }
 }
 
-/** True when the page is exactly full — the newest slice, not the whole match. */
-const trimmed = computed(() => events.value.length >= limit.value);
+/*
+ * PAGING.
+ *
+ * The stream used to be capped at `limit` with a notice explaining that what
+ * you could see was the newest slice and not the whole of it. Honest, and no
+ * use: the advice it gave — raise the row count — runs out at the 500-row
+ * ceiling, on the screen you visit precisely when a great deal has happened.
+ */
+const pageLabel = computed(() => {
+  if (!total.value) return 'No matching events';
+  const first = offset.value + 1;
+  const last = offset.value + events.value.length;
+  return `${first}–${last} of ${total.value}`;
+});
+const canGoBack = computed(() => offset.value > 0);
+const canGoForward = computed(() => offset.value + limit.value < total.value);
+
+function turnPage(direction: number) {
+  const next = offset.value + direction * limit.value;
+  offset.value = Math.max(0, Math.min(next, Math.max(0, total.value - 1)));
+  void load();
+}
 
 const criticalCount = computed(
   () => events.value.filter((event) => event.severity === 'critical').length,
@@ -165,6 +193,7 @@ const warningCount = computed(
 const threaded = computed(() => events.value.filter((event) => event.correlation_id).length);
 
 function applyFilters() {
+  offset.value = 0;
   void load();
 }
 
@@ -174,6 +203,7 @@ function resetFilters() {
   subjectType.value = '';
   subjectId.value = '';
   correlationFilter.value = '';
+  offset.value = 0;
   void load();
 }
 
@@ -295,7 +325,7 @@ onMounted(load);
             {{
               state === 'loading'
                 ? 'Reading the event stream…'
-                : `${events.length} event(s) since the start of ${selectedRange.label.toLowerCase()}, newest first.`
+                : `${total} event(s) since the start of ${selectedRange.label.toLowerCase()}, newest first — showing ${pageLabel.toLowerCase()}.`
             }}
           </p>
         </div>
@@ -335,80 +365,97 @@ onMounted(load);
         </div>
       </div>
 
-      <div class="grid-toolbar">
-        <label class="filter-select filter-search">
-          <span>Kind starts with</span>
-          <input
-            v-model="kind"
-            data-testid="events-filter-kind"
-            type="search"
-            list="event-kind-suggestions"
-            placeholder="smsc. — the API matches a prefix"
-            @keyup.enter="applyFilters"
-          />
-          <datalist id="event-kind-suggestions">
-            <option v-for="suggestion in EVENT_KIND_SUGGESTIONS" :key="suggestion">
-              {{ suggestion }}
-            </option>
-          </datalist>
-        </label>
-        <label class="filter-select">
-          <span>Severity</span>
-          <select v-model="severity" data-testid="events-filter-severity" @change="applyFilters">
-            <option value="">Any</option>
-            <option v-for="value in EVENT_SEVERITIES" :key="value" :value="value">
-              {{ value }}
-            </option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Subject type</span>
-          <select
-            v-model="subjectType"
-            data-testid="events-filter-subject-type"
-            @change="applyFilters"
-          >
-            <option value="">Any</option>
-            <option v-for="value in EVENT_SUBJECT_TYPES" :key="value" :value="value">
-              {{ value }}
-            </option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Subject id</span>
-          <input
-            v-model="subjectId"
-            data-testid="events-filter-subject-id"
-            type="search"
-            placeholder="mtn-p1"
-            @keyup.enter="applyFilters"
-          />
-        </label>
-        <label class="filter-select filter-search">
-          <span>Correlation id</span>
-          <input
-            v-model="correlationFilter"
-            data-testid="events-filter-correlation"
-            type="search"
-            placeholder="0e3b1f2a-… (36 characters)"
-            @keyup.enter="applyFilters"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Rows</span>
-          <select v-model.number="limit" data-testid="events-limit" @change="applyFilters">
-            <option v-for="choice in LIMIT_CHOICES" :key="choice" :value="choice">
-              {{ choice }}
-            </option>
-          </select>
-        </label>
-        <button class="primary-button" data-testid="events-apply" @click="applyFilters">
-          Apply
-        </button>
-        <button class="secondary-button" data-testid="events-reset" @click="resetFilters">
-          Clear filters
-        </button>
-      </div>
+      <!--
+        SIX FILTERS, AS A FORM.
+
+        This was a `.grid-toolbar`: six `label · control` pairs and two buttons
+        packed into one flex run, labels INLINE, no two fields the same width.
+        With six of them the eye has to guess which label owns which control,
+        and the pair at the end of the run is a row count next to an Apply
+        button that looks like it belongs to it.
+
+        The same `.panel-form` the Live Queue panels use — label above control,
+        equal columns, buttons on their own line.
+      -->
+      <fieldset class="panel-form" data-testid="events-filter-group">
+        <legend>Narrow the stream</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Kind starts with</span>
+            <input
+              v-model="kind"
+              data-testid="events-filter-kind"
+              type="search"
+              list="event-kind-suggestions"
+              placeholder="smsc. — the API matches a prefix"
+              @keyup.enter="applyFilters"
+            />
+            <datalist id="event-kind-suggestions">
+              <option v-for="suggestion in EVENT_KIND_SUGGESTIONS" :key="suggestion">
+                {{ suggestion }}
+              </option>
+            </datalist>
+          </label>
+          <label class="field">
+            <span>Severity</span>
+            <select v-model="severity" data-testid="events-filter-severity" @change="applyFilters">
+              <option value="">Any</option>
+              <option v-for="value in EVENT_SEVERITIES" :key="value" :value="value">
+                {{ value }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Subject type</span>
+            <select
+              v-model="subjectType"
+              data-testid="events-filter-subject-type"
+              @change="applyFilters"
+            >
+              <option value="">Any</option>
+              <option v-for="value in EVENT_SUBJECT_TYPES" :key="value" :value="value">
+                {{ value }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Subject id</span>
+            <input
+              v-model="subjectId"
+              data-testid="events-filter-subject-id"
+              type="search"
+              placeholder="mtn-p1"
+              @keyup.enter="applyFilters"
+            />
+          </label>
+          <label class="field">
+            <span>Correlation id</span>
+            <input
+              v-model="correlationFilter"
+              data-testid="events-filter-correlation"
+              type="search"
+              placeholder="0e3b1f2a-… (36 characters)"
+              @keyup.enter="applyFilters"
+            />
+          </label>
+          <label class="field">
+            <span>Rows per page</span>
+            <select v-model.number="limit" data-testid="events-limit" @change="applyFilters">
+              <option v-for="choice in LIMIT_CHOICES" :key="choice" :value="choice">
+                {{ choice }}
+              </option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-form-actions">
+          <button class="primary-button" data-testid="events-apply" @click="applyFilters">
+            Apply
+          </button>
+          <button class="secondary-button" data-testid="events-reset" @click="resetFilters">
+            Clear filters
+          </button>
+        </div>
+      </fieldset>
 
       <p
         v-if="correlationFilterInvalid"
@@ -422,12 +469,6 @@ onMounted(load);
 
       <p class="source-note" data-testid="events-active-filters">
         Applied by the API: <span class="mono">{{ activeFilters.join(' · ') }}</span>
-      </p>
-
-      <p v-if="trimmed" class="warn-notice" role="note" data-testid="events-trimmed">
-        This page is full at {{ limit }} rows, so it is the newest slice of the window and not the
-        whole of it. Raise the row count or narrow the filters before concluding anything from what
-        is <em>not</em> here.
       </p>
 
       <DataState
@@ -541,6 +582,27 @@ onMounted(load);
             </tbody>
           </table>
         </div>
+        <footer class="pager" data-testid="events-pager">
+          <span data-testid="events-range">{{ pageLabel }}</span>
+          <div class="pager-buttons">
+            <button
+              class="secondary-button"
+              data-testid="events-prev"
+              :disabled="state === 'loading' || !canGoBack"
+              @click="turnPage(-1)"
+            >
+              Previous
+            </button>
+            <button
+              class="secondary-button"
+              data-testid="events-next"
+              :disabled="state === 'loading' || !canGoForward"
+              @click="turnPage(1)"
+            >
+              Next
+            </button>
+          </div>
+        </footer>
       </DataState>
     </section>
 
