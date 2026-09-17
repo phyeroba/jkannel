@@ -2,8 +2,10 @@
 #
 # Deploy JKANNEL to a host that already has the stack running.
 #
-#   ssh <host> 'bash -s' < scripts/deploy.sh            # backend + frontend
-#   ssh <host> 'bash -s' < scripts/deploy.sh frontend   # frontend only
+#   powershell -NoProfile -File scripts\prod-ssh.ps1 -Script scripts\deploy.sh
+#   powershell -NoProfile -File scripts\prod-ssh.ps1 -Script scripts\deploy.sh -ScriptArgs frontend
+#
+# Production is only reachable through the IAP wrapper; see its header.
 #
 # WHAT THIS WILL NOT DO
 # -----------------------------------------------------------------------------
@@ -93,8 +95,17 @@ test -f runtime/kamex/engine/kamex.conf \
   || echo "   note: the engine configuration changed during the pull"
 
 say "BUILD $SERVICES"
+# The build log is kept rather than discarded. Production is reached through an
+# IAP tunnel where every login is rationed, and a build that failed silently used
+# to cost a second login just to read why.
+BUILD_LOG=$(mktemp /tmp/jkannel-build.XXXXXX)
 # shellcheck disable=SC2086
-docker compose -p "$PROJECT" build $SERVICES >/dev/null 2>&1
+if ! docker compose -p "$PROJECT" build $SERVICES >"$BUILD_LOG" 2>&1; then
+  echo "   !! build failed - nothing was recreated. Last 40 lines:"
+  tail -40 "$BUILD_LOG" | sed 's/^/   | /'
+  exit 1
+fi
+rm -f "$BUILD_LOG"
 echo "   built"
 
 say "RECREATE $SERVICES (never the engine)"
