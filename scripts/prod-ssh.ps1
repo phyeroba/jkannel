@@ -3,70 +3,85 @@
   The only sanctioned way to reach JKANNEL production over SSH.
 
 .DESCRIPTION
-  WHY THIS EXISTS
+  ROUTE
   ---------------------------------------------------------------------------
-  On 2026-09-03 the egress IP 41.220.210.18 was banned from port 22. The key
-  had not been revoked and the server had not changed. Everything that failed,
-  failed on this machine, in two ways that both LOOK like the server rejecting
-  us:
+  Production is GCP instance `caps` (project speeda360, zone us-central1-b).
+  Public port 22 is closed. The route in is an IAP TCP tunnel: gcloud opens a
+  WebSocket to Google, Google connects to the VM's port 22 from its own range
+  35.235.240.0/20, and ssh talks to a local port. Access is granted on the
+  INSTANCE only, so project-wide gcloud calls are denied by design - always name
+  the instance, project and zone.
 
-   1. THE BASH CLIENT HAS NO KEY AT ALL. Git Bash ships its own OpenSSH, which
-      cannot open a Windows named pipe, so it cannot reach the agent holding
-      the key. There is no fallback either: every default identity path
-      (~/.ssh/id_rsa, id_ecdsa, id_ed25519 ...) is ABSENT on this machine,
-      because the real keys have custom names. So the client offers zero public
-      keys and then degrades to password authentication against a key-only
-      server. Every one of those is a fail2ban strike.
-
-   2. OMITTING THE USERNAME SENDS AN INVALID ACCOUNT. Before the fix, no Host
-      block matched `gw1.speedamobile.com`, so `User` fell back to the local
-      Windows account and ssh sent "Peter Hyeroba"  -  an invalid user, with a
-      SPACE in it. fail2ban treats invalid-user lines as its strongest signal.
-
-  And the reason a long run of successful logins did not protect us:
-  A SUCCESSFUL LOGIN DOES NOT RESET fail2ban's COUNTER. It counts failures
-  inside `findtime` regardless of what else succeeded, so thirty good sessions
-  and five broken ones in the same window still trips the jail.
-
-  THE DESIGN RULE
+  WHY EVERY CHECK IS LOCAL, AND WHY THERE IS NO RETRY
   ---------------------------------------------------------------------------
-  EVERY CHECK BELOW IS LOCAL AND RUNS BEFORE A PACKET REACHES PORT 22. A
-  misconfigured attempt costs the server nothing, because it never arrives. A
-  wrapper that connected first and diagnosed afterwards would be the very thing
-  that caused the ban.
+  On 2026-09-03 the office lost SSH for two weeks. Part of that was client-side
+  faults that each produced failed logins: Git Bash's ssh cannot reach the
+  Windows agent and fell back to password auth, and a name with no Host block
+  sent the local Windows account "Peter Hyeroba" as the username. fail2ban
+  counts failures inside `findtime` and a successful login does not reset it.
 
-  The last gate is reachability, and it is a gate rather than a warning for a
-  specific reason: hammering a port while banned is what extends a ban.
-  fail2ban's recidive jail and `bantime.increment` both escalate on repeat
-  offences, so an agent that retries politely every few minutes can convert an
-  hour's ban into a week's. When port 22 is dark this script REFUSES to run ssh
-  at all and prints the runbook instead.
+  Through IAP the stakes are higher, not lower: every login arrives from
+  Google's SHARED range. If fail2ban banned one of those addresses, the tunnel
+  itself would stop working. So a misconfiguration must be caught on this
+  machine, before an authentication is ever attempted, and a failed login must
+  never be retried automatically.
 
-  Connection multiplexing would be the obvious way to collapse many commands
-  into one authentication. It is not available: verified on
-  OpenSSH_for_Windows_9.5p1, `ssh -O check` returns "getsockname failed: Not a
-  socket". The options parse and do nothing. So the substitute is batching  - 
-  -Script sends one file and runs it in one session, which is why it is the
-  preferred mode.
+  The gates, in order: Windows OpenSSH client; gcloud present; the key file
+  exists and matches the pinned fingerprint; the pinned host key is already in
+  known_hosts (so the host check cannot fail mid-handshake); the local port is
+  free. Only then does the tunnel open, and only once it is LISTENING does ssh
+  run - once.
+
+  THE HOST KEY IS PINNED
+  ---------------------------------------------------------------------------
+  ssh connects to localhost, so it would normally look up a host key for
+  "[localhost]:2222". HostKeyAlias makes it check the key recorded for the real
+  production address instead, with StrictHostKeyChecking=yes. On 2026-09-17 that
+  key matched the one recorded before the crypto-miner compromise. If it ever
+  stops matching, ssh aborts before authenticating - treat that as a security
+  event, not an annoyance.
+
+  ONE LOGIN PER TASK
+  ---------------------------------------------------------------------------
+  Connection multiplexing does not work on OpenSSH_for_Windows 9.5p1
+  ("getsockname failed: Not a socket"). So -Script does not scp and then ssh;
+  it sends the script on the login's stdin, where the remote side `cat`s it to
+  a temp file BEFORE running it. Running `bash -s` directly would let any
+  command inside the script that reads stdin swallow the rest of the script.
+  Start-Process -RedirectStandardInput passes the bytes untouched; a PowerShell
+  pipe would prepend a BOM and bash would fail on line 1.
+
+  NOTE ON GCLOUD OUTPUT
+  ---------------------------------------------------------------------------
+  gcloud writes "Listening on port [N]" to its LOG FILE only, never to a
+  redirected stderr. Readiness is therefore taken from the OS listening-socket
+  table, which is local and sends nothing to the server.
 
 .EXAMPLE
-  pwsh scripts/prod-ssh.ps1 -Check
-  pwsh scripts/prod-ssh.ps1 -Command "docker ps --format '{{.Names}}'"
-  pwsh scripts/prod-ssh.ps1 -Script scripts/deploy.sh
+  powershell -NoProfile -File scripts\prod-ssh.ps1 -Check
+  powershell -NoProfile -File scripts\prod-ssh.ps1 -Command "docker ps --format '{{.Names}}'"
+  powershell -NoProfile -File scripts\prod-ssh.ps1 -Script scripts\deploy.sh
 #>
 [CmdletBinding(DefaultParameterSetName = 'Check')]
 param(
-  [Parameter(ParameterSetName = 'Check')]  [switch] $Check,
+  [Parameter(ParameterSetName = 'Check')] [switch] $Check,
   [Parameter(ParameterSetName = 'Cmd', Mandatory = $true)] [string] $Command,
   [Parameter(ParameterSetName = 'Script', Mandatory = $true)] [string] $Script,
-  # Arguments appended after the remote script path.
   [Parameter(ParameterSetName = 'Script')] [string] $ScriptArgs = '',
-  [string] $Target = 'cpaas-gcp',
-  # The key that is allowed to reach production, pinned by fingerprint. A
-  # public fingerprint is not a secret; pinning it means a DIFFERENT key
-  # silently loaded into the agent cannot be offered here by accident.
-  [string] $Fingerprint = 'SHA256:oIlLzFy2ZL+WsQH5s/vsRAoQMidP0VnT0mMc31ep/rY',
-  [int] $ConnectTimeoutSeconds = 8
+
+  [string] $Instance = 'caps',
+  [string] $Project = 'speeda360',
+  [string] $Zone = 'us-central1-b',
+  [string] $User = 'hyeroba',
+  [string] $KeyFile = "$HOME\.ssh\caps_hyeroba",
+  # Public fingerprints, not secrets. Pinning the key means a different key in
+  # the agent can never be offered by accident; pinning the host alias means the
+  # host check is against the real production key.
+  [string] $Fingerprint = 'SHA256:V4SoRbIVaHm12V+9L2QDouLCJ0kwezvgHpMAm0yS34Y',
+  [string] $HostKeyAlias = '34.134.248.1',
+  [int] $LocalPort = 2222,
+  [int] $TunnelWaitSeconds = 45,
+  [int] $ConnectTimeoutSeconds = 20
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,153 +93,141 @@ function Fail([string] $m, [string] $fix) {
 }
 
 Write-Host ""
-Write-Host "PRODUCTION SSH PREFLIGHT  ->  $Target"
+Write-Host "PRODUCTION SSH PREFLIGHT  ->  $User@$Instance ($Project / $Zone) via IAP"
 Write-Host ("-" * 72)
 
-# --- 1. the right client ------------------------------------------------------
-# Git Bash's ssh is the one that cannot see the agent. Catching it here is the
-# difference between a clear local error and a password attempt on the server.
+# --- 1. the right client -------------------------------------------------------
 $sshCmd = Get-Command ssh -ErrorAction SilentlyContinue
 $sshPath = if ($sshCmd) { $sshCmd.Source } else { '' }
-if ($sshPath -and $sshPath -like '*System32\OpenSSH*') {
-  Pass "client is Windows OpenSSH ($sshPath)"
-} else {
-  Fail "ssh resolves to '$sshPath', which is not Windows OpenSSH" `
-       "run this from PowerShell, or call C:\Windows\System32\OpenSSH\ssh.exe explicitly"
+if ($sshPath -like '*System32\OpenSSH*') { Pass "client is Windows OpenSSH" }
+else {
+  Fail "ssh resolves to '$sshPath', not Windows OpenSSH" `
+       "run from PowerShell, not Git Bash - Git Bash's ssh cannot reach the Windows agent"
 }
 
-# --- 2. the agent, and the right key in it ------------------------------------
-if (-not $env:SSH_AUTH_SOCK) { $env:SSH_AUTH_SOCK = '\\.\pipe\openssh-ssh-agent' }
-$agentSvc = Get-Service ssh-agent -ErrorAction SilentlyContinue
-if ($agentSvc -and $agentSvc.Status -eq 'Running') { Pass "ssh-agent service is running" }
-else { Fail "ssh-agent service is '$(if($agentSvc){$agentSvc.Status}else{'absent'})'" "Start-Service ssh-agent" }
+# --- 2. gcloud -----------------------------------------------------------------
+# It is often installed AFTER a shell started, so PATH alone is not trusted.
+$gcloud = (Get-Command gcloud.cmd -ErrorAction SilentlyContinue).Source
+if (-not $gcloud) {
+  $gcloud = @(
+    "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd",
+    "$env:ProgramFiles\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
+  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if ($gcloud) { Pass "gcloud found" } else { Fail "gcloud not found" "install the Google Cloud SDK" }
 
-if (Test-Path '\\.\pipe\openssh-ssh-agent') { Pass "agent pipe is present" }
-else { Fail "agent pipe \\.\pipe\openssh-ssh-agent is absent" "Start-Service ssh-agent" }
-
-$agentKeys = & ssh-add -l 2>&1 | Out-String
-if ($agentKeys -match [regex]::Escape($Fingerprint)) {
-  Pass "the production key is loaded ($Fingerprint)"
+# --- 3. the key ----------------------------------------------------------------
+if (Test-Path $KeyFile) {
+  $actual = ((& ssh-keygen -lf $KeyFile 2>&1) -join ' ')
+  if ($actual -match [regex]::Escape($Fingerprint)) { Pass "key matches the pinned fingerprint" }
+  else {
+    Fail "key file fingerprint is not the pinned one ($actual)" `
+         "the key was replaced - update -Fingerprint only if that was intended"
+  }
 } else {
-  Fail "the production key is NOT in the agent" `
-       "ssh-add `$HOME\.ssh\cpaas_gcp   (it is passphrase-protected; agent contents do not survive a reboot)"
-  Write-Host ("         agent holds: " + $agentKeys.Trim())
+  Fail "key file $KeyFile is missing" "restore it; the private key exists only on this workstation"
 }
 
-# --- 3. what ssh would actually SEND ------------------------------------------
-# This is the gate that would have prevented the ban outright.
-$resolved = & ssh -G $Target 2>&1
-$user = (($resolved | Select-String '^user ').Line -replace '^user ', '').Trim()
-$auths = (($resolved | Select-String '^preferredauthentications ').Line -replace '^preferredauthentications ', '').Trim()
-$host22 = (($resolved | Select-String '^hostname ').Line -replace '^hostname ', '').Trim()
-$port = (($resolved | Select-String '^port ').Line -replace '^port ', '').Trim()
+# --- 4. the host key is already known ------------------------------------------
+# Without this, StrictHostKeyChecking=yes fails DURING the handshake - which the
+# server still logs as a dropped connection.
+$known = & ssh-keygen -F $HostKeyAlias 2>$null
+if ($known) { Pass "production host key is pinned in known_hosts ($HostKeyAlias)" }
+else { Fail "no known_hosts entry for $HostKeyAlias" "verify the host key out of band before adding it" }
 
-if ($user -eq 'hyeroba') {
-  Pass "resolved user is 'hyeroba'"
-} else {
-  Fail "resolved user is '$user'  -  an invalid account, which is fail2ban's strongest trigger" `
-       "add this name to the 'Host cpaas-gcp ...' block in ~/.ssh/config"
-}
-if ($user -match '\s') { Fail "the resolved username contains whitespace" "as above  -  no Host block is matching" }
-
-if ($auths -eq 'publickey') {
-  Pass "publickey is the only authentication method offered"
-} else {
-  Fail "preferredauthentications is '$auths'  -  a keyless client could fall through to passwords" `
-       "set 'PreferredAuthentications publickey' and 'NumberOfPasswordPrompts 0' on the Host block"
-}
-
-# --- 4. reachability, LAST, and a hard gate -----------------------------------
-# Deliberately one attempt. Retrying a banned port is how an hour becomes a week.
-$reachable = $false
-$client = New-Object Net.Sockets.TcpClient
-try {
-  $reachable = $client.BeginConnect($host22, [int]$port, $null, $null).AsyncWaitHandle.WaitOne($ConnectTimeoutSeconds * 1000, $false) -and $client.Connected
-} catch { $reachable = $false } finally { $client.Close() }
-
-if ($reachable) {
-  Pass "tcp $host22`:$port is open"
-} else {
-  Fail "tcp $host22`:$port did not answer within ${ConnectTimeoutSeconds}s (silently dropped, not refused)" `
-       "the IP is banned or firewalled - see the runbook printed below"
-}
+# --- 5. the local port ---------------------------------------------------------
+if (Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue) {
+  Fail "local port $LocalPort is already in use" "a stale tunnel is probably still running - stop it first"
+} else { Pass "local port $LocalPort is free" }
 
 Write-Host ("-" * 72)
 if ($failures.Count -gt 0) {
   Write-Host ""
-  Write-Host "REFUSING TO CONNECT. $($failures.Count) precondition(s) failed:" -ForegroundColor Red
+  Write-Host "REFUSING TO CONNECT. $($failures.Count) precondition(s) failed; nothing was sent:" -ForegroundColor Red
   foreach ($f in $failures) { Write-Host ("  - " + $f) }
-  if (-not $reachable) {
-    $egress = try { (Invoke-RestMethod 'https://api.ipify.org?format=json' -TimeoutSec 8).ip } catch { '<unknown>' }
-    Write-Host ""
-    Write-Host "PORT 22 IS DARK. Nothing was sent."
-    Write-Host ""
-    Write-Host "  CHECK THE VPC FIREWALL FIRST, not fail2ban."
-    Write-Host ""
-    Write-Host "  On 2026-09-03 this was diagnosed as a fail2ban ban on 41.220.210.18."
-    Write-Host "  That diagnosis did not survive the egress address changing: from a"
-    Write-Host "  completely different network (41.210.173.30) port 22 was STILL dropped,"
-    Write-Host "  while 80 and 443 answered in under 300ms. A fail2ban ban is per-IP, so a"
-    Write-Host "  brand-new address cannot already be banned."
-    Write-Host ""
-    Write-Host "  A silent drop with other ports open is what a GCP VPC firewall does to a"
-    Write-Host "  port no rule admits. A stopped sshd behind an allowing rule would REFUSE"
-    Write-Host "  instantly instead. So, from the Cloud Console or IAP:"
-    Write-Host ""
-    Write-Host "    gcloud compute firewall-rules list --filter=`'allowed.ports=22`'"
-    Write-Host "    gcloud compute instances describe <vm> --format=`'value(tags.items)`'"
-    Write-Host ""
-    Write-Host "  Confirm a rule allows tcp:22 from your source range AND that its target"
-    Write-Host "  tags match the instance. Only if the VPC is fine is it worth looking at"
-    Write-Host "  the host:"
-    Write-Host ""
-    Write-Host "    sudo systemctl status ssh          # is it even listening"
-    Write-Host "    sudo ss -lntp | grep :22"
-    Write-Host "    sudo fail2ban-client status        # and only then, the jails"
-    Write-Host "    sudo fail2ban-client unban $egress"
-    Write-Host ""
-    Write-Host "  Get in without port 22: Cloud Console SSH-in-browser, or"
-    Write-Host "    gcloud compute ssh <vm> --tunnel-through-iap"
-    Write-Host ""
-    Write-Host "  THE EGRESS ADDRESS IS NOT STATIC. It was 41.220.210.18 and is now"
-    Write-Host "  $egress. Do not pin an allowlist or an ignoreip to one address -"
-    Write-Host "  it will silently stop matching. Allow the range, or use IAP."
-    Write-Host ""
-    Write-Host "  Do not retry in a loop either way: bantime.increment and the recidive"
-    Write-Host "  jail escalate on repeat offences."
-  }
   exit 1
 }
 
-Write-Host "All preconditions met." -ForegroundColor Green
-if ($PSCmdlet.ParameterSetName -eq 'Check') { exit 0 }
+# --- the tunnel ----------------------------------------------------------------
+# No `exit` or `return` inside the try: both can skip or outrun `finally`, which
+# is what closes the tunnel, and `return` loses the exit code.
+$tunnelErr = Join-Path $env:TEMP "prod-ssh-tunnel.err"
+$tunnelOut = Join-Path $env:TEMP "prod-ssh-tunnel.out"
+$tunnel = $null
+$exitCode = 1
+try {
+  $tunnel = Start-Process -FilePath $gcloud -NoNewWindow -PassThru `
+    -RedirectStandardError $tunnelErr -RedirectStandardOutput $tunnelOut `
+    -ArgumentList @('compute', 'start-iap-tunnel', $Instance, '22',
+                    "--local-host-port=localhost:$LocalPort",
+                    '--project', $Project, '--zone', $Zone)
 
-# --- the connection itself ----------------------------------------------------
-# BatchMode belongs here rather than in ssh_config: a human at a terminal should
-# still be allowed to unlock the key, but an unattended run must never sit on a
-# prompt, and must never turn into an authentication attempt it cannot complete.
-$common = @('-o', 'BatchMode=yes', '-o', "ConnectTimeout=$ConnectTimeoutSeconds")
+  $up = $false
+  for ($i = 0; $i -lt $TunnelWaitSeconds; $i++) {
+    Start-Sleep -Seconds 1
+    if (Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue) { $up = $true; break }
+    if ($tunnel.HasExited) { break }
+  }
 
-if ($PSCmdlet.ParameterSetName -eq 'Cmd') {
-  Write-Host "`n> $Command`n"
-  & ssh @common $Target $Command
-  exit $LASTEXITCODE
+  if (-not $up) {
+    Write-Host "  [FAIL] IAP tunnel did not come up within ${TunnelWaitSeconds}s - no login attempted" -ForegroundColor Red
+    Get-Content $tunnelErr -ErrorAction SilentlyContinue | Where-Object { $_ -match 'ERROR|4003|4033|denied' } |
+      ForEach-Object { Write-Host "         $_" }
+    Write-Host "         gcloud's full log: $env:APPDATA\gcloud\logs (4033 = IAM, 4003 = firewall/backend)"
+    $exitCode = 1
+  }
+  elseif ($PSCmdlet.ParameterSetName -eq 'Check') {
+    Pass "IAP tunnel listening on localhost:$LocalPort"
+    Write-Host "All preconditions met; tunnel verified. No login was attempted." -ForegroundColor Green
+    $exitCode = 0
+  }
+  else {
+    Pass "IAP tunnel listening on localhost:$LocalPort"
+    # BatchMode and publickey-only: a login can never sit on a prompt or fall
+    # back to a password. IdentitiesOnly plus -i: exactly ONE key is offered, so
+    # a failure costs one strike, not one per key in the agent.
+    $sshArgs = @(
+      '-p', "$LocalPort",
+      '-o', "HostKeyAlias=$HostKeyAlias",
+      '-o', 'StrictHostKeyChecking=yes',
+      '-o', 'BatchMode=yes',
+      '-o', "ConnectTimeout=$ConnectTimeoutSeconds",
+      '-o', 'IdentitiesOnly=yes',
+      '-o', 'PreferredAuthentications=publickey',
+      '-o', 'NumberOfPasswordPrompts=0',
+      '-o', 'ServerAliveInterval=30',
+      '-i', $KeyFile,
+      "$User@localhost"
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'Cmd') {
+      Write-Host "`n> $Command`n"
+      & ssh @sshArgs $Command
+      $exitCode = $LASTEXITCODE
+    }
+    elseif (-not (Test-Path $Script)) {
+      Write-Host "no such script: $Script" -ForegroundColor Red
+      $exitCode = 1
+    }
+    else {
+      $body = [IO.File]::ReadAllText((Resolve-Path $Script)) -replace "`r`n", "`n"
+      $staged = Join-Path $env:TEMP ("prod-ssh-" + [IO.Path]::GetFileName($Script))
+      [IO.File]::WriteAllText($staged, $body, (New-Object Text.UTF8Encoding $false))
+
+      # cat drains stdin to a file first, so nothing the script runs can eat the
+      # rest of the script. The temp file is removed whatever the exit status.
+      $remote = 'f=$(mktemp /tmp/prod-ssh.XXXXXX) && cat > "$f" && bash "$f" ' + $ScriptArgs + '; rc=$?; rm -f "$f"; exit $rc'
+      Write-Host "`n> $([IO.Path]::GetFileName($Script)) $ScriptArgs  (sent on stdin, one login)`n"
+      $quoted = ($sshArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+      $proc = Start-Process -FilePath $sshPath -NoNewWindow -Wait -PassThru `
+        -RedirectStandardInput $staged `
+        -ArgumentList ($quoted + ' "' + $remote.Replace('"', '\"') + '"')
+      $exitCode = $proc.ExitCode
+      Remove-Item $staged -ErrorAction SilentlyContinue
+    }
+  }
 }
-
-# -Script: one upload, one execution, one cleanup - in two connections, because
-# multiplexing is unavailable on this platform (see the header).
-if (-not (Test-Path $Script)) { Write-Host "no such script: $Script" -ForegroundColor Red; exit 1 }
-# CRLF and a BOM both break bash on line 1, and the failure reads as a bug in
-# the script rather than as a transfer problem.
-$body = [IO.File]::ReadAllText((Resolve-Path $Script)) -replace "`r`n", "`n"
-$staged = Join-Path $env:TEMP ("prod-" + [IO.Path]::GetFileName($Script))
-[IO.File]::WriteAllText($staged, $body, (New-Object Text.UTF8Encoding $false))
-
-$remote = "/tmp/" + [IO.Path]::GetFileName($Script)
-Write-Host "`n> scp $([IO.Path]::GetFileName($Script)) -> $Target`:$remote"
-& scp @common $staged "$Target`:$remote"
-if ($LASTEXITCODE -ne 0) { Write-Host "upload failed" -ForegroundColor Red; exit $LASTEXITCODE }
-
-Write-Host "> bash $remote $ScriptArgs`n"
-& ssh @common $Target "bash $remote $ScriptArgs; rc=`$?; rm -f $remote; exit `$rc"
-exit $LASTEXITCODE
+finally {
+  if ($tunnel -and -not $tunnel.HasExited) { & taskkill /PID $tunnel.Id /T /F 2>&1 | Out-Null }
+}
+exit $exitCode
