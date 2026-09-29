@@ -93,29 +93,29 @@ either to loopback or is closed at the GCP firewall. Probed from outside, all of
 | `dev.speedamobile.com` | `127.0.0.1:9080` | APISIX data plane |
 | **`gw1.speedamobile.com`** | **`127.0.0.1:8081`** | **JKANNEL — this API** |
 
-So there are two ways for CPAAS to reach JKANNEL:
+### DECIDED 2026-09-29: use the public URL
 
 ```bash
-JKANNEL_API_BASE=https://gw1.speedamobile.com/api/v1   # public, via nginx
-JKANNEL_API_BASE=http://127.0.0.1:8081/api/v1          # loopback, same box
+JKANNEL_API_BASE=https://gw1.speedamobile.com/api/v1
 ```
 
-**Recommendation: use the loopback address in production, the public one from
-your workstation.** Loopback skips TLS, nginx and the public internet for a call
-that never needed to leave the machine — lower latency, fewer moving parts, and
-it keeps working if a certificate or DNS record lapses. The public URL remains
-correct and is what the key was originally tested against.
+Peter chose the public address over the loopback one. Use it.
 
-Two caveats if you take the loopback path:
+This is a `ProviderEndpoint` row on your side, not a code constant — host
+`gw1.speedamobile.com`, port `443`, TLS on, send path `/api/v1/gateway/messages`,
+health path `/api/v1/gateway/whoami`, auth header `X-API-Key`.
 
-- **Only from a process on the host.** A CPAAS service running in a container
-  reaches it over the docker bridge, not `127.0.0.1` — use the host gateway
-  address or keep that service on the public name. Your PM2 services
-  (`auth-service`, `messaging-service`, `console-web`) run directly on the host,
-  so loopback works for them.
-- **It changes the source address JKANNEL records.** See §10 on the IP
-  allowlist: pin the allowlist only after you have seen the address actually
-  observed in `GET /gateway/request-log`.
+The reasoning, so you do not relitigate it: the public path is the same one any
+external client takes, so what you test is what a customer gets, and there is
+one behaviour to reason about rather than two. It costs a TLS handshake and an
+nginx hop on a call that stays inside the machine, which is a real but small
+price.
+
+`http://127.0.0.1:8081/api/v1` also works and is documented here only so nobody
+rediscovers it and assumes it is the intended path. **It is not — do not switch
+to it without agreement**, because it changes the source address JKANNEL records
+and would silently invalidate an IP allowlist pinned against the public path
+(§10).
 
 ---
 
@@ -548,8 +548,8 @@ tell him in one line, so he can tell the other window to pull.
 | 1 | Confirm the MO/DLR webhook URL, method and auth mode (§6) | **CPAAS** | Open — code exists, URL unconfirmed |
 | 2 | HMAC secret for that webhook, if `hmac` is chosen | **Peter** | Open |
 | 3 | Switch on MO rule `c7798671-…` once 1 and 2 land | JKANNEL | Blocked on 1 |
-| 4 | Decide loopback vs public base URL for production (§1) | **CPAAS** | Open — JKANNEL recommends loopback |
-| 5 | Pin the IP allowlist after first real traffic (§10) | JKANNEL | Blocked on 4 and on first traffic |
+| 4 | Base URL for production (§1) | Peter | **Decided 2026-09-29 — public `https://gw1.speedamobile.com/api/v1`** |
+| 5 | Pin the IP allowlist after first real traffic (§10) | JKANNEL | Blocked on first traffic |
 | 6 | Carrier bind restored | **Peter → the carrier** | Open since 2026-09-08 |
 | 7 | Re-test an end-to-end send once 6 clears | Both | Blocked on 6 |
 | 8 | Entitlements linked | JKANNEL | **Done 2026-09-17** |

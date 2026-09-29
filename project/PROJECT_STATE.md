@@ -173,14 +173,49 @@ Console: **`https://gw1.speedamobile.com`** · tenant `default` · username `ope
 the login form's "Email or Username" label is misleading.
 
 > **Corrected 2026-09-29.** Every document here said
-> `https://jkannel.34-134-248-1.sslip.io`. That host now fails the TLS handshake with
-> an `unrecognized_name` alert, because `/etc/nginx/sites-available/jkannel` — which
-> holds its certificate and server block — **is not symlinked into `sites-enabled/`**,
-> so the `default-reject` default server answers instead. The console was not down; it
-> is served by the enabled `speedamobile` vhost, and `gw1.speedamobile.com/api/v1/health`
-> returns `jkannel-backend`. `sites-available/cpaas` is likewise not enabled. Both
-> disabled files are left alone: the system nginx is shared with the CPaaS stack and is
-> not ours to re-point without Peter deciding which names should be live.
+> `https://jkannel.34-134-248-1.sslip.io`. That was a **stale document, not a fault**:
+> the sslip.io names were deliberately consolidated onto `speedamobile.com` on
+> 2026-08-15, and only the prose was left behind. Asking for the retired name now gets
+> an `unrecognized_name` TLS alert from the `default-reject` server, which is the
+> correct response — it refuses the handshake rather than presenting another host's
+> certificate.
+>
+> `deploy.sh` was never fooled: its VERIFY step defaults `BASE` to
+> `https://gw1.speedamobile.com` and checks three paths over the real public name.
+> (An earlier revision of this note claimed it only probed loopback. That was wrong.)
+> Nothing checks prose, which is why only the documents drifted.
+
+### The shared-host ingress, and the decisions taken on it (2026-09-29)
+
+One system nginx is the only way in. Every application port is bound to loopback or
+closed at the GCP firewall — all thirteen were probed from outside and all are closed.
+
+| Public name | → upstream | Owner |
+|---|---|---|
+| `app.speedamobile.com` | `:5273`, `/auth/`→`:3000`, `/msg/`→`:3100` | CPaaS console + services |
+| `iam.speedamobile.com` | `:8080` | Keycloak |
+| `dev.speedamobile.com` | `:9080` | APISIX |
+| **`gw1.speedamobile.com`** | **`:8081`** | **JKANNEL** |
+
+Decided with Peter:
+
+1. **The dead vhosts are quarantined.** `sites-available/jkannel` and
+   `sites-available/cpaas` both referenced Let's Encrypt certificates that no longer
+   exist, so symlinking either would have stopped nginx *starting* and taken down all
+   four services at once. Both were moved to `/etc/nginx/disabled/` with a README
+   explaining what they were and what reviving a name would need. Neither was enabled,
+   so nothing nginx reads changed and **no reload was performed**; `nginx -t` passed
+   before and after and all four names still answer.
+2. **CPAAS reaches JKANNEL over the public URL**, `https://gw1.speedamobile.com/api/v1`
+   — not the loopback path. One behaviour to reason about, and what CPAAS exercises is
+   what an external client gets.
+3. **`gw1` keeps its name.** The certificate is valid to 2026-11-13 and the certbot
+   timer renews cleanly (it ran successfully on 2026-09-29).
+
+Noted, not acted on: the CPaaS PM2 services bind `*:3000`, `*:3100` and `*:5273` — all
+interfaces, not loopback — so only the GCP firewall keeps them private. JKANNEL binds
+loopback-only. On a host that has been compromised once that is worth tightening, but
+it belongs to the CPaaS stack and is their decision.
 
 **Corrected 2026-09-29: the frontend container serves a static build behind nginx**
 (`nginx -g "daemon off;"`), both in production and in the local Compose stack. It no
