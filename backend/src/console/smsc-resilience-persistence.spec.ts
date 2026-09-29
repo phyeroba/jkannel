@@ -50,6 +50,25 @@ function resolve(
   existing: Record<string, unknown>,
 ): unknown {
   const text = stripCast(expression);
+  /*
+   * `CASE WHEN 'col' = ANY($39) THEN NULL ELSE COALESCE($n,col) END`
+   *
+   * The clearing form. It exists because COALESCE alone cannot distinguish
+   * "clear this field" from "field not supplied" — both are SQL NULL — so a
+   * PATCH that cleared a secret reference returned 200 and changed nothing.
+   * Resolved here rather than special-cased in the assertions, so the round-trip
+   * tests below exercise the real statement.
+   */
+  const caseWhen =
+    /^CASE\s+WHEN\s+'([a-z_]+)'\s*=\s*ANY\(\s*(\$\d+)\s*\)\s*THEN\s+NULL\s+ELSE\s+([\s\S]+?)\s+END$/i.exec(
+      text,
+    );
+  if (caseWhen) {
+    const [, column, listParam, fallback] = caseWhen;
+    const clears = resolve(listParam, params, existing);
+    if (Array.isArray(clears) && clears.includes(column)) return null;
+    return resolve(fallback, params, existing);
+  }
   const coalesce = /^COALESCE\(\s*(.+?)\s*,\s*(.+?)\s*\)$/i.exec(text);
   if (coalesce) {
     const supplied = resolve(coalesce[1], params, existing);
@@ -291,6 +310,80 @@ describe('SMSC resilience columns (migration 041) survive create and update', ()
     expect(created.connection_count).toBe(8);
     expect(created.preferred_prefixes).toEqual(['+2567']);
     expect(client.row.retry_on_auth_failure).toBe(true);
+  });
+
+  /*
+   * CLEARING A FIELD, WHICH WAS IMPOSSIBLE.
+   *
+   * `smsc.service.ts` distinguishes `null` (clear) from `undefined` (untouched)
+   * and treats an empty string as a clear, because that is what a form sends
+   * when somebody empties the box. The repository then COALESCEd everything, so
+   * both arrived as SQL NULL and the stored value always won: the PATCH returned
+   * **200 and changed nothing**.
+   *
+   * Found on 2026-09-29 on a live bind. kololo's record pointed at a secret
+   * reference the engine did not hold; clearing it through the API silently did
+   * nothing, and a regeneration would have rendered the username as an empty
+   * string — which does not fail loudly, it fails authentication, and would have
+   * looked exactly like the carrier outage already in progress. The repair had
+   * to be made in SQL.
+   *
+   * An earlier fix for the same bug on `credentialSecretRef` only reached the
+   * service layer, which is why it looked closed and was not — so both fields
+   * are pinned here.
+   */
+  describe('clearing a field', () => {
+    it.each([
+      ['usernameSecretRef', 'username_secret_ref', 'secret://kololo/mtnug'],
+      ['credentialSecretRef', 'credential_secret_ref', 'secret://carrier/old'],
+      ['addressRange', 'address_range', '25677'],
+      ['altCharset', 'alt_charset', 'UTF-8'],
+      ['sendUrl', 'send_url', 'http://old.example'],
+      ['notes', 'notes', 'stale note'],
+    ])('null clears %s', async (field, column, seeded) => {
+      const { repository } = build({ [column]: seeded });
+      const row = await repository.updateSmsc(actor, 'smsc-1', { [field]: null });
+      expect(row[column]).toBeNull();
+    });
+
+    // The controller validates the path parameter as a UUID, so these two go
+    // through a real one rather than the fake client's 'smsc-1'.
+    const UUID = '11111111-1111-4111-8111-111111111111';
+
+    it('an empty string clears too, because that is what an emptied form field sends', async () => {
+      const { repository } = build({ username_secret_ref: 'secret://kololo/mtnug' });
+      const controller = new SmscController(repository);
+      const row: any = await controller.update({ principal: actor } as any, UUID, {
+        usernameSecretRef: '',
+      });
+      expect(row.username_secret_ref).toBeNull();
+    });
+
+    it('OMITTING a field still leaves it alone — the whole point of the COALESCE', async () => {
+      // The failure mode in the other direction: if "clear" were implemented by
+      // simply dropping the COALESCE, every partial PATCH would wipe every field
+      // it did not mention.
+      const { repository } = build({
+        username_secret_ref: 'secret://kololo/mtnug',
+        notes: 'keep me',
+      });
+      const row = await repository.updateSmsc(actor, 'smsc-1', { tps: 25 });
+      expect(row.username_secret_ref).toBe('secret://kololo/mtnug');
+      expect(row.notes).toBe('keep me');
+      expect(row.tps).toBe(25);
+    });
+
+    it('an EMPTY system type is a real value, not a clear', async () => {
+      // The one exception. `system-type = ""` is a meaningful directive, and an
+      // SMPP bind without the directive at all makes bearerbox panic at startup
+      // and take every other SMSC down with it.
+      const { repository } = build({ system_type: 'VMA' });
+      const controller = new SmscController(repository);
+      const row: any = await controller.update({ principal: actor } as any, UUID, {
+        systemType: '',
+      });
+      expect(row.system_type).toBe('');
+    });
   });
 
   it('rejects an out-of-range connectionCount before it reaches the repository', () => {

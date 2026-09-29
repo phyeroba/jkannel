@@ -19,6 +19,13 @@ export interface SendRouteContext {
 export interface SendRouteDecision extends SelectionResult {
   /** How many deployed, enabled, customer-permitted routes were considered. */
   candidatesConsidered: number;
+  /**
+   * How many deployed routes the customer's bindings removed before matching.
+   * Non-zero with `smscId: null` means a matching route may exist that this
+   * customer is simply not permitted to use — a different problem from a
+   * destination nothing matches, and one that reads identically without this.
+   */
+  excludedByEntitlement: number;
   /** The health-derived candidate bind set the decision was made against. */
   availableSmscIds: string[];
   /** True when bind health was unavailable and every enabled bind was assumed up. */
@@ -147,12 +154,19 @@ export class RouteResolutionService {
     const all = await this.repository.candidateRoutesInClient(client, { deployedOnly: true });
 
     let scoped = all;
+    /**
+     * How many deployed routes this customer's bindings removed from
+     * consideration. Kept so a refusal can say WHY, see below.
+     */
+    let excludedByEntitlement = 0;
     if (ctx.customerId) {
       const bindings = await this.customerBindings(client, ctx.customerId);
-      if (bindings)
+      if (bindings) {
         scoped = all.filter(
           (route) => bindings.routeIds.has(route.id) || bindings.smscIds.has(route.targetSmscId),
         );
+        excludedByEntitlement = all.length - scoped.length;
+      }
     }
 
     const candidates = scoped
@@ -172,9 +186,36 @@ export class RouteResolutionService {
       ? (candidates.find((route) => route.id === result.routeId) ?? null)
       : null;
 
+    /*
+     * SAY WHICH "NO ROUTE" THIS IS.
+     *
+     * The selector only ever sees routes this customer is entitled to, so when
+     * entitlement removed the route that WOULD have matched, its honest answer
+     * is still "no route matched the destination". That sentence sends the
+     * reader to look at prefixes and wildcards — and the prefixes are fine.
+     *
+     * Cost a real diagnosis on 2026-09-29: a newly created route matched the
+     * destination perfectly and was refused, because the customer was bound to
+     * one SMSC and the route targeted the other. Several rounds went into the
+     * matching rules before the binding was the thing that was looked at.
+     *
+     * So when scoping removed candidates and nothing matched, the refusal names
+     * entitlement. It does not claim entitlement was the cause — the route may
+     * genuinely not match either — it states both facts and lets the reader
+     * check the cheaper one first.
+     */
+    const reason =
+      !result.smscId && excludedByEntitlement > 0
+        ? `${result.reason} — note that this customer's route bindings excluded ` +
+          `${excludedByEntitlement} of ${all.length} deployed route(s) before matching, ` +
+          `so a route that matches may exist but not be permitted here`
+        : result.reason;
+
     return {
       ...result,
+      reason,
       candidatesConsidered: candidates.length,
+      excludedByEntitlement,
       availableSmscIds: available,
       healthAssumed,
       cost: controlling?.cost ?? null,

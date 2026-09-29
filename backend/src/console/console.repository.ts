@@ -445,20 +445,62 @@ export class ConsoleRepository {
     return this.inTenant(actor, async (c) => {
       const old = (await c.query('SELECT * FROM smsc_definitions WHERE id=$1', [id])).rows[0];
       if (!old) throw new NotFoundException('SMSC not found');
+      /*
+       * WHICH COLUMNS THIS PATCH IS CLEARING, AS OPPOSED TO NOT MENTIONING.
+       *
+       * Every column below is `COALESCE(new, existing)`, which makes a partial
+       * PATCH safe — an omitted field leaves the stored value alone. But it also
+       * made clearing a field IMPOSSIBLE, because "clear this" and "not supplied"
+       * both arrive as SQL NULL and COALESCE cannot tell them apart.
+       *
+       * `smsc.service.ts` goes to real trouble over that distinction: `null`
+       * means clear, `undefined` means untouched, and an empty string means
+       * clear because that is what a form sends when somebody empties the box.
+       * Then this method threw the distinction away, so `PATCH` with
+       * `usernameSecretRef: null` returned **200 and changed nothing**.
+       *
+       * That is worse than a refusal. It cost a real diagnosis on 2026-09-29:
+       * kololo's record pointed at a secret reference the engine did not have,
+       * clearing it through the API silently did nothing, and the repair had to
+       * be made in SQL. An earlier fix for the same bug on
+       * `credentialSecretRef` only reached the service layer, which is why it
+       * looked closed and was not.
+       *
+       * So the intent travels as DATA: the caller's explicit nulls become a list
+       * of column names, and each clearable column asks whether it is in it.
+       * `system_type` is deliberately absent — an empty system type is a real,
+       * meaningful value there, not an absence.
+       */
+      const CLEARABLE: Array<[string, string]> = [
+        ['credentialSecretRef', 'credential_secret_ref'],
+        ['systemId', 'system_id'],
+        ['usernameSecretRef', 'username_secret_ref'],
+        ['addressRange', 'address_range'],
+        ['altCharset', 'alt_charset'],
+        ['sendUrl', 'send_url'],
+        ['notes', 'notes'],
+      ];
+      const clears = CLEARABLE.filter(([key]) => value[key] === null).map(([, column]) => column);
+      /** `column = NULL` when the caller asked for it, otherwise the usual COALESCE. */
+      const clearable = (column: string, param: number) =>
+        `${column}=CASE WHEN '${column}' = ANY($39::text[]) THEN NULL ` +
+        `ELSE COALESCE($${param},${column}) END`;
+
       const row = (
         await c.query(
-          // Every column is COALESCE(new, existing), so a partial PATCH only
-          // touches the fields the operator supplied.
           `UPDATE smsc_definitions SET
              name=COALESCE($2,name),host=COALESCE($3,host),port=COALESCE($4,port),
              tps=COALESCE($5,tps),enabled=COALESCE($6,enabled),
-             description=COALESCE($7,description),notes=COALESCE($8,notes),
-             credential_secret_ref=COALESCE($9,credential_secret_ref),
-             system_id=COALESCE($10,system_id),
-             username_secret_ref=COALESCE($11,username_secret_ref),
+             description=COALESCE($7,description),
+             ${clearable('notes', 8)},
+             ${clearable('credential_secret_ref', 9)},
+             ${clearable('system_id', 10)},
+             ${clearable('username_secret_ref', 11)},
              system_type=COALESCE($12,system_type),receive_port=COALESCE($13,receive_port),
-             address_range=COALESCE($14,address_range),alt_charset=COALESCE($15,alt_charset),
-             send_url=COALESCE($16,send_url),bind_mode=COALESCE($17,bind_mode),
+             ${clearable('address_range', 14)},
+             ${clearable('alt_charset', 15)},
+             ${clearable('send_url', 16)},
+             bind_mode=COALESCE($17,bind_mode),
              interface_version=COALESCE($18,interface_version),
              source_addr_ton=COALESCE($19,source_addr_ton),
              source_addr_npi=COALESCE($20,source_addr_npi),
@@ -527,6 +569,8 @@ export class ConsoleRepository {
             value.allowedPrefixes ?? null,
             value.deniedPrefixes ?? null,
             value.preferredPrefixes ?? null,
+            // $39 — the columns this PATCH is clearing, as opposed to omitting.
+            clears,
           ],
         )
       ).rows[0];

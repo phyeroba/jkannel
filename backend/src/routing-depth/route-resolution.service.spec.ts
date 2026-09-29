@@ -111,6 +111,58 @@ describe('RouteResolutionService', () => {
     expect(decision.candidatesConsidered).toBe(1);
   });
 
+  /*
+   * A refusal caused by ENTITLEMENT read exactly like a refusal caused by the
+   * destination matching nothing, because the selector only ever sees the
+   * routes the customer is permitted to use — so its honest answer was still
+   * "no route matched the destination".
+   *
+   * That sentence sends the reader to check prefixes and wildcards, and the
+   * prefixes are fine. It cost a real diagnosis on 2026-09-29: a newly created
+   * route matched the destination perfectly and was refused, because the
+   * customer was bound to one SMSC and the route targeted the other.
+   */
+  it('a refusal caused by customer bindings SAYS SO, instead of blaming the destination', async () => {
+    const client = makeClient({
+      routes: [
+        // Matches 256… perfectly, but targets the SMSC the customer is not bound to.
+        routeRow({
+          id: 'r-other',
+          name: 'Other carrier',
+          match_prefix: '256',
+          target_smsc_id: 'smsc-b',
+        }),
+      ],
+      // Bound to smsc-a only.
+      customerRoutes: [{ route_id: null, smsc_id: 'smsc-a' }],
+    });
+    const decision = await makeService().resolveInClient(client, {
+      msisdn: '256700000000',
+      customerId: 'cust-1',
+    });
+
+    expect(decision.smscId).toBeNull();
+    expect(decision.excludedByEntitlement).toBe(1);
+    expect(decision.reason).toContain('route bindings excluded');
+    expect(decision.reason).toContain('1 of 1 deployed route(s)');
+  });
+
+  it('says nothing about entitlement when entitlement excluded nothing', async () => {
+    // The other half of the contract: the extra sentence must not appear on a
+    // genuine no-match, or it becomes noise that trains people to ignore it.
+    const client = makeClient({
+      routes: [
+        routeRow({ id: 'r-ug', name: 'Uganda', match_prefix: '44', target_smsc_id: 'smsc-a' }),
+      ],
+    });
+    const decision = await makeService().resolveInClient(client, { msisdn: '256700000000' });
+
+    expect(decision.smscId).toBeNull();
+    expect(decision.excludedByEntitlement).toBe(0);
+    expect(decision.reason).not.toContain('entitlement');
+    expect(decision.reason).not.toContain('route bindings excluded');
+  });
+
   it('does not select a route that is enabled but NOT deployed', async () => {
     const client = makeClient({
       routes: [
