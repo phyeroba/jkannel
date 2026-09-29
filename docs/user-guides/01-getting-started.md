@@ -11,7 +11,9 @@ You need:
 
 - A URL for the console. On a local Docker stack that is **http://127.0.0.1:5173**
   (use `127.0.0.1`, not `localhost` — see [troubleshooting](11-troubleshooting.md)).
-  On the reference deployment it is `https://jkannel.34-134-248-1.sslip.io`.
+  On the reference deployment it is `https://gw1.speedamobile.com`. (It used to be
+  `https://jkannel.34-134-248-1.sslip.io`; that name no longer resolves to a served
+  vhost and fails the TLS handshake.)
 - A **tenant**, a **username** and a **password**. The first operator is created with
   the `provision:dev-operator` command described in the
   [repository README](../../README.md#quick-start).

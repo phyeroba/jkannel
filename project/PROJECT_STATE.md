@@ -168,9 +168,19 @@ Running on a **shared VPS beside an unrelated stack**, on remapped **loopback-on
 ports (backend 3200, frontend 5173, JKANNEL proxy 8081, Kamex admin 13000, Kamex sendsms
 13013), with a **system nginx terminating TLS** and proxying to `127.0.0.1:8081`.
 
-Console: `https://jkannel.34-134-248-1.sslip.io` · tenant `default` · username
-`operator`. **There is no email login** — the users table has `username` and no email
-column, and the login form's "Email or Username" label is misleading.
+Console: **`https://gw1.speedamobile.com`** · tenant `default` · username `operator`.
+**There is no email login** — the users table has `username` and no email column, and
+the login form's "Email or Username" label is misleading.
+
+> **Corrected 2026-09-29.** Every document here said
+> `https://jkannel.34-134-248-1.sslip.io`. That host now fails the TLS handshake with
+> an `unrecognized_name` alert, because `/etc/nginx/sites-available/jkannel` — which
+> holds its certificate and server block — **is not symlinked into `sites-enabled/`**,
+> so the `default-reject` default server answers instead. The console was not down; it
+> is served by the enabled `speedamobile` vhost, and `gw1.speedamobile.com/api/v1/health`
+> returns `jkannel-backend`. `sites-available/cpaas` is likewise not enabled. Both
+> disabled files are left alone: the system nginx is shared with the CPaaS stack and is
+> not ours to re-point without Peter deciding which names should be live.
 
 **Corrected 2026-09-29: the frontend container serves a static build behind nginx**
 (`nginx -g "daemon off;"`), both in production and in the local Compose stack. It no
