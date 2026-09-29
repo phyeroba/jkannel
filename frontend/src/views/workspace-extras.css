@@ -129,6 +129,147 @@ tr.clickable-row:hover td {
   color: var(--muted);
   margin-left: auto;
 }
+/* ---------------------------------------------------------------------------
+   THE BIND LIST
+
+   Replaces four side-by-side cards. The cards led with the engine's raw
+   connection string and put the SMSC's name in small grey text under it, which
+   is the hierarchy upside down, and one heading wrapping to two lines made the
+   whole row ragged.
+
+   A row leads with the name, carries its counters inline, and opens for detail.
+   Three states are distinguishable at a glance, which is the point:
+
+     normal    a plain row
+     alert     enabled but not up — a red rail, because it needs a human
+     off       disabled here — muted and desaturated, because it does NOT
+
+   The last one is the fix for "the only difference is a badge that says dead".
+   A bind we turned off and a bind whose carrier is refusing both report `dead`
+   from the engine, and they are opposite situations.
+   --------------------------------------------------------------------------- */
+.bind-list {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.bind-row {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.bind-row.bind-alert {
+  border-left-color: var(--danger, #dc2626);
+}
+.bind-row.bind-off {
+  /* Muted, not red. A disabled bind is a decision, not a fault. */
+  background: var(--surface-2);
+  opacity: 0.72;
+}
+.bind-row.bind-off .bind-identity strong {
+  color: var(--muted);
+}
+
+/* The whole summary is the toggle, so the hit target is the row and not a
+   12px chevron. */
+.bind-summary {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(180px, 1.4fr) auto minmax(220px, 1.6fr);
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 12px 14px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.bind-summary:hover {
+  background: var(--surface-2);
+}
+.bind-summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.bind-caret {
+  color: var(--muted);
+  font-size: 12px;
+}
+.bind-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.bind-identity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bind-state {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+/* Counters read as a row of figures, not a definition list: four numbers an
+   operator scans across binds rather than reads down one. */
+.bind-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: 13px;
+}
+.bind-figures strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.bind-detail {
+  padding: 0 14px 14px 46px;
+  border-top: 1px solid var(--border);
+}
+.bind-detail dl.dialog-grid {
+  margin: var(--sp-4) 0 0;
+}
+.bind-detail dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.bind-detail dd {
+  margin: 2px 0 0;
+}
+
+/* The tab strip sits between the engine context and the working panels, so it
+   needs the same rhythm as a panel rather than butting against one. */
+.queue-tabs {
+  margin: var(--sp-5) 0 var(--sp-4);
+}
+
+@media (max-width: 900px) {
+  /* Below this the four-column summary cannot hold its columns without
+     squeezing the name to nothing, so it stacks. */
+  .bind-summary {
+    grid-template-columns: 18px 1fr;
+    row-gap: var(--sp-3);
+  }
+  .bind-state,
+  .bind-figures {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+  .bind-detail {
+    padding-left: 14px;
+  }
+}
+
 /* The environment variables a generated configuration expects the engine to
    supply. A wrapping grid rather than a list, because these are short tokens
    and a one-per-line column wastes the panel at any real count. */

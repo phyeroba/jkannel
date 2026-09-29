@@ -6,6 +6,7 @@ import MessagePriority from '../components/MessagePriority.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
 import EventTimeline from '../components/EventTimeline.vue';
+import TabStrip from '../components/TabStrip.vue';
 import {
   PRIORITY_RESEND_CAVEAT,
   PRIORITY_UNSET,
@@ -177,6 +178,13 @@ interface BindSnapshot {
   known?: boolean;
   smscId?: string | null;
   smscName?: string | null;
+  /**
+   * The CONSOLE's enabled flag, not the engine's status. The engine reports
+   * `dead` both for a bind an operator disabled and for one whose carrier is
+   * refusing; without this the screen could not tell those apart, and showed
+   * the same red badge for a deliberate state and an incident.
+   */
+  enabled?: boolean;
 }
 interface SpoolSummary {
   queued?: number | null;
@@ -264,7 +272,22 @@ function ageFromEpoch(epoch: unknown, fallback = '—') {
 function badgeTone(status: string) {
   const value = status.toLowerCase();
   if (['online', 'running', 'delivered', 'ok', 'available', 'sent'].includes(value)) return 'good';
-  if (['connecting', 'pending', 'queued', 'degraded', 'buffered', 'accepted'].includes(value))
+  // `re-connecting` is what bearerbox reports for a bind that dropped and is
+  // retrying, and it was in none of these lists — so it fell through to the
+  // muted default and rendered as unstyled text beside properly badged
+  // siblings. Matched on a normalised form so the hyphen cannot decide this.
+  if (
+    [
+      'connecting',
+      'reconnecting',
+      'pending',
+      'queued',
+      'degraded',
+      'buffered',
+      'accepted',
+    ].includes(value.replace(/[\s_-]/g, '')) ||
+    ['connecting', 'pending', 'queued', 'degraded', 'buffered', 'accepted'].includes(value)
+  )
     return 'warn';
   if (['dead', 'failed', 'rejected', 'stopped', 'unavailable', 'error'].includes(value))
     return 'bad';
@@ -329,6 +352,79 @@ async function loadSmscOptions() {
     smscOptionsError.value = messageFrom(reason, 'SMSC connections could not be loaded.');
   }
 }
+
+/*
+ * ONE SCREEN, FOUR JOBS — SO FOUR TABS.
+ *
+ * Measured before this change: the page rendered 3,202px tall in a 1,000px
+ * viewport. Four independent working areas — bind health, the message log, the
+ * spool, and per-destination depth — were stacked, so the operator scrolled
+ * past three of them to reach the fourth, and the message log alone was 1,080px
+ * with no pager.
+ *
+ * They are tabs rather than collapsing panels because they are not four parts
+ * of one task: an operator is doing exactly one of them at a time. The engine
+ * strip stays OUTSIDE the tabs, because it is the context all four are read
+ * against.
+ *
+ * Counts sit on the tabs so the operator can see there is something in the
+ * spool without opening it — the reason a stacked layout felt informative.
+ */
+type QueueTab = 'binds' | 'log' | 'spool' | 'destinations';
+const activeTab = ref<QueueTab>('binds');
+const queueTabs = computed(() => [
+  { id: 'binds', label: 'Binds', count: binds.value.length || null },
+  { id: 'log', label: 'Message log', count: logTotal.value || null },
+  { id: 'spool', label: 'Pending spool', count: spoolTotal.value || null },
+  { id: 'destinations', label: 'By destination', count: null },
+]);
+
+/**
+ * Which binds are expanded. Collapsed by default: a bind's detail matters when
+ * you are looking INTO one, and four cards of mostly-zero counters is what made
+ * this section 519px of low-information height.
+ */
+const expandedBinds = ref<string[]>([]);
+function toggleBind(engineId: string) {
+  expandedBinds.value = expandedBinds.value.includes(engineId)
+    ? expandedBinds.value.filter((id) => id !== engineId)
+    : [...expandedBinds.value, engineId];
+}
+const allBindsExpanded = computed(
+  () => binds.value.length > 0 && expandedBinds.value.length === binds.value.length,
+);
+function toggleAllBinds() {
+  expandedBinds.value = allBindsExpanded.value
+    ? []
+    : binds.value.map((bind) => text(bind.engineId, '')).filter(Boolean);
+}
+
+/**
+ * A bind an operator disabled and a bind whose carrier is refusing BOTH report
+ * `dead`. They are opposite situations — one is expected, the other is an
+ * incident — and the console showed the same red badge for each.
+ *
+ * `enabled` comes from the console record, so the two can finally be told
+ * apart. `unhealthy` is the one that deserves attention: enabled, and not up.
+ */
+function bindEnabled(bind: BindSnapshot) {
+  return bind.enabled !== false;
+}
+function bindUnhealthy(bind: BindSnapshot) {
+  return bindEnabled(bind) && badgeTone(text(bind.status, 'unknown')) !== 'good';
+}
+/** Attention first, then healthy, then the ones we turned off. */
+const sortedBinds = computed(() =>
+  [...binds.value].sort((a, b) => {
+    const rank = (bind: BindSnapshot) => (!bindEnabled(bind) ? 2 : bindUnhealthy(bind) ? 0 : 1);
+    return (
+      rank(a) - rank(b) ||
+      text(a.smscName ?? a.name, '').localeCompare(text(b.smscName ?? b.name, ''))
+    );
+  }),
+);
+const bindsNeedingAttention = computed(() => binds.value.filter(bindUnhealthy).length);
+const bindsDisabled = computed(() => binds.value.filter((b) => !bindEnabled(b)).length);
 
 /** Tenant SMSCs first, plus any live bind the engine reports that is not in the list. */
 const bindOptions = computed<Option[]>(() => {
@@ -501,9 +597,47 @@ const statusChoices = [
   { value: 'unknown', label: 'Unknown' },
 ];
 
+/*
+ * PAGING THE MESSAGE LOG.
+ *
+ * `GET /queue-console/history` has always accepted a `cursor` and returned a
+ * `nextCursor`; this screen never sent one. So the log showed the newest
+ * `LOG_LIMIT` rows and there was no control that could reach row 101 — on a
+ * screen whose whole purpose is "find the failed traffic and resend it".
+ *
+ * The same cursor/history pattern the spool below already uses, rather than a
+ * second one: `logHistory` is the stack of cursors already visited, which is
+ * what makes a Previous button possible over a forward-only cursor.
+ */
+const logCursor = ref('');
+const logNextCursor = ref('');
+const logHistory = ref<string[]>([]);
+const logTotal = ref(0);
+const logPage = computed(() => logHistory.value.length + 1);
+
+/** Any filter change restarts paging: page 3 of the old filter means nothing. */
+function applyLogFilters() {
+  logCursor.value = '';
+  logHistory.value = [];
+  void loadLog();
+}
+function turnLogPage(direction: number) {
+  if (direction > 0) {
+    if (!logNextCursor.value) return;
+    logHistory.value = [...logHistory.value, logCursor.value];
+    logCursor.value = logNextCursor.value;
+  } else {
+    if (!logHistory.value.length) return;
+    const history = [...logHistory.value];
+    logCursor.value = history.pop() ?? '';
+    logHistory.value = history;
+  }
+  void loadLog();
+}
+
 function selectPreset(value: string) {
   logStatus.value = value;
-  void loadLog();
+  applyLogFilters();
 }
 
 interface HistoryPage {
@@ -518,6 +652,11 @@ function applyLogPage(payload: HistoryPage) {
   logRows.value = Array.isArray(payload.items)
     ? payload.items.filter((item): item is RecordValue => Boolean(item) && typeof item === 'object')
     : [];
+  logNextCursor.value =
+    payload.nextCursor === null || payload.nextCursor === undefined
+      ? ''
+      : String(payload.nextCursor);
+  logTotal.value = num(payload.total ?? logRows.value.length);
   logError.value = '';
   logState.value = 'ok';
   const visible = new Set(logRows.value.filter(isSelectable).map((row) => resendId(row)));
@@ -535,6 +674,7 @@ async function loadLog() {
   logMissing.value = false;
   const params = new URLSearchParams();
   params.set('limit', String(LOG_LIMIT));
+  if (logCursor.value) params.set('cursor', logCursor.value);
   if (logStatus.value !== 'all') params.set('status', logStatus.value);
   if (logQuery.value.trim()) params.set('query', logQuery.value.trim());
   if (logSmscFilter.value) params.set('smscId', logSmscFilter.value);
@@ -1074,19 +1214,66 @@ onMounted(() => {
       </template>
     </section>
 
+    <!--
+      TABS, BECAUSE THESE ARE FOUR JOBS AND NOT FOUR PARTS OF ONE.
+
+      Measured before this change: 3,202px of page in a 1,000px viewport. An
+      operator scrolled past three working areas to reach the fourth, and the
+      message log — the primary flow — began 1,080px down with no pager at all.
+
+      The engine strip above stays OUTSIDE the tabs: it is the context all four
+      are read against, and putting it behind a tab would mean switching tabs to
+      find out whether the numbers in the current one can be trusted at all.
+
+      Counts sit on the tabs so a filling spool is visible without opening it,
+      which is the one thing the stacked layout genuinely did better.
+    -->
+    <TabStrip
+      v-model="activeTab"
+      class="queue-tabs"
+      label="Live queue sections"
+      testid="queue-tab"
+      :tabs="queueTabs"
+    />
+
     <!-- Per-bind cards ------------------------------------------------------- -->
-    <section class="panel" data-testid="bind-panel" aria-label="SMPP binds">
+    <section
+      v-show="activeTab === 'binds'"
+      id="queue-tab-panel-binds"
+      role="tabpanel"
+      aria-labelledby="queue-tab-binds"
+      class="panel"
+      data-testid="bind-panel"
+      aria-label="SMPP binds"
+    >
       <header class="panel-header">
         <div>
           <h2>Binds</h2>
-          <p aria-live="polite">
-            {{
-              liveState === 'loading'
-                ? 'Loading binds…'
-                : `${binds.length} bind(s) reported by the engine`
-            }}
+          <!--
+            The summary leads with what needs a human. "4 binds" is not news;
+            "1 needs attention" is, and "2 disabled here" tells the operator
+            the reds they are about to see are their own doing.
+          -->
+          <p aria-live="polite" data-testid="bind-summary">
+            <template v-if="liveState === 'loading'">Loading binds…</template>
+            <template v-else-if="!binds.length">No binds reported</template>
+            <template v-else>
+              {{ binds.length }} bind{{ binds.length === 1 ? '' : 's' }}
+              <template v-if="bindsNeedingAttention"
+                >· <strong>{{ bindsNeedingAttention }} need attention</strong></template
+              >
+              <template v-if="bindsDisabled">· {{ bindsDisabled }} disabled here</template>
+            </template>
           </p>
         </div>
+        <button
+          v-if="binds.length"
+          class="secondary-button"
+          data-testid="bind-expand-all"
+          @click="toggleAllBinds"
+        >
+          {{ allBindsExpanded ? 'Collapse all' : 'Expand all' }}
+        </button>
       </header>
       <p v-if="bindNotice" class="notice" role="status" data-testid="bind-notice">
         {{ bindNotice }}
@@ -1097,73 +1284,136 @@ onMounted(() => {
       <p v-if="liveState === 'ok' && !binds.length" class="chart-empty" data-testid="binds-empty">
         The engine reports no binds. Add an SMSC connection to start delivering traffic.
       </p>
-      <div v-else class="container-grid">
-        <article
-          v-for="bind in binds"
+      <!--
+        A LIST, NOT FOUR CARDS IN A ROW.
+
+        The cards put the engine's raw connection string (`SMPP:host:4089/…`)
+        in the heading and the SMSC's actual name in small grey text beneath
+        it, which is the hierarchy upside down: nobody looks for a bind by its
+        connection string. One card's heading wrapped to two lines and made the
+        whole row ragged.
+
+        Each row now leads with the name, carries its counters inline, and
+        opens for the detail and the controls. A bind is a thing you scan a
+        list of and then look INTO one of — not four dashboards side by side.
+      -->
+      <ul v-else class="bind-list" :data-testid="'bind-list'">
+        <li
+          v-for="bind in sortedBinds"
           :key="text(bind.engineId)"
-          class="container-card"
+          class="bind-row"
+          :class="{
+            'bind-off': !bindEnabled(bind),
+            'bind-alert': bindUnhealthy(bind),
+          }"
           :data-testid="`bind-card-${text(bind.engineId)}`"
         >
-          <header>
-            <strong>{{ text(bind.name ?? bind.smscName, text(bind.engineId)) }}</strong>
-            <span
-              class="status-badge"
-              :class="badgeTone(text(bind.status, 'unknown'))"
-              :data-testid="`bind-status-${text(bind.engineId)}`"
-            >
-              {{ text(bind.status, 'unknown') }}
+          <button
+            type="button"
+            class="bind-summary"
+            :aria-expanded="expandedBinds.includes(text(bind.engineId))"
+            :data-testid="`bind-toggle-${text(bind.engineId)}`"
+            @click="toggleBind(text(bind.engineId))"
+          >
+            <span class="bind-caret" aria-hidden="true">
+              {{ expandedBinds.includes(text(bind.engineId)) ? '▾' : '▸' }}
             </span>
-          </header>
-          <p class="row-id mono">{{ text(bind.engineId) }}</p>
-          <div class="summary-strip">
-            <div class="metric">
-              <strong :data-testid="`bind-queued-${text(bind.engineId)}`">
-                {{ num(bind.queued) }}
-              </strong>
-              <small>queued on this bind</small>
+            <span class="bind-identity">
+              <strong>{{ text(bind.smscName ?? bind.name, text(bind.engineId)) }}</strong>
+              <span class="row-id mono">{{ text(bind.engineId) }}</span>
+            </span>
+            <!--
+              Two separate facts, because they answer different questions.
+              `disabled` is a state we chose; the engine status is what is
+              actually happening. Showing only the engine's `dead` for both is
+              what made a deliberately-off bind look like a broken one.
+            -->
+            <span class="bind-state">
+              <span
+                v-if="!bindEnabled(bind)"
+                class="status-badge"
+                :data-testid="`bind-disabled-${text(bind.engineId)}`"
+                >disabled here</span
+              >
+              <span
+                class="status-badge"
+                :class="badgeTone(text(bind.status, 'unknown'))"
+                :data-testid="`bind-status-${text(bind.engineId)}`"
+              >
+                {{ text(bind.status, 'unknown') }}
+              </span>
+            </span>
+            <span class="bind-figures">
+              <span :data-testid="`bind-queued-${text(bind.engineId)}`">
+                <strong>{{ num(bind.queued) }}</strong> queued
+              </span>
+              <span
+                ><strong>{{ num(bind.failed) }}</strong> failed</span
+              >
+              <span
+                ><strong>{{ num(bind.sent) }}</strong> sent</span
+              >
+              <span
+                ><strong>{{ num(bind.received) }}</strong> received</span
+              >
+            </span>
+          </button>
+
+          <div
+            v-if="expandedBinds.includes(text(bind.engineId))"
+            class="bind-detail"
+            :data-testid="`bind-detail-${text(bind.engineId)}`"
+          >
+            <dl class="dialog-grid">
+              <div class="field">
+                <dt>Engine connection</dt>
+                <dd class="mono">{{ text(bind.name, '—') }}</dd>
+              </div>
+              <div class="field">
+                <dt>Outbound rate</dt>
+                <dd>{{ (bind.outboundRate ?? []).map((rate) => num(rate)).join(' / ') || '—' }}</dd>
+              </div>
+              <div class="field">
+                <dt>Known SMSC</dt>
+                <dd>
+                  {{ bind.known === false ? 'not configured in console' : text(bind.smscName) }}
+                </dd>
+              </div>
+            </dl>
+            <p v-if="!bindEnabled(bind)" class="source-note">
+              This bind is disabled in the console, so the engine will not dial it. Its status above
+              is what the engine last saw, not a fault.
+            </p>
+            <div v-if="canManageBinds" class="detail-actions">
+              <button
+                class="secondary-button"
+                :data-testid="`bind-enable-${text(bind.engineId)}`"
+                :disabled="bindBusyId === text(bind.engineId)"
+                @click="controlBind(bind, 'enable')"
+              >
+                Enable
+              </button>
+              <button
+                class="secondary-button"
+                :data-testid="`bind-reconnect-${text(bind.engineId)}`"
+                :disabled="bindBusyId === text(bind.engineId)"
+                @click="controlBind(bind, 'reconnect')"
+              >
+                Reconnect
+              </button>
+              <button
+                class="secondary-button danger-button"
+                :data-testid="`bind-disable-${text(bind.engineId)}`"
+                :disabled="bindBusyId === text(bind.engineId)"
+                @click="controlBind(bind, 'disable')"
+              >
+                Disable this bind
+              </button>
             </div>
+            <p v-else class="source-note">Bind control requires the smsc.manage permission.</p>
           </div>
-          <dl>
-            <dt>Failed</dt>
-            <dd>{{ num(bind.failed) }}</dd>
-            <dt>Sent</dt>
-            <dd>{{ num(bind.sent) }}</dd>
-            <dt>Received</dt>
-            <dd>{{ num(bind.received) }}</dd>
-            <dt>Outbound rate</dt>
-            <dd>{{ (bind.outboundRate ?? []).map((rate) => num(rate)).join(' / ') || '—' }}</dd>
-            <dt>Known SMSC</dt>
-            <dd>{{ bind.known === false ? 'not configured in console' : text(bind.smscName) }}</dd>
-          </dl>
-          <div v-if="canManageBinds" class="detail-actions">
-            <button
-              class="secondary-button"
-              :data-testid="`bind-enable-${text(bind.engineId)}`"
-              :disabled="bindBusyId === text(bind.engineId)"
-              @click="controlBind(bind, 'enable')"
-            >
-              Enable
-            </button>
-            <button
-              class="secondary-button"
-              :data-testid="`bind-reconnect-${text(bind.engineId)}`"
-              :disabled="bindBusyId === text(bind.engineId)"
-              @click="controlBind(bind, 'reconnect')"
-            >
-              Reconnect
-            </button>
-            <button
-              class="secondary-button danger-button"
-              :data-testid="`bind-disable-${text(bind.engineId)}`"
-              :disabled="bindBusyId === text(bind.engineId)"
-              @click="controlBind(bind, 'disable')"
-            >
-              Disable this bind
-            </button>
-          </div>
-          <p v-else class="source-note">Bind control requires the smsc.manage permission.</p>
-        </article>
-      </div>
+        </li>
+      </ul>
       <p v-if="canManageBinds && binds.length" class="source-note">
         Enable / disable / reconnect act on a single SMPP bind. The engine and every other bind keep
         running. After disabling a sick bind, filter the message log below to failed and resend that
@@ -1172,7 +1422,15 @@ onMounted(() => {
     </section>
 
     <!-- Message log + resend (primary operator flow) -------------------------- -->
-    <section class="panel" data-testid="log-panel" aria-label="Message log and resend">
+    <section
+      v-show="activeTab === 'log'"
+      id="queue-tab-panel-log"
+      role="tabpanel"
+      aria-labelledby="queue-tab-log"
+      class="panel"
+      data-testid="log-panel"
+      aria-label="Message log and resend"
+    >
       <header class="panel-header">
         <div>
           <h2>Message log &amp; resend</h2>
@@ -1218,7 +1476,7 @@ onMounted(() => {
         <div class="dialog-grid">
           <label class="field">
             <span>Status</span>
-            <select v-model="logStatus" data-testid="log-status-filter" @change="loadLog">
+            <select v-model="logStatus" data-testid="log-status-filter" @change="applyLogFilters">
               <option v-for="choice in statusChoices" :key="choice.value" :value="choice.value">
                 {{ choice.label }} ({{ statusCount(choice.value) }})
               </option>
@@ -1231,12 +1489,12 @@ onMounted(() => {
               data-testid="log-search"
               type="search"
               placeholder="Sender, receiver, reference, or text"
-              @keyup.enter="loadLog"
+              @keyup.enter="applyLogFilters"
             />
           </label>
           <label class="field">
             <span>Bind</span>
-            <select v-model="logSmscFilter" data-testid="log-smsc-filter" @change="loadLog">
+            <select v-model="logSmscFilter" data-testid="log-smsc-filter" @change="applyLogFilters">
               <option value="">All binds</option>
               <option v-for="option in bindOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
@@ -1245,7 +1503,7 @@ onMounted(() => {
           </label>
         </div>
         <div class="panel-form-actions">
-          <button class="secondary-button" data-testid="log-apply" @click="loadLog">
+          <button class="secondary-button" data-testid="log-apply" @click="applyLogFilters">
             Apply filters
           </button>
         </div>
@@ -1406,6 +1664,39 @@ onMounted(() => {
           </tbody>
         </table>
       </div>
+      <!--
+        A PAGER, WHICH THIS TABLE NEVER HAD.
+
+        `GET /queue-console/history` has always accepted a `cursor` and returned
+        a `nextCursor`; this screen sent neither. So the log showed the newest
+        page and had no control that could reach the row after it — on the one
+        screen whose whole purpose is finding failed traffic and resending it.
+
+        Cursor paging, not offset: the spool below already works this way, and
+        offsets shift under a log that is still being written to.
+      -->
+      <footer class="cursor-pager" data-testid="log-pager">
+        <button
+          class="secondary-button"
+          data-testid="log-prev"
+          :disabled="!logHistory.length || logState === 'loading'"
+          @click="turnLogPage(-1)"
+        >
+          Previous
+        </button>
+        <span class="source-note">
+          Page {{ logPage }} · showing {{ visibleLogRows.length }} of
+          {{ logTotal || visibleLogRows.length }} matching
+        </span>
+        <button
+          class="secondary-button"
+          data-testid="log-next"
+          :disabled="!logNextCursor || logState === 'loading'"
+          @click="turnLogPage(1)"
+        >
+          Next
+        </button>
+      </footer>
       <p class="source-note" data-testid="log-counts-note">
         Resendable failures are the operator entry point: filter here, select the rows, then resend
         them to a healthy bind.
@@ -1418,7 +1709,15 @@ onMounted(() => {
     </section>
 
     <!-- Pending spool grid ---------------------------------------------------- -->
-    <section class="panel" data-testid="spool-panel" aria-label="Pending spool">
+    <section
+      v-show="activeTab === 'spool'"
+      id="queue-tab-panel-spool"
+      role="tabpanel"
+      aria-labelledby="queue-tab-spool"
+      class="panel"
+      data-testid="spool-panel"
+      aria-label="Pending spool"
+    >
       <header class="panel-header">
         <div>
           <h2>Pending spool</h2>
@@ -1692,7 +1991,14 @@ onMounted(() => {
       engine has: bearerbox holds one outbound queue per smsc-id and reports its
       depth, so there is nothing finer to show.
     -->
-    <section class="panel" data-testid="queue-by-destination">
+    <section
+      v-show="activeTab === 'destinations'"
+      id="queue-tab-panel-destinations"
+      role="tabpanel"
+      aria-labelledby="queue-tab-destinations"
+      class="panel"
+      data-testid="queue-by-destination"
+    >
       <header class="panel-header">
         <div>
           <h2>Queues by destination</h2>

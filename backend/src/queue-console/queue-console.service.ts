@@ -92,6 +92,16 @@ interface TenantBind {
   engineId: string;
   smscId: string;
   smscName: string;
+  /**
+   * The console's own enabled flag, which the engine's `status` does NOT imply.
+   *
+   * A bind an operator disabled and a bind whose carrier is refusing both report
+   * `dead`, so the console could not tell "we turned this off" from "this is
+   * broken" — it showed the same red badge for both, and the operator had to
+   * remember which was which. Those are opposite situations: one is expected and
+   * needs no action, the other is an incident.
+   */
+  enabled: boolean;
 }
 
 /**
@@ -139,13 +149,14 @@ export class QueueConsoleService {
   private tenantBinds(tenantId: string): Promise<TenantBind[]> {
     return this.database.tenantTransaction(tenantId, async (client) =>
       (
-        await client.query<{ id: string; engine_id: string; name: string }>(
-          'SELECT id,engine_id,name FROM smsc_definitions',
+        await client.query<{ id: string; engine_id: string; name: string; enabled: boolean }>(
+          'SELECT id,engine_id,name,enabled FROM smsc_definitions',
         )
       ).rows.map((row) => ({
         engineId: row.engine_id,
         smscId: String(row.id),
         smscName: row.name,
+        enabled: row.enabled !== false,
       })),
     );
   }
@@ -241,6 +252,10 @@ export class QueueConsoleService {
           known: true,
           smscId: owned.get(bind.engineId)!.smscId,
           smscName: owned.get(bind.engineId)!.smscName,
+          // From the CONSOLE record, not the engine. The engine reports `dead`
+          // for a bind an operator disabled and for one whose carrier is
+          // refusing, and those need opposite responses.
+          enabled: owned.get(bind.engineId)!.enabled,
         })),
       spool,
       source,

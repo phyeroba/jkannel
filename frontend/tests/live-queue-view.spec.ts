@@ -189,10 +189,132 @@ describe('Live queue console', () => {
     );
     expect(wrapper.get('[data-testid="engine-queued-out"]').text()).toBe('4');
     expect(wrapper.get('[data-testid="engine-dlr-queued"]').text()).toBe('2');
-    expect(wrapper.get('[data-testid="bind-queued-local-fake"]').text()).toBe('7');
+    // The bind rows carry their counters inline now ("7 queued"), because four
+    // cards of labelled zeros is what made this section 519px of mostly nothing.
+    expect(wrapper.get('[data-testid="bind-queued-local-fake"]').text()).toContain('7');
     expect(wrapper.get('[data-testid="bind-status-local-fake"]').text()).toContain('connecting');
     expect(wrapper.get('[data-testid="bind-status-local-fake"]').classes()).toContain('warn');
     expect(wrapper.find('[data-testid="live-source-banner"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  /*
+   * The screen was 3,202px tall in a 1,000px viewport: four independent working
+   * areas stacked, so an operator scrolled past three of them to reach the
+   * fourth, and the message log — the primary flow — started 1,080px down.
+   *
+   * These pin the two things that fixed it, because both are easy to undo by
+   * accident: only one section renders at a time, and the engine strip is NOT
+   * one of the sections.
+   */
+  it('shows one section at a time, and keeps the engine strip outside the tabs', async () => {
+    stubApi();
+    const wrapper = mount(LiveQueueView);
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="bind-panel"]').exists()).toBe(true));
+
+    const shown = (id: string) => {
+      const el = wrapper.find(`[data-testid="${id}"]`);
+      return el.exists() && !(el.element as HTMLElement).style.display.includes('none');
+    };
+
+    expect(shown('bind-panel')).toBe(true);
+    expect(shown('log-panel')).toBe(false);
+    expect(shown('spool-panel')).toBe(false);
+
+    await wrapper.get('[data-testid="queue-tab-log"]').trigger('click');
+    expect(shown('log-panel')).toBe(true);
+    expect(shown('bind-panel')).toBe(false);
+
+    // Context for every tab, so it must not be hidden behind one of them.
+    expect(wrapper.find('[data-testid="engine-strip"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  /*
+   * `GET /queue-console/history` has always accepted a cursor and returned a
+   * nextCursor; the screen sent neither, so the log showed one page and had no
+   * control that could reach the row after it.
+   */
+  it('pages the message log with the cursor the API already returned', async () => {
+    // The history page must advertise a next cursor, or there is nothing to
+    // page to — which is also why Next stays disabled on the last page.
+    const fetchMock = stubApi({
+      '/queue-console/history': { items: [], nextCursor: 4242, total: 250, counts: {} },
+    });
+    const wrapper = mount(LiveQueueView);
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="log-pager"]').exists()).toBe(true));
+
+    // Page one: nothing to go back to.
+    expect((wrapper.get('[data-testid="log-prev"]').element as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    await vi.waitFor(() =>
+      expect((wrapper.get('[data-testid="log-next"]').element as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+
+    await wrapper.get('[data-testid="log-next"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('/queue-console/history') &&
+            String(call[0]).includes('cursor='),
+        ),
+      ).toBe(true),
+    );
+    wrapper.unmount();
+  });
+
+  /*
+   * A bind an operator disabled and a bind whose carrier is refusing BOTH
+   * report `dead` from the engine. The console showed the same red badge for
+   * each, so "is this my doing or an incident?" could not be answered from the
+   * screen — which is exactly what was reported.
+   */
+  it('tells a bind we disabled apart from one that is simply down', async () => {
+    stubApi({
+      '/queue-console/live': {
+        observedAt: '2026-09-29T00:00:00.000Z',
+        engine: { smsQueuedOut: 0, smsQueuedIn: 0, dlrQueued: 0 },
+        binds: [
+          {
+            engineId: 'off-bind',
+            name: 'FAKE:1',
+            status: 'dead',
+            smscName: 'Turned Off',
+            enabled: false,
+          },
+          {
+            engineId: 'sick-bind',
+            name: 'FAKE:2',
+            status: 'dead',
+            smscName: 'Actually Down',
+            enabled: true,
+          },
+        ],
+        spool: { queued: 0, bySmsc: [] },
+        source: { status: 'ok' },
+      },
+    });
+    const wrapper = mount(LiveQueueView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="bind-card-off-bind"]').exists()).toBe(true),
+    );
+
+    // The disabled one says so, and is not dressed as a problem.
+    expect(wrapper.find('[data-testid="bind-disabled-off-bind"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="bind-card-off-bind"]').classes()).toContain('bind-off');
+    expect(wrapper.get('[data-testid="bind-card-off-bind"]').classes()).not.toContain('bind-alert');
+
+    // The one that is genuinely down is the one flagged.
+    expect(wrapper.find('[data-testid="bind-disabled-sick-bind"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="bind-card-sick-bind"]').classes()).toContain('bind-alert');
+
+    // And the headline counts only what needs a human.
+    expect(wrapper.get('[data-testid="bind-summary"]').text()).toContain('1 need attention');
+    expect(wrapper.get('[data-testid="bind-summary"]').text()).toContain('1 disabled here');
     wrapper.unmount();
   });
 
@@ -375,6 +497,14 @@ describe('Live queue console', () => {
     const fetchMock = stubApi();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const wrapper = mount(LiveQueueView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="bind-toggle-local-fake"]').exists()).toBe(true),
+    );
+    // The controls live behind the row's disclosure now. Rows are collapsed by
+    // default because a bind's detail matters when you are looking INTO one,
+    // and four expanded cards is what the section used to be.
+    expect(wrapper.find('[data-testid="bind-disable-local-fake"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="bind-toggle-local-fake"]').trigger('click');
     await vi.waitFor(() =>
       expect(wrapper.find('[data-testid="bind-disable-local-fake"]').exists()).toBe(true),
     );
