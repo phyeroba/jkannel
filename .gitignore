@@ -14,6 +14,27 @@ Thumbs.db
 .idea/
 .vscode/
 .claude/settings.local.json
+# Carrier credential drops.
+#
+# These arrive as a plain file with an SMPP system id and password in it and get
+# left wherever they landed — docs/kamdixy.txt did exactly that, inside the repo
+# and NOT ignored, which is one `git add -A` away from publishing a live carrier
+# credential to a GitHub remote.
+#
+# Ignored by NAME and by PATTERN: the name covers the file that prompted this,
+# the patterns cover the next one, which will have a different name. Credentials
+# belong in the gitignored `.env` as `SMSC_<NAME>_USERNAME` / `_PASSWORD`, and in
+# the database as a `secret://` reference — never in a file beside the code.
+docs/kamdixy.txt
+kamdixy*.txt
+*-credentials.txt
+*credentials*.txt
+*CREDENTIALS*
+*smpp-creds*
+# `*.local.*` is the convention for anything that must never leave the machine.
+*.local.md
+*.local.json
+*.local.yml
 # Local archives / snapshots (may contain secrets) — never publish
 *.zip
 *.tar

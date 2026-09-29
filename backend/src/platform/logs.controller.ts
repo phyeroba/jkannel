@@ -2,6 +2,7 @@ import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/
 import { AuthGuard } from '../security/auth.guard';
 import { PermissionsGuard, RequirePermissions } from '../security/permissions.guard';
 import { LOG_LEVELS, LOG_SORT_FIELDS, LogBufferService, LogQuery } from './log-buffer';
+import { DurableLogService } from './durable-log.service';
 
 const isoOrThrow = (value: unknown, name: string): string | undefined => {
   if (value === undefined || value === null || value === '') return undefined;
@@ -51,11 +52,14 @@ const directionOrThrow = (value: unknown) => {
 @Controller('observability/logs')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class LogsController {
-  constructor(private readonly buffer: LogBufferService) {}
+  constructor(
+    private readonly buffer: LogBufferService,
+    private readonly durable: DurableLogService,
+  ) {}
 
   @Get()
   @RequirePermissions('system.view')
-  search(@Query() q: Record<string, string> = {}) {
+  async search(@Query() q: Record<string, string> = {}) {
     const limit = q.limit === undefined ? undefined : Number(q.limit);
     if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0))
       throw new BadRequestException('limit must be a positive number');
@@ -79,14 +83,42 @@ export class LogsController {
       sort: sortOrThrow(q.sort),
       direction: directionOrThrow(q.direction),
     };
+    /*
+     * `?source=durable` reads the `log_entries` table instead of the ring
+     * buffer. Opt-in rather than the default, because the two sources answer
+     * different questions and silently switching would be worse than either:
+     *
+     *   ring buffer  every level, this process only, lost on restart
+     *   durable      warn and above, every process, survives a restart
+     *
+     * A caller looking for an info line would find nothing in the durable store
+     * and reasonably conclude it never happened. So the response states which
+     * source answered and what that source does not contain.
+     */
+    if (q.source === 'durable') {
+      const { items, matched } = await this.durable.query(filter);
+      const stats = await this.durable.stats();
+      return {
+        items,
+        matched,
+        durable: stats.durable,
+        scope: 'deployment',
+        source: 'log_entries',
+        levels: stats.levels,
+        notice: stats.durable
+          ? `Durable store: ${stats.levels.join(', ')} only, kept ${stats.retentionDays} days. ` +
+            'Info and debug are not here — query the ring buffer for those.'
+          : 'The durable log table is not present in this deployment; nothing is stored.',
+      };
+    }
     return this.buffer.query(filter);
   }
 
-  /** Buffer health only: how much is held, how much has already been lost. */
+  /** Buffer health, and the durable store's, so one call answers both. */
   @Get('stats')
   @RequirePermissions('system.view')
-  stats() {
+  async stats() {
     const { items: _items, ...rest } = this.buffer.query({ limit: 1 });
-    return rest;
+    return { ...rest, durableStore: await this.durable.stats() };
   }
 }

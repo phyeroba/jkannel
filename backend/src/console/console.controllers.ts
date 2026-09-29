@@ -1555,16 +1555,14 @@ export class ReadModelsController {
    * uses this route to verify the mirror and to handle the awkward cases.
    * `limits` is returned so the mirror can bootstrap its boundaries from the
    * server rather than hard-coding a second copy of them.
-   */
-  @Get('messages/segments') @RequirePermissions('messages.view') segmentsForQuery(
-    @Query() q: any = {},
-  ) {
-    return this.segmentPreview(q?.text, q);
-  }
-  /**
-   * POST form of {@link segmentsForQuery}. Preferred by the console: a
-   * three-segment UCS-2 body is ~200 characters of percent-encoded query string
-   * and proxies do impose URL length limits.
+   *
+   * THE GET FORM WAS REMOVED on 2026-09-29. It did the same thing through the
+   * query string, which the controller itself recommended against: a
+   * three-segment UCS-2 body is ~200 characters of percent-encoded query and
+   * proxies impose URL length limits, so the GET silently truncated exactly the
+   * messages whose segment count mattered most. Nothing called it — zero hits in
+   * gateway_request_log and none across the nginx access log — and the console
+   * has always used this POST.
    */
   @Post('messages/preview') @RequirePermissions('messages.view') previewMessage(
     @Body() b: any = {},

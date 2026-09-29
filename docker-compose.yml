@@ -415,6 +415,16 @@ services:
       # restart will not pick it up and neither will `graceful-restart`, whose
       # uptime spans the reload. Plan that with the traffic, not against it.
       CARRIER_KOLOLO_PASSWORD: ${CARRIER_KOLOLO_PASSWORD:-}
+      # The next carrier, added 2026-09-29. `secret://carrier/kamdixy-password`
+      # on the `kamdixy` SMSC record derives to this name.
+      #
+      # Putting it in `.env` alone did nothing, which is worth stating because it
+      # looked like it had worked: these services declare their variables
+      # explicitly, so compose saw no change to the rendered service definition
+      # and recreated nothing. The container reported the variable MISSING while
+      # `.env` plainly contained it. A variable reaches bearerbox only by being
+      # named in THIS block.
+      CARRIER_KAMDIXY_PASSWORD: ${CARRIER_KAMDIXY_PASSWORD:-}
     volumes:
       # A DIRECTORY, not the file — and that distinction is load-bearing.
       #

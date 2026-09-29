@@ -113,8 +113,12 @@ describe('segment preview endpoint', () => {
     expect(preview).toMatchObject({ segments: 3, declaredByUdh: true });
   });
 
-  it('answers on the GET form as well, and publishes the boundary table', () => {
-    const preview = controller.segmentsForQuery({ text: 'hello' });
+  // The GET form was removed on 2026-09-29: it took the text through the query
+  // string, where a three-segment UCS-2 body is ~200 percent-encoded characters
+  // and proxies truncate — silently breaking exactly the messages whose segment
+  // count mattered. These now exercise the POST the console has always used.
+  it('publishes the boundary table alongside the count', () => {
+    const preview = controller.previewMessage({ text: 'hello' });
     expect(preview).toMatchObject({ segments: 1, characters: 5, remaining: 155 });
     // Returned so the client-side mirror bootstraps its boundaries from the
     // server instead of hard-coding a second copy of them.
@@ -128,7 +132,7 @@ describe('segment preview endpoint', () => {
   });
 
   it('treats an absent body as an empty message rather than an error', () => {
-    expect(controller.segmentsForQuery({})).toMatchObject({
+    expect(controller.previewMessage({})).toMatchObject({
       characters: 0,
       segments: 1,
       remaining: 160,

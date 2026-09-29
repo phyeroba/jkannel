@@ -241,152 +241,21 @@ export class PluginsController {
   }
 }
 
-/**
- * DEPRECATED — superseded by `/backup-dr`.
+/*
+ * The deprecated /backups controller was REMOVED on 2026-09-29.
  *
- * Both controllers read and write `backup_records`, so they do not disagree
- * about the data; they are two doors into one room, and the console goes
- * through the other one. Two implementations of the same resource is the
- * problem regardless: a fix applied to one is absent from the other, and which
- * door a caller used decides whether they got it.
+ * It was kept behind RFC 8594 Deprecation/Sunset headers on the stated
+ * condition that it would go once traffic proved nobody called it. That
+ * condition was checked rather than assumed: zero hits in gateway_request_log
+ * for /backups and /messages/segments, no audit row from its restore or verify,
+ * and no match across 699 lines of nginx access log. The console has always
+ * used /backup-dr.
  *
- * NOT DELETED, because that is a breaking change for a client this repository
- * cannot see. `/backups` is a published surface with published semantics; an
- * external integration may be calling it right now, and removing it would fail
- * their backups silently at whatever hour their cron runs.
- *
- * So it is marked instead: every response carries `Deprecation` and `Sunset`
- * (RFC 8594) and a `Link` to the replacement, which is how a machine client
- * finds out before its integration breaks rather than after. Delete it once the
- * gateway request log shows nothing but the console calling it — which is a
- * measurable condition, not a date somebody guesses.
+ * Deleting it removes a real hazard, not just a duplicate: its restore wrote
+ * over the LIVE database, where /backup-dr restores into an isolated verify
+ * database. Its POST already refused, because it recorded a row-count manifest
+ * as a completed backup with no dump and no artifact.
  */
-const BACKUPS_SUNSET = 'Wed, 31 Dec 2026 23:59:59 GMT';
-
-@Controller('backups')
-@UseGuards(AuthGuard, PermissionsGuard)
-export class BackupsController {
-  constructor(
-    private readonly repository: PlatformConsoleRepository,
-    private readonly exporter?: ExportService,
-  ) {}
-
-  /**
-   * Marks a response deprecated.
-   *
-   * Applied to the read path here rather than to every handler: a caller
-   * listing backups is a caller who will notice, and the write paths delegate
-   * to the same repository the replacement uses.
-   */
-  private deprecate(res: any) {
-    if (!res?.setHeader) return;
-    res.setHeader('Deprecation', 'true');
-    res.setHeader('Sunset', BACKUPS_SUNSET);
-    res.setHeader('Link', '</api/v1/backup-dr>; rel="successor-version"');
-  }
-
-  @Get() @RequirePermissions('system.view') async list(
-    @Req() r: Request,
-    @Query() q: any = {},
-    @Res({ passthrough: true }) res?: any,
-  ) {
-    this.deprecate(res);
-    const page = await this.repository.listBackups(actor(r), q);
-    return {
-      ...page,
-      deprecation: {
-        successor: '/api/v1/backup-dr',
-        sunset: BACKUPS_SUNSET,
-        note: 'This path is superseded by /backup-dr, which the console uses. Both read the same records.',
-      },
-    };
-  }
-  @Get('export.csv') @RequirePermissions('system.view') exportCsv(
-    @Req() r: Request,
-    @Query() q: any = {},
-    @Res() res?: any,
-  ) {
-    this.deprecate(res);
-    return this.export(r, 'csv', q, res);
-  }
-  @Get('export.pdf') @RequirePermissions('system.view') exportPdf(
-    @Req() r: Request,
-    @Query() q: any = {},
-    @Res() res?: any,
-  ) {
-    return this.export(r, 'pdf', q, res);
-  }
-  private async export(r: Request, format: 'csv' | 'pdf', q: any, res: any) {
-    const page = await this.repository.listBackups(actor(r), { ...q, limit: q.limit ?? 500 });
-    await streamExport(
-      this.exporter!,
-      res,
-      format,
-      page,
-      [
-        { key: 'label', header: 'Label', weight: 2 },
-        { key: 'kind', header: 'Kind' },
-        { key: 'status', header: 'Status' },
-        { key: 'size_bytes', header: 'Rows/size' },
-        { key: 'checksum', header: 'Checksum', weight: 2 },
-        { key: 'started_at', header: 'Started', weight: 2 },
-        { key: 'completed_at', header: 'Completed', weight: 2 },
-      ],
-      'Backups',
-      requester(r),
-    );
-  }
-  /**
-   * REFUSES, and says where to go.
-   *
-   * This used to call `PlatformConsoleRepository.createBackup`, which writes a
-   * row-count manifest: it counts the rows in every table, checksums that
-   * count, and inserts a `backup_records` row with `status = 'completed'`,
-   * `encrypted = true`, a `catalog://` location and the row total in a column
-   * named `size_bytes`. No pg_dump runs. No artifact is written. Nothing is
-   * encrypted, because there is nothing to encrypt.
-   *
-   * The repository's own docstring says it "catalogs and tracks it honestly
-   * rather than claiming to have dumped bytes", and that intention did not
-   * survive contact with the schema — the row it writes is indistinguishable in
-   * the register from one produced by a real pg_dump, and the register puts a
-   * Restore button next to it. Believing you hold a backup you do not hold is
-   * the worst outcome a backup system has.
-   *
-   * Found by taking one: `POST /backups` returned 201 `completed` with a
-   * checksum and a size, and the row landed with an EMPTY `artifact_path` and
-   * no file anywhere on disk. The two July artifacts sitting beside it in the
-   * same directory were real.
-   *
-   * The comment above about write paths delegating to the same repository as
-   * the replacement was simply wrong, and is the reason this sat here through a
-   * deprecation. Reads still work — the records are shared and a caller
-   * listing them is a caller who will see the Deprecation header.
-   */
-  @Post() @RequirePermissions('system.manage') create(@Req() _r: Request, @Body() _b: any = {}) {
-    throw new BadRequestException(
-      'This deprecated path does not take a backup. It recorded a row-count manifest and ' +
-        'marked it completed, with no dump, no artifact and nothing encrypted — a record ' +
-        'indistinguishable from a real backup, next to a Restore button. Use POST ' +
-        '/api/v1/backup-dr, which runs pg_dump, encrypts the artifact with ' +
-        'BACKUP_ENCRYPTION_KEY, replicates it offsite when a destination is configured, and ' +
-        'fails loudly when it cannot.',
-    );
-  }
-  @Post(':id/verify') @RequirePermissions('system.manage') verify(
-    @Req() r: Request,
-    @Param('id') id: string,
-  ) {
-    return this.repository.verifyBackup(actor(r), uuid(id, 'id'));
-  }
-  @Post(':id/restore') @RequirePermissions('system.manage') restore(
-    @Req() r: Request,
-    @Param('id') id: string,
-    @Body() b: any,
-  ) {
-    return this.repository.restoreBackup(actor(r), uuid(id, 'id'), text(b?.reason, 'reason'));
-  }
-}
 
 @Controller('docker')
 @UseGuards(AuthGuard, PermissionsGuard)

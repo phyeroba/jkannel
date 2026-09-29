@@ -7,19 +7,15 @@ import { PlatformConsoleRepository } from './platform-console.repository';
 import { RuntimeContainersService } from './runtime-containers.service';
 import {
   ApiGatewayController,
-  BackupsController,
   PluginsController,
   RuntimeContainersController,
 } from './platform.controllers';
 
 @Module({
   imports: [AuthModule, EngineModule],
-  controllers: [
-    ApiGatewayController,
-    PluginsController,
-    BackupsController,
-    RuntimeContainersController,
-  ],
+  // BackupsController was removed on 2026-09-29; /backup-dr is the only backup
+  // surface now. See the note in platform.controllers.ts for the evidence.
+  controllers: [ApiGatewayController, PluginsController, RuntimeContainersController],
   providers: [DatabaseService, PlatformConsoleRepository, RuntimeContainersService, ExportService],
 })
 export class PlatformConsoleModule {}

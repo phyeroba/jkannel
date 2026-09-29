@@ -110,10 +110,41 @@ export class JsonLogger implements LoggerService {
     } catch {
       // A logger that throws is worse than a lost buffer entry.
     }
+    // Then the durable sink, if one has registered. Wrapped separately from the
+    // buffer above so a fault in either cannot cost the other, and swallowed
+    // because a logger that can throw surfaces as an unrelated 500 in whatever
+    // code happened to be logging.
+    if (durableSink) {
+      try {
+        durableSink(entry);
+      } catch {
+        /* never let storage break logging */
+      }
+    }
     const output = JSON.stringify(entry);
     if (entry.level === 'error') console.error(output);
     else console.log(output);
   }
+}
+
+/**
+ * The durable store registers itself here at boot.
+ *
+ * A function rather than an injected dependency because JsonLogger is
+ * constructed before Nest's injector exists — it IS the logger Nest boots with
+ * — so it cannot depend on a provider. The indirection also keeps `platform`
+ * free of a database import at module load.
+ */
+type DurableSink = (entry: LogEntry) => void;
+let durableSink: DurableSink | undefined;
+
+export function registerDurableSink(sink: DurableSink): void {
+  durableSink = sink;
+}
+
+/** Test helper: forget the registered sink. */
+export function clearDurableSink(): void {
+  durableSink = undefined;
 }
 
 let shared: JsonLogger | undefined;
