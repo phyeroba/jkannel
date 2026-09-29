@@ -195,7 +195,9 @@ function describeMatch(route: RecordValue): string {
   // "prefix" would misdescribe it — `25677*|25678*` is four prefixes, and
   // `*1234` is not a prefix at all.
   if (route.matchPrefix)
-    parts.push(type === 'wildcard' ? `matches ${route.matchPrefix}` : `prefix ${route.matchPrefix}`);
+    parts.push(
+      type === 'wildcard' ? `matches ${route.matchPrefix}` : `prefix ${route.matchPrefix}`,
+    );
   if (route.countryCode) parts.push(`country +${route.countryCode}`);
   if (route.operator) parts.push(`operator ${route.operator}`);
   if (route.destinationPrefix) parts.push(`destination ${route.destinationPrefix}`);
@@ -908,130 +910,148 @@ onMounted(() => {
       wide
       @close="closeForm"
     >
-      <label class="filter-select filter-search">
-        <span>Name</span>
-        <input v-model="draftName" data-testid="route-name" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Priority (lower wins)</span>
-        <input v-model.number="draftPriority" data-testid="route-priority" type="number" min="0" />
-      </label>
-      <label class="filter-select">
-        <span>Enabled</span>
-        <select v-model="draftEnabled" data-testid="route-enabled">
-          <option :value="true">Yes</option>
-          <option :value="false">No</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Route type</span>
-        <select v-model="draftType" data-testid="route-type">
-          <option v-for="type in ROUTE_TYPES" :key="type" :value="type">{{ type }}</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Selection strategy</span>
-        <select v-model="draftStrategy" data-testid="route-strategy">
-          <option v-for="strategy in STRATEGIES" :key="strategy" :value="strategy">
-            {{ strategy }}
-          </option>
-        </select>
-      </label>
+      <!-- The fields sit in the design system's field grid. Without it they were
+           24 `filter-select` labels in a row-wrapping flex, which is a FILTER
+           bar's layout: labels inline with their controls, wrapping wherever
+           they happened to run out of width. In a filter bar that is fine; in a
+           form the eye pairs a label with the control to its right and gets the
+           wrong one. -->
+      <div class="dialog-grid">
+        <label class="filter-select filter-search">
+          <span>Name</span>
+          <input v-model="draftName" data-testid="route-name" type="text" />
+        </label>
+        <label class="filter-select">
+          <span>Priority (lower wins)</span>
+          <input
+            v-model.number="draftPriority"
+            data-testid="route-priority"
+            type="number"
+            min="0"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Enabled</span>
+          <select v-model="draftEnabled" data-testid="route-enabled">
+            <option :value="true">Yes</option>
+            <option :value="false">No</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Route type</span>
+          <select v-model="draftType" data-testid="route-type">
+            <option v-for="type in ROUTE_TYPES" :key="type" :value="type">{{ type }}</option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Selection strategy</span>
+          <select v-model="draftStrategy" data-testid="route-strategy">
+            <option v-for="strategy in STRATEGIES" :key="strategy" :value="strategy">
+              {{ strategy }}
+            </option>
+          </select>
+        </label>
 
-      <label v-if="draftType === 'prefix'" class="filter-select">
-        <span>Match prefix</span>
-        <input
-          v-model="draftMatchPrefix"
-          data-testid="route-match-prefix"
-          type="text"
-          placeholder="25677"
-        />
-      </label>
-      <!-- The wildcard pattern shares `matchPrefix` with the prefix type but is
+        <label v-if="draftType === 'prefix'" class="filter-select">
+          <span>Match prefix</span>
+          <input
+            v-model="draftMatchPrefix"
+            data-testid="route-match-prefix"
+            type="text"
+            placeholder="25677"
+          />
+        </label>
+        <!-- The wildcard pattern shares `matchPrefix` with the prefix type but is
            a different thing to write, so it gets its own field: the grammar is
            spelled out, the pattern is described back in words as it is typed,
            and an invalid one is named rather than saved to match nothing. -->
-      <label v-if="draftType === 'wildcard'" class="filter-select">
-        <span>Match pattern</span>
-        <input
-          v-model="draftMatchPrefix"
-          data-testid="route-match-wildcard"
-          type="text"
-          placeholder="25677*|25678*|25676*|25679*"
-        />
-        <small>
-          <span class="mono">*</span> any characters ·
-          <span class="mono">#</span> one digit ·
-          <span class="mono">$</span> one letter ·
-          <span class="mono">|</span> or
-        </small>
-        <small v-if="wildcardProblem" class="wildcard-problem" data-testid="route-wildcard-problem">
-          {{ wildcardProblem }}
-        </small>
-        <small v-else-if="draftMatchPrefix.trim()" data-testid="route-wildcard-reading">
-          Matches {{ wildcardReading }}.
-        </small>
-      </label>
-      <label v-if="draftType === 'country'" class="filter-select">
-        <span>Country code</span>
-        <input
-          v-model="draftCountryCode"
-          data-testid="route-country"
-          type="text"
-          placeholder="256"
-        />
-      </label>
-      <label v-if="draftType === 'operator'" class="filter-select">
-        <span>Operator</span>
-        <input
-          v-model="draftOperator"
-          data-testid="route-operator"
-          type="text"
-          placeholder="MTN-UG"
-        />
-      </label>
-      <label class="filter-select">
-        <span>Destination prefix (legacy match)</span>
-        <input
-          v-model="draftDestinationPrefix"
-          data-testid="route-destination-prefix"
-          type="text"
-        />
-      </label>
-      <label class="filter-select">
-        <span>Sender match</span>
-        <input v-model="draftSender" data-testid="route-sender" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Cost per message</span>
-        <input v-model="draftCost" data-testid="route-cost" type="number" min="0" step="0.0001" />
-      </label>
-      <label class="filter-select">
-        <span>Primary target SMSC</span>
-        <select v-model="draftTarget" data-testid="route-target">
-          <option value="" disabled>Select an SMSC</option>
-          <option v-for="option in smscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Fallback SMSC</span>
-        <select v-model="draftFallback" data-testid="route-fallback">
-          <option value="">None</option>
-          <option v-for="option in smscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Window start (HH:MM)</span>
-        <input v-model="draftWindowStart" data-testid="route-window-start" type="time" />
-      </label>
-      <label class="filter-select">
-        <span>Window end (HH:MM)</span>
-        <input v-model="draftWindowEnd" data-testid="route-window-end" type="time" />
-      </label>
+        <!-- Spans the grid: the grammar legend and the plain-English reading
+           underneath are prose, and prose is unreadable in a 280px track. -->
+        <label v-if="draftType === 'wildcard'" class="filter-select dialog-span">
+          <span>Match pattern</span>
+          <input
+            v-model="draftMatchPrefix"
+            data-testid="route-match-wildcard"
+            type="text"
+            placeholder="25677*|25678*|25676*|25679*"
+          />
+          <small>
+            <span class="mono">*</span> any characters · <span class="mono">#</span> one digit ·
+            <span class="mono">$</span> one letter · <span class="mono">|</span> or
+          </small>
+          <small
+            v-if="wildcardProblem"
+            class="wildcard-problem"
+            data-testid="route-wildcard-problem"
+          >
+            {{ wildcardProblem }}
+          </small>
+          <small v-else-if="draftMatchPrefix.trim()" data-testid="route-wildcard-reading">
+            Matches {{ wildcardReading }}.
+          </small>
+        </label>
+        <label v-if="draftType === 'country'" class="filter-select">
+          <span>Country code</span>
+          <input
+            v-model="draftCountryCode"
+            data-testid="route-country"
+            type="text"
+            placeholder="256"
+          />
+        </label>
+        <label v-if="draftType === 'operator'" class="filter-select">
+          <span>Operator</span>
+          <input
+            v-model="draftOperator"
+            data-testid="route-operator"
+            type="text"
+            placeholder="MTN-UG"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Destination prefix (legacy match)</span>
+          <input
+            v-model="draftDestinationPrefix"
+            data-testid="route-destination-prefix"
+            type="text"
+          />
+        </label>
+        <label class="filter-select">
+          <span>Sender match</span>
+          <input v-model="draftSender" data-testid="route-sender" type="text" />
+        </label>
+        <label class="filter-select">
+          <span>Cost per message</span>
+          <input v-model="draftCost" data-testid="route-cost" type="number" min="0" step="0.0001" />
+        </label>
+        <label class="filter-select">
+          <span>Primary target SMSC</span>
+          <select v-model="draftTarget" data-testid="route-target">
+            <option value="" disabled>Select an SMSC</option>
+            <option v-for="option in smscOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Fallback SMSC</span>
+          <select v-model="draftFallback" data-testid="route-fallback">
+            <option value="">None</option>
+            <option v-for="option in smscOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-select">
+          <span>Window start (HH:MM)</span>
+          <input v-model="draftWindowStart" data-testid="route-window-start" type="time" />
+        </label>
+        <label class="filter-select">
+          <span>Window end (HH:MM)</span>
+          <input v-model="draftWindowEnd" data-testid="route-window-end" type="time" />
+        </label>
+      </div>
+
       <fieldset class="role-checkboxes" data-testid="route-days">
         <legend>Active days (none = every day)</legend>
         <label
@@ -1123,10 +1143,12 @@ onMounted(() => {
         </button>
       </div>
 
-      <label class="filter-select filter-search">
-        <span>Change reason (audited)</span>
-        <input v-model="draftReason" data-testid="route-reason" type="text" />
-      </label>
+      <div class="dialog-grid">
+        <label class="filter-select filter-search dialog-span">
+          <span>Change reason (audited)</span>
+          <input v-model="draftReason" data-testid="route-reason" type="text" />
+        </label>
+      </div>
       <p v-if="formError" class="form-error" role="alert" data-testid="route-form-error">
         {{ formError }}
       </p>

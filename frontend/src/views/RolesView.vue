@@ -473,25 +473,31 @@ onMounted(() => {
           rename, so the name field is disabled — its description and permission set stay fully
           editable.
         </p>
-        <label class="filter-select filter-search">
-          <span>Name</span>
-          <input
-            v-model="formName"
-            data-testid="role-name"
-            type="text"
-            placeholder="noc-operator"
-            :disabled="editingIsSystem"
-          />
-        </label>
-        <label class="filter-select filter-search">
-          <span>Description</span>
-          <input
-            v-model="formDescription"
-            data-testid="role-description"
-            type="text"
-            placeholder="What this role is for"
-          />
-        </label>
+        <!-- The two identity fields share the design system's field grid. Loose
+             in the dialog body they were full-width flex rows whose labels sat
+             inline, so "Name" and "Description" read as one continuous band
+             rather than as two fields. -->
+        <div class="dialog-grid">
+          <label class="filter-select filter-search">
+            <span>Name</span>
+            <input
+              v-model="formName"
+              data-testid="role-name"
+              type="text"
+              placeholder="noc-operator"
+              :disabled="editingIsSystem"
+            />
+          </label>
+          <label class="filter-select filter-search">
+            <span>Description</span>
+            <input
+              v-model="formDescription"
+              data-testid="role-description"
+              type="text"
+              placeholder="What this role is for"
+            />
+          </label>
+        </div>
 
         <h4>Permissions</h4>
         <p class="source-note">

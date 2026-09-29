@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-29 (three dialogs that laid their fields out like a filter bar)
+
+Found by `scripts/dialog-audit.mjs` on the first full audit run since the local stack
+was restored. Eleven dialogs were opened and measured; these three had **no field
+grid at all**, so their labels and controls had no layout relationship to each other.
+
+- **`/routing-advanced` → New route** (24 fields). Every field was a `filter-select`
+  label in a row-wrapping flex — a *filter bar's* layout. In a filter bar that is
+  correct; in a form the eye pairs a label with the control to its right and gets the
+  wrong one. The field run now sits in `.dialog-grid`; the active-days fieldset and the
+  weighted-targets table stay full width as siblings of it, and the wildcard field takes
+  `.dialog-span` because its grammar legend and plain-English reading are prose.
+- **`/roles` → New role** (25 inputs). Name and Description were loose in the dialog
+  body as full-width flex rows with inline labels, so they read as one continuous band
+  rather than two fields. Both now share a `.dialog-grid`. The permission checkbox
+  fieldsets were never the problem and are unchanged.
+- **`/api-gateway` → Create API client** (5 inputs). A bare `<label>` with a loose text
+  node — the one field shape the design system does not style, and the only dialog whose
+  label did not sit above its control.
+
+All eleven dialogs now pass. 704 frontend tests and `vue-tsc` both green; all 50 routes
+still render.
+
+Also: **`scripts/layout-audit.mjs` no longer reports refresh toolbars as defects.** Its
+inline-label rule grouped controls by `section, .panel`, which matched
+`<section class="toolbar panel grid-toolbar">`, so three correct toolbars were flagged.
+A toolbar is *supposed* to run its labels inline — its controls are independent switches
+over the view, not fields of one record. Confirmed by screenshot before the tool was
+changed. The exclusion is deliberately narrow (`.toolbar, .grid-toolbar, .filters,
+.log-refresh`), so the Log Explorer's real search form (`.log-filters`, which wraps a
+`.dialog-grid`) is still audited.
+
+Prettier normalised prose wrapping in the two touched views, which had drifted from the
+project's own formatting rule.
+
 ## 2026-08-05 (close the verified gaps: RBAC, alert lifecycle, message depth, deployment hardening — `d58a3d2`)
 
 A follow-up pass against the open and partial items in

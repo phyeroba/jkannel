@@ -4994,10 +4994,15 @@ onUnmounted(() => {
       testid="api-client-form"
       @close="showApiClientForm = false"
     >
-      <label>
-        Name
-        <input v-model="apiClientName" data-testid="api-client-name" />
-      </label>
+      <!-- A bare `<label>` with a loose text node is the one field shape the
+           design system does not style, so this dialog was the only one whose
+           label did not sit above its control. -->
+      <div class="dialog-grid">
+        <label class="filter-select filter-search dialog-span">
+          <span>Name</span>
+          <input v-model="apiClientName" data-testid="api-client-name" />
+        </label>
+      </div>
       <ScopePicker v-model="apiClientScopes" />
       <template #footer>
         <button class="secondary-button" @click="showApiClientForm = false">Cancel</button>
@@ -5145,9 +5150,9 @@ onUnmounted(() => {
         governs the whole record belongs.
       -->
       <p class="source-note">
-        A customer is who traffic is attributed to — for quotas, rate limits and
-        per-customer routing. Creating one does not grant API access on its own; an API
-        client under API Gateway is what carries credentials.
+        A customer is who traffic is attributed to — for quotas, rate limits and per-customer
+        routing. Creating one does not grant API access on its own; an API client under API Gateway
+        is what carries credentials.
       </p>
 
       <fieldset class="dialog-group">
@@ -5155,7 +5160,11 @@ onUnmounted(() => {
         <div class="dialog-grid">
           <label class="field">
             <span>Name</span>
-            <input v-model="custName" data-testid="customer-name" placeholder="Stanbic Bank Uganda" />
+            <input
+              v-model="custName"
+              data-testid="customer-name"
+              placeholder="Stanbic Bank Uganda"
+            />
             <small>The name shown on every screen and export.</small>
           </label>
           <label class="field">
@@ -6032,9 +6041,9 @@ onUnmounted(() => {
         how and when.
       -->
       <p class="source-note">
-        Sent through the engine on the connection you pick — this is a real submission,
-        not a simulation. The recipient's number is masked in the message log afterwards
-        unless you hold the reveal permission.
+        Sent through the engine on the connection you pick — this is a real submission, not a
+        simulation. The recipient's number is masked in the message log afterwards unless you hold
+        the reveal permission.
       </p>
 
       <fieldset class="dialog-group">
@@ -6048,15 +6057,17 @@ onUnmounted(() => {
                 {{ option.label }}
               </option>
             </select>
-            <small>Which carrier link carries it. A bound link delivers; an unbound one queues.</small>
+            <small
+              >Which carrier link carries it. A bound link delivers; an unbound one queues.</small
+            >
           </label>
           <label class="field">
             <span>Sender ID</span>
             <input v-model="sendSender" data-testid="send-sender" placeholder="8888" />
             <small>
-              What the recipient sees as the sender. It must be one the carrier has
-              registered for you — an unregistered sender id is silently dropped rather
-              than rejected, so the message looks sent and never arrives.
+              What the recipient sees as the sender. It must be one the carrier has registered for
+              you — an unregistered sender id is silently dropped rather than rejected, so the
+              message looks sent and never arrives.
             </small>
           </label>
           <label class="field">

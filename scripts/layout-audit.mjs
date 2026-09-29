@@ -119,6 +119,21 @@ const measure = () =>
         if (['hidden', 'checkbox', 'radio', 'submit', 'button'].includes(control.type)) continue;
         const field = control.closest('label, .field');
         if (!field || !labelText(field)) continue;
+        /*
+         * A TOOLBAR IS NOT A FORM.
+         *
+         * A refresh bar ("Live updates [On] Every [5s] Rank by [depth]") or a
+         * filter bar is SUPPOSED to run its labels inline. Those controls are
+         * independent switches over the view, not fields of one record, and
+         * each caption names the control immediately to its right — there is
+         * no second field for the eye to pair it with by mistake.
+         *
+         * Without this the audit reported three correct toolbars as defects,
+         * which is the failure the header warns about: a tool that talks the
+         * next person out of a layout that was already right. The rule below
+         * is about FORMS.
+         */
+        if (control.closest('.toolbar, .grid-toolbar, .filters, .log-refresh')) continue;
         const panel = control.closest('fieldset, form, section, .panel, .card') ?? document.body;
         if (!byPanel.has(panel)) byPanel.set(panel, []);
         byPanel.get(panel).push({ control, field });
