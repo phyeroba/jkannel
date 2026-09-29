@@ -626,12 +626,7 @@ export class MessageSendService {
       // Release the key this attempt claimed — but NOT when the error IS the
       // duplicate refusal, because that key belongs to the earlier submission
       // and deleting it would let the very next retry through.
-      if (
-        this.dedupe &&
-        dedupeClaimed &&
-        dedupeSubject &&
-        !(error instanceof ConflictException)
-      ) {
+      if (this.dedupe && dedupeClaimed && dedupeSubject && !(error instanceof ConflictException)) {
         const subject = dedupeSubject;
         const window = dedupeWindow;
         await this.database

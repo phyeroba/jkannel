@@ -44,7 +44,10 @@ export class PiiRevealService {
         'A reason is required to reveal subscriber data. It is recorded against every row you ' +
           'then read, and is what makes the access defensible afterwards.',
       );
-    const minutes = Math.min(Math.max(Math.floor(input.minutes ?? DEFAULT_MINUTES), 1), MAX_MINUTES);
+    const minutes = Math.min(
+      Math.max(Math.floor(input.minutes ?? DEFAULT_MINUTES), 1),
+      MAX_MINUTES,
+    );
 
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const { rows } = await client.query<Record<string, unknown>>(

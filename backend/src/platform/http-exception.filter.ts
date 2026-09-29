@@ -132,7 +132,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (status < 500) return;
     const where = `${request.method ?? '?'} ${request.url ?? '?'}`;
     const context = `${where} correlation=${request.correlationId ?? 'none'}`;
-    if (exception instanceof Error) this.logger.error(`${context}: ${exception.message}`, exception.stack);
+    if (exception instanceof Error)
+      this.logger.error(`${context}: ${exception.message}`, exception.stack);
     // A thrown non-Error has no stack to give. Serialise what there is rather
     // than logging "[object Object]", which is the same dead end one step later.
     else this.logger.error(`${context}: ${safeString(exception)}`);

@@ -28,7 +28,9 @@ function harness(pageRows: unknown[] = [], total = '0') {
 
 const actor = { tenantId: 'tenant-1', userId: 'user-1' };
 const pageQuery = (statements: Array<{ sql: string; params: unknown[] }>) =>
-  statements.find((entry) => entry.sql.includes('FROM operational_events') && !entry.sql.includes('count(*)'))!;
+  statements.find(
+    (entry) => entry.sql.includes('FROM operational_events') && !entry.sql.includes('count(*)'),
+  )!;
 const countQuery = (statements: Array<{ sql: string; params: unknown[] }>) =>
   statements.find((entry) => entry.sql.includes('count(*)'))!;
 

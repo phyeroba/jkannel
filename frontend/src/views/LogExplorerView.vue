@@ -517,7 +517,12 @@ onMounted(() => {
           </label>
           <label class="field">
             <span>User ID</span>
-            <input v-model="userId" data-testid="log-user" type="search" @keyup.enter="searchFromStart" />
+            <input
+              v-model="userId"
+              data-testid="log-user"
+              type="search"
+              @keyup.enter="searchFromStart"
+            />
           </label>
           <label class="field">
             <span>Minimum level</span>
@@ -656,35 +661,119 @@ onMounted(() => {
                 Correlation is an opaque id.
               -->
               <tr>
-                <th scope="col" :aria-sort="sortField === 'time' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-time" @click="toggleSort('time')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'time'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-time"
+                    @click="toggleSort('time')"
+                  >
                     Time{{ sortIndicator('time') }}
                   </button>
                 </th>
-                <th scope="col" :aria-sort="sortField === 'level' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-level" @click="toggleSort('level')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'level'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-level"
+                    @click="toggleSort('level')"
+                  >
                     Level{{ sortIndicator('level') }}
                   </button>
                 </th>
-                <th scope="col" :aria-sort="sortField === 'component' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-component" @click="toggleSort('component')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'component'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-component"
+                    @click="toggleSort('component')"
+                  >
                     Component{{ sortIndicator('component') }}
                   </button>
                 </th>
                 <th scope="col">Object</th>
                 <th scope="col">Message</th>
-                <th scope="col" :aria-sort="sortField === 'route' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-route" @click="toggleSort('route')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'route'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-route"
+                    @click="toggleSort('route')"
+                  >
                     Route{{ sortIndicator('route') }}
                   </button>
                 </th>
-                <th scope="col" :aria-sort="sortField === 'status' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-status" @click="toggleSort('status')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'status'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-status"
+                    @click="toggleSort('status')"
+                  >
                     Status{{ sortIndicator('status') }}
                   </button>
                 </th>
-                <th scope="col" :aria-sort="sortField === 'duration' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
-                  <button type="button" class="th-sort" data-testid="log-sort-duration" @click="toggleSort('duration')">
+                <th
+                  scope="col"
+                  :aria-sort="
+                    sortField === 'duration'
+                      ? sortDirection === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  "
+                >
+                  <button
+                    type="button"
+                    class="th-sort"
+                    data-testid="log-sort-duration"
+                    @click="toggleSort('duration')"
+                  >
                     Duration{{ sortIndicator('duration') }}
                   </button>
                 </th>

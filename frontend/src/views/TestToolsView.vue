@@ -880,12 +880,7 @@ onMounted(() => {
           -->
           <label class="field">
             <span>Sender ID</span>
-            <input
-              v-model="sendFrom"
-              type="text"
-              data-testid="test-sms-from"
-              placeholder="8888"
-            />
+            <input v-model="sendFrom" type="text" data-testid="test-sms-from" placeholder="8888" />
           </label>
           <label class="field">
             <span>Pin to connection</span>

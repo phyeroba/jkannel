@@ -41,7 +41,12 @@ describe('a wildcard route', () => {
   });
 
   it('loses to a more specific pattern', () => {
-    const broad = route({ id: 'broad', name: 'catch-all', matchPrefix: '*', targetSmscId: 'default' });
+    const broad = route({
+      id: 'broad',
+      name: 'catch-all',
+      matchPrefix: '*',
+      targetSmscId: 'default',
+    });
     const narrow = route({
       id: 'narrow',
       name: 'MTN',
@@ -114,7 +119,9 @@ describe('the sender constraint, now matched as a wildcard', () => {
 
   it('constrains a wildcard destination route too', () => {
     const rule = route({ matchPrefix: '25677*', sender: 'URA*', targetSmscId: 'ura-mtn' });
-    expect(selectRoute([rule], { msisdn: '256772000118', sender: 'URASMS' }).smscId).toBe('ura-mtn');
+    expect(selectRoute([rule], { msisdn: '256772000118', sender: 'URASMS' }).smscId).toBe(
+      'ura-mtn',
+    );
     expect(selectRoute([rule], { msisdn: '256772000118', sender: 'MTNADS' }).smscId).toBeNull();
   });
 });

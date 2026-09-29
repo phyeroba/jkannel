@@ -48,24 +48,36 @@
 - [x] S3-compatible offsite backup destination; container resource limits; opt-in `tls` profile.
 - [x] Correlation IDs in log lines via `AsyncLocalStorage`, `x-correlation-id` header, and `GET /observability/logs` over an in-memory ring buffer.
 
+## Completed 2026-09-29 (local development restored, full audit run, three dialog fixes)
+
+- [x] Bring the local Compose stack back up on the existing database — 52 migrations, 101 tables, identical to production. Ten containers, `engine-kamex` profile, laptop override's loopback ports.
+- [x] Establish that dev, `origin/main` and production are all on the same commit with clean trees, and that production's images were built from it.
+- [x] Run all sixteen audits. Eleven clean, including 622 CSS selectors matching the kit with 0 divergences and 0 of 352 API operations without a console surface.
+- [x] Give the three dialogs that had no field grid one (`/routing-advanced` New route, `/roles` New role, `/api-gateway` Create API client).
+- [x] Stop `layout-audit.mjs` reporting refresh toolbars as defects — a toolbar is supposed to run its labels inline.
+- [x] `/mo-routing`: make rule and inbound-message rows open their sheets, so it is no longer the one register where clicking a row does nothing.
+- [x] Bring the whole repository back to Prettier compliance — 13 frontend and 24 backend files had drifted from the project's own formatting rule.
+- [x] Re-count `PROJECT_STATE.md` against the code; every figure in it had fallen ~130 commits behind, and it still claimed the frontend runs the Vite dev server.
+
 ## Active
 
 Ordered detail, with rationale, is in
 [`../progress/next-actions.md`](../progress/next-actions.md).
 
-**Finish the console catch-up** — Roles admin, Alert Lifecycle, Log Explorer and message date filters have landed; two loose ends remain
+**Console catch-up — DONE.** Verified in code on 2026-09-29, not assumed.
 
-- [ ] **Delete the stale in-page note on the Alerts workspace** — it still denies the resolve/assign/suppress endpoints that now exist on the Alert Lifecycle screen.
-- [ ] Make the Log Explorer display its `durable: false` / `scope: process` limits prominently, so nobody mistakes a 1000-line in-memory buffer for a log store.
+- [x] **Delete the stale in-page note on the Alerts workspace** — gone; `AlertResponseView.vue` now states that `POST /alerts/:id/suppress` exists and ships on the Alert Lifecycle screen.
+- [x] Make the Log Explorer display its `durable: false` / `scope: process` limits prominently — the caveat sits above the results, and the buffer panel repeats scope and durability.
 
 **Fix what still misleads**
 
-- [ ] Encrypt notification-channel secrets at rest, redact them on read, and replace the static `x-jkannel-signature` with an HMAC. *Now the most serious remaining security defect.*
-- [ ] Surface `requiredSecrets` in the configuration UI (the backend returns it; the frontend drops it).
-- [ ] Expose `credentialSecretRef` / `systemId` / bind mode / TON / NPI in the SMSC form — API-only today, and the reason the bind probe falls back to TCP.
-- [ ] Reconcile the message export cap: `exportLimits()` advertises 5000, `list()` clamps to 500.
+- [ ] Encrypt notification-channel secrets at rest, redact them on read, and replace the static `x-jkannel-signature` with an HMAC. *Still the most serious remaining security defect — re-confirmed open at `49cf542`: the secret is sent verbatim as the header in both `notification-delivery.service.ts` and `mo-delivery.service.ts`.*
+- [ ] Surface `requiredSecrets` in the configuration UI (the backend returns it; the frontend drops it). *Re-confirmed open — no frontend reference to `requiredSecrets` exists.*
+- [x] Expose `credentialSecretRef` / `systemId` / bind mode / TON / NPI in the SMSC form. The configurability audit now reports **all 38 settable fields have a control**, including `sourceAddrTon` / `sourceAddrNpi` / `destAddrTon` / `destAddrNpi`.
+- [x] Reconcile the message export cap. `exportLimits()` returns `maxLimit` from `SQLBOX_EXPORT_MAX_ROWS` (default 5000) with a 500 default page, and both exports use it; the remaining 500 is the **grid** page cap, which is deliberate.
 - [ ] Route the raw `console.warn` callers (notification readiness, customer rate limit) through the structured logger so their warnings are queryable.
-- [ ] Surface `POST /auth/api-keys` in the console, and either retire or clearly relabel the API Gateway client registry, which authenticates nothing.
+- [ ] Surface `POST /auth/api-keys` in the console, and either retire or clearly relabel the API Gateway client registry, which authenticates nothing. *Re-confirmed open — the controller exists at `auth/api-keys` with no `.vue` calling it, which is why the CPAAS-SMSONE key had to be issued over HTTP.*
+- [ ] Remove the 5 superseded routes the endpoint-coverage audit names: `GET`/`POST /backups`, `POST /backups/{id}/restore`, `POST /backups/{id}/verify` (all replaced by `/backup-dr`, which is what the console calls and which restores into an isolated verify database) and `GET /messages/segments` (the console uses the `POST /messages/preview` form the controller itself recommends). All five are live and reachable; deleting them is a breaking API change, so it needs a decision rather than a tidy-up.
 
 **Complete the remaining partials**
 

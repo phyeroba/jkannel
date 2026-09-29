@@ -245,7 +245,12 @@ describe('ConfigurationDeploymentService', () => {
     const status = (boxes: number) =>
       response(
         200,
-        ['Box connections:', ...Array.from({ length: boxes }, (_, i) => `    smsbox:b${i}`), '', 'SMSC connections:'].join('\n'),
+        [
+          'Box connections:',
+          ...Array.from({ length: boxes }, (_, i) => `    smsbox:b${i}`),
+          '',
+          'SMSC connections:',
+        ].join('\n'),
       );
     let call = 0;
     global.fetch = jest.fn(async (input: any) => {

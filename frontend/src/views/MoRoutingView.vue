@@ -1280,10 +1280,19 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
+            <!-- Opening the row opens the rule's Destinations sheet, which is
+                 what every other register on the console does. Before this the
+                 sheet was reachable only from the button in the actions cell,
+                 so this was the one register where clicking a row did nothing
+                 and nothing on screen said why. -->
             <tr
               v-for="(rule, index) in rules"
               :key="text(rule.id)"
+              class="selectable"
+              tabindex="0"
               :data-testid="`mo-rule-${text(rule.id)}`"
+              @click="openRuleDetail(text(rule.id, ''))"
+              @keydown.enter="openRuleDetail(text(rule.id, ''))"
             >
               <td class="mono">{{ rulesInEvaluationOrder ? ruleOffset + index + 1 : '·' }}</td>
               <td>
@@ -1301,7 +1310,7 @@ onMounted(() => {
               <td>
                 {{ rule.continue_after_match ? 'continues to later rules' : 'stops evaluation' }}
               </td>
-              <td class="row-actions">
+              <td class="row-actions" @click.stop>
                 <button
                   class="secondary-button"
                   :data-testid="`mo-rule-open-${text(rule.id)}`"
@@ -1667,8 +1676,7 @@ onMounted(() => {
           v-if="openMessage_"
           class="json-block"
           :data-testid="`mo-message-detail-${openMessageId}`"
-          >{{ JSON.stringify(openMessage_, null, 2) }}</pre
-        >
+          >{{ JSON.stringify(openMessage_, null, 2) }}</pre>
         <p v-else class="source-note">Reading the message…</p>
       </div>
     </DetailDrawer>
@@ -1770,7 +1778,13 @@ onMounted(() => {
           </thead>
           <tbody>
             <template v-for="message in messages" :key="text(message.id)">
-              <tr :data-testid="`mo-message-${text(message.id)}`">
+              <tr
+                class="selectable"
+                tabindex="0"
+                :data-testid="`mo-message-${text(message.id)}`"
+                @click="openMessage(text(message.id, ''))"
+                @keydown.enter="openMessage(text(message.id, ''))"
+              >
                 <td>{{ text(message.received_at) }}</td>
                 <td class="mono">{{ text(message.sender) }}</td>
                 <td class="mono">{{ text(message.receiver) }}</td>
@@ -1782,7 +1796,7 @@ onMounted(() => {
                   }}</span>
                 </td>
                 <td class="mono">{{ text(message.fanout_count, '0') }}</td>
-                <td class="row-actions">
+                <td class="row-actions" @click.stop>
                   <button
                     class="secondary-button"
                     type="button"

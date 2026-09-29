@@ -148,9 +148,7 @@ export class MtDedupeService {
 
   /** Deletes lapsed keys. Safe to run at any cadence, or never. */
   async sweepInClient(client: PoolClient): Promise<number> {
-    const { rowCount } = await client.query(
-      'DELETE FROM mt_dedupe_keys WHERE expires_at <= now()',
-    );
+    const { rowCount } = await client.query('DELETE FROM mt_dedupe_keys WHERE expires_at <= now()');
     return rowCount ?? 0;
   }
 }

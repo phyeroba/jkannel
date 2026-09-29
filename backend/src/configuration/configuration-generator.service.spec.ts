@@ -68,7 +68,9 @@ describe('ConfigurationGeneratorService', () => {
         },
       ],
     };
-    expect(service.validate(broken)).toContainEqual(expect.stringContaining('requires a system id'));
+    expect(service.validate(broken)).toContainEqual(
+      expect.stringContaining('requires a system id'),
+    );
   });
 
   it('accepts either spelling of the username, because they render one directive', () => {
@@ -156,7 +158,10 @@ describe('ConfigurationGeneratorService', () => {
     // Only SMPP. The HTTP renderer supplies its own default and `fake` has no
     // bind at all, so demanding it there would reject valid configurations.
     expect(
-      service.validate({ ...model, smsc: [{ id: 'f', type: 'fake' as const, port: 10000, enabled: true }] }),
+      service.validate({
+        ...model,
+        smsc: [{ id: 'f', type: 'fake' as const, port: 10000, enabled: true }],
+      }),
     ).toEqual([]);
   });
 

@@ -57,7 +57,10 @@ export class ServiceHealthService {
       this.probeSmsbox(),
     ]);
 
-    const raw: Record<string, { state: ServiceState; observation: ServiceReading['observation']; detail: string }> = {
+    const raw: Record<
+      string,
+      { state: ServiceState; observation: ServiceReading['observation']; detail: string }
+    > = {
       bearerbox: engine,
       smsbox,
       sqlbox: spool,
@@ -135,9 +138,7 @@ export class ServiceHealthService {
   private async engineUptimeSeconds(): Promise<number | null> {
     try {
       if (!this.engines) return null;
-      const adapter = this.engines.forImplementation(
-        process.env.ENGINE_IMPLEMENTATION ?? 'kamex',
-      );
+      const adapter = this.engines.forImplementation(process.env.ENGINE_IMPLEMENTATION ?? 'kamex');
       const snapshot = await (adapter as any)?.queueSnapshot?.();
       const value = snapshot?.engine?.uptimeSeconds;
       return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
@@ -150,8 +151,7 @@ export class ServiceHealthService {
 
   /** bearerbox, via the unauthenticated `/health` the adapter already uses. */
   private async probeEngine() {
-    if (!this.engines)
-      return unobserved('No engine adapter is registered in this deployment.');
+    if (!this.engines) return unobserved('No engine adapter is registered in this deployment.');
     try {
       const health = await this.engines
         .forImplementation(process.env.ENGINE_IMPLEMENTATION ?? 'kamex')
@@ -230,7 +230,10 @@ export class ServiceHealthService {
       const result = await this.health.check();
       const find = (name: string) =>
         (result.dependencies ?? []).find((entry: any) => entry.name === name);
-      return { database: fromDependency(find('postgres'), 'database'), cache: fromDependency(find('redis'), 'cache') };
+      return {
+        database: fromDependency(find('postgres'), 'database'),
+        cache: fromDependency(find('redis'), 'cache'),
+      };
     } catch (error) {
       const detail = `The dependency check itself failed: ${(error as Error).message}`;
       return { database: probed('critical', detail), cache: probed('unknown', detail) };
@@ -319,7 +322,10 @@ export class ServiceHealthService {
           return { state: 'unknown' as ServiceState, observation: 'derived' as const, detail };
       }
     } catch (error) {
-      return probed('unknown', `Telemetry freshness could not be read: ${(error as Error).message}`);
+      return probed(
+        'unknown',
+        `Telemetry freshness could not be read: ${(error as Error).message}`,
+      );
     }
   }
 
@@ -422,19 +428,31 @@ export class ServiceHealthService {
   }
 }
 
-const probed = (state: ServiceState, detail: string) =>
-  ({ state, observation: 'probed' as const, detail });
+const probed = (state: ServiceState, detail: string) => ({
+  state,
+  observation: 'probed' as const,
+  detail,
+});
 
-const unobserved = (detail: string) =>
-  ({ state: 'unknown' as ServiceState, observation: 'unobserved' as const, detail });
+const unobserved = (detail: string) => ({
+  state: 'unknown' as ServiceState,
+  observation: 'unobserved' as const,
+  detail,
+});
 
 function fromDependency(entry: any, label: string) {
   if (!entry) return unobserved(`The health check did not report on ${label}.`);
   if (entry.status === 'ok')
-    return probed('healthy', entry.detail ? String(entry.detail) : `${label} answered in ${entry.durationMs}ms.`);
+    return probed(
+      'healthy',
+      entry.detail ? String(entry.detail) : `${label} answered in ${entry.durationMs}ms.`,
+    );
   if (entry.status === 'skipped')
     return unobserved(`Not checked: ${entry.detail ?? 'the dependency is not configured.'}`);
   // A non-required dependency failing is a degradation, not an outage — losing
   // the cache costs sessions and rate limiting, not message delivery.
-  return probed(entry.required ? 'critical' : 'degraded', String(entry.detail ?? `${label} is not answering.`));
+  return probed(
+    entry.required ? 'critical' : 'degraded',
+    String(entry.detail ?? `${label} is not answering.`),
+  );
 }

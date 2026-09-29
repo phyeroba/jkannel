@@ -53,7 +53,10 @@ const CATEGORY_OF: Record<string, AlertCategory> = {
  */
 const METRIC_CATEGORIES: Array<[RegExp, AlertCategory]> = [
   [/^(smsc\.bind\.up|engine\.up|engine\.binds)/, 'Availability'],
-  [/^(smsc\.queued|smsc\.throughput|engine\.sms\.queued|engine\.dlr\.queued|engine\.store)/, 'Capacity'],
+  [
+    /^(smsc\.queued|smsc\.throughput|engine\.sms\.queued|engine\.dlr\.queued|engine\.store)/,
+    'Capacity',
+  ],
   [/^smsc\.failed/, 'Delivery quality'],
   [/^smsc\.(sent|received)/, 'Traffic anomaly'],
 ];
@@ -89,8 +92,7 @@ export interface AlertRow {
 }
 
 function first(...values: unknown[]): string | null {
-  for (const value of values)
-    if (typeof value === 'string' && value.trim()) return value;
+  for (const value of values) if (typeof value === 'string' && value.trim()) return value;
   return null;
 }
 

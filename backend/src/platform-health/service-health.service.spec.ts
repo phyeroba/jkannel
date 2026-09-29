@@ -16,7 +16,9 @@ const okHealth = {
 };
 
 const okDatabase = {
-  query: async () => ({ rows: [{ overdue: '0', dead: '0', running: '2', oldest_overdue_seconds: null }] }),
+  query: async () => ({
+    rows: [{ overdue: '0', dead: '0', running: '2', oldest_overdue_seconds: null }],
+  }),
 };
 
 const okEngines = {
@@ -31,7 +33,9 @@ const okEngines = {
   //
   // A fixture that invents a value the real collaborator never emits is worse
   // than no test: it makes a wrong implementation look verified.
-  forImplementation: () => ({ health: async () => ({ engine: 'healthy', transport: 'reachable' }) }),
+  forImplementation: () => ({
+    health: async () => ({ engine: 'healthy', transport: 'reachable' }),
+  }),
 };
 const okSqlbox = {
   probe: async () => ({ available: true, evidence: 'tables present' }),
@@ -120,7 +124,12 @@ describe('the job worker probe', () => {
     // A thousand jobs scheduled for tomorrow is not a problem. The query only
     // counts rows whose next_attempt_at has already passed.
     const entry = find(
-      await withJobs({ overdue: '0', dead: '0', running: '40', oldest_overdue_seconds: null }).board(),
+      await withJobs({
+        overdue: '0',
+        dead: '0',
+        running: '40',
+        oldest_overdue_seconds: null,
+      }).board(),
       'job-worker',
     );
     expect(entry.state).toBe('healthy');
@@ -129,13 +138,23 @@ describe('the job worker probe', () => {
 
   it('escalates with the age of the oldest overdue job', async () => {
     const behind = find(
-      await withJobs({ overdue: '3', dead: '0', running: '0', oldest_overdue_seconds: '300' }).board(),
+      await withJobs({
+        overdue: '3',
+        dead: '0',
+        running: '0',
+        oldest_overdue_seconds: '300',
+      }).board(),
       'job-worker',
     );
     expect(behind.state).toBe('degraded');
 
     const stopped = find(
-      await withJobs({ overdue: '3', dead: '0', running: '0', oldest_overdue_seconds: '3600' }).board(),
+      await withJobs({
+        overdue: '3',
+        dead: '0',
+        running: '0',
+        oldest_overdue_seconds: '3600',
+      }).board(),
       'job-worker',
     );
     expect(stopped.state).toBe('critical');
@@ -144,7 +163,12 @@ describe('the job worker probe', () => {
 
   it('treats dead-lettered jobs as a degradation needing a decision', async () => {
     const entry = find(
-      await withJobs({ overdue: '0', dead: '4', running: '0', oldest_overdue_seconds: null }).board(),
+      await withJobs({
+        overdue: '0',
+        dead: '4',
+        running: '0',
+        oldest_overdue_seconds: null,
+      }).board(),
       'job-worker',
     );
     expect(entry.state).toBe('degraded');
@@ -155,7 +179,13 @@ describe('the job worker probe', () => {
     // Counted inside `running` this looks like healthy work in progress, which
     // is how a wedged queue stays invisible.
     const entry = find(
-      await withJobs({ overdue: '0', dead: '0', running: '4', stuck: '2', oldest_overdue_seconds: null }).board(),
+      await withJobs({
+        overdue: '0',
+        dead: '0',
+        running: '4',
+        stuck: '2',
+        oldest_overdue_seconds: null,
+      }).board(),
       'job-worker',
     );
     expect(entry.state).toBe('degraded');
@@ -165,7 +195,13 @@ describe('the job worker probe', () => {
 
   it('reports the stuck job ahead of an overdue backlog it probably caused', async () => {
     const entry = find(
-      await withJobs({ overdue: '9', dead: '0', running: '1', stuck: '1', oldest_overdue_seconds: '3600' }).board(),
+      await withJobs({
+        overdue: '9',
+        dead: '0',
+        running: '1',
+        stuck: '1',
+        oldest_overdue_seconds: '3600',
+      }).board(),
       'job-worker',
     );
     // The more specific finding wins: "a worker died" explains the backlog,
@@ -200,7 +236,9 @@ describe('the bearerbox probe speaks the adapter’s actual vocabulary', () => {
     // 'reachable'. The board then told operators to start with bearerbox while
     // the poller was reading it every 18 seconds.
     const entry = find(
-      await build({ engines: engineReturning({ engine: 'healthy', transport: 'reachable' }) }).board(),
+      await build({
+        engines: engineReturning({ engine: 'healthy', transport: 'reachable' }),
+      }).board(),
       'bearerbox',
     );
     expect(entry.state).toBe('healthy');
@@ -208,7 +246,9 @@ describe('the bearerbox probe speaks the adapter’s actual vocabulary', () => {
 
   it('is critical only when the transport is genuinely unreachable', async () => {
     const entry = find(
-      await build({ engines: engineReturning({ engine: 'unknown', transport: 'unreachable' }) }).board(),
+      await build({
+        engines: engineReturning({ engine: 'unknown', transport: 'unreachable' }),
+      }).board(),
       'bearerbox',
     );
     expect(entry.state).toBe('critical');
@@ -218,7 +258,9 @@ describe('the bearerbox probe speaks the adapter’s actual vocabulary', () => {
   it('degrades on a reachable engine that reports itself degraded', async () => {
     // 503 from the engine: running, but typically with no carrier bind up.
     const entry = find(
-      await build({ engines: engineReturning({ engine: 'degraded', transport: 'reachable' }) }).board(),
+      await build({
+        engines: engineReturning({ engine: 'degraded', transport: 'reachable' }),
+      }).board(),
       'bearerbox',
     );
     expect(entry.state).toBe('degraded');
@@ -228,7 +270,9 @@ describe('the bearerbox probe speaks the adapter’s actual vocabulary', () => {
     // If the adapter's vocabulary ever grows, the board must admit it cannot
     // judge rather than inventing an outage.
     const entry = find(
-      await build({ engines: engineReturning({ engine: 'healthy', transport: 'something-new' }) }).board(),
+      await build({
+        engines: engineReturning({ engine: 'healthy', transport: 'something-new' }),
+      }).board(),
       'bearerbox',
     );
     expect(entry.state).toBe('unknown');
@@ -312,7 +356,9 @@ describe('dependency attribution on the assembled board', () => {
         }),
       },
       engines: {
-        forImplementation: () => ({ health: async () => ({ engine: 'unhealthy', transport: 'unreachable' }) }),
+        forImplementation: () => ({
+          health: async () => ({ engine: 'unhealthy', transport: 'unreachable' }),
+        }),
       },
     }).board();
 

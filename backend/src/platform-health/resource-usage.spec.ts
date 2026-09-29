@@ -112,9 +112,9 @@ describe('cpuPercentBetween', () => {
 
 describe('describePressure', () => {
   it('names the single resource worth acting on', () => {
-    expect(describePressure(snapshot({ memory: { usedBytes: 9, limitBytes: 10, percent: 90 } }))).toContain(
-      'Memory at 90%',
-    );
+    expect(
+      describePressure(snapshot({ memory: { usedBytes: 9, limitBytes: 10, percent: 90 } })),
+    ).toContain('Memory at 90%');
     expect(
       describePressure(
         snapshot({

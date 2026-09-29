@@ -54,9 +54,9 @@ describe('soft delete on the shared grid reader', () => {
     // `FROM users JOIN ...` has no alias; "join" is not one, and treating it as
     // one produces `join.deleted_at IS NULL`, which is a syntax error at the
     // worst possible time.
-    expect(repository().liveOnly('FROM users JOIN user_roles ON user_roles.user_id = users.id')).toBe(
-      'users.deleted_at IS NULL',
-    );
+    expect(
+      repository().liveOnly('FROM users JOIN user_roles ON user_roles.user_id = users.id'),
+    ).toBe('users.deleted_at IS NULL');
     expect(repository().liveOnly('FROM users WHERE x')).toBe('users.deleted_at IS NULL');
     expect(repository().liveOnly('FROM users LEFT JOIN roles ON true')).toBe(
       'users.deleted_at IS NULL',

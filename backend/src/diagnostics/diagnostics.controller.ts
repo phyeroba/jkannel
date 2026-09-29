@@ -84,13 +84,15 @@ export class DiagnosticsController {
     if (!foreignId) throw new BadRequestException('foreignId is required');
     const destination = String(body?.destination ?? '').trim();
     if (!destination) throw new BadRequestException('destination is required');
-    const smscId = body?.smscId === undefined || body?.smscId === null || body?.smscId === ''
-      ? null
-      : String(body.smscId).trim();
+    const smscId =
+      body?.smscId === undefined || body?.smscId === null || body?.smscId === ''
+        ? null
+        : String(body.smscId).trim();
     if (smscId && !UUID.test(smscId)) throw new BadRequestException('smscId must be a UUID');
-    const reason = body?.reason === undefined || body?.reason === null
-      ? undefined
-      : String(body.reason).slice(0, 500);
+    const reason =
+      body?.reason === undefined || body?.reason === null
+        ? undefined
+        : String(body.reason).slice(0, 500);
     return this.tools.tagTestSend(actor(r), { foreignId, smscId, destination, reason });
   }
 

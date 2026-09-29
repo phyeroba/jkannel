@@ -7,7 +7,9 @@ import { PiiRevealService } from './pii-reveal.service';
  */
 class FakeClient {
   readonly statements: { sql: string; params: unknown[] }[] = [];
-  constructor(private readonly responder: (sql: string) => any = () => ({ rows: [], rowCount: 0 })) {}
+  constructor(
+    private readonly responder: (sql: string) => any = () => ({ rows: [], rowCount: 0 }),
+  ) {}
   query(sql: string, params: unknown[] = []) {
     this.statements.push({ sql, params });
     return Promise.resolve(this.responder(sql));
@@ -36,7 +38,9 @@ describe('PiiRevealService.grant', () => {
   it('refuses a grant with no usable reason', async () => {
     const client = new FakeClient();
     const service = new PiiRevealService(database(client) as any);
-    await expect(service.grant(ACTOR, { reason: '  ' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.grant(ACTOR, { reason: '  ' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
     await expect(service.grant(ACTOR, { reason: 'x' })).rejects.toBeInstanceOf(BadRequestException);
     // Nothing reached the database: a rejected request must not leave a grant.
     expect(client.statements).toHaveLength(0);
@@ -110,9 +114,9 @@ describe('PiiRevealService.resolve', () => {
 
   it('refuses a caller without the permission', async () => {
     const service = new PiiRevealService(database(new FakeClient()) as any);
-    await expect(
-      service.resolve(ACTOR, new Set(['messages.view']), true),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.resolve(ACTOR, new Set(['messages.view']), true)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 
   it('refuses a caller who holds the permission but has no live window', async () => {

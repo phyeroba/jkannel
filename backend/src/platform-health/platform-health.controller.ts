@@ -46,9 +46,7 @@ export class PlatformHealthController {
   async nodes() {
     const snapshot = await this.resources.snapshot();
     return {
-      items: [
-        { name: 'jkannel-backend', role: 'API and console backend', ...snapshot },
-      ],
+      items: [{ name: 'jkannel-backend', role: 'API and console backend', ...snapshot }],
       // Stated at the top level too, so a caller reading only the envelope
       // cannot mistake one row for a complete inventory.
       inventoryComplete: false,

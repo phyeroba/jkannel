@@ -459,10 +459,9 @@ export class MoInboundService {
   async redispatch(actor: Actor, moMessageId: string) {
     return this.database.tenantTransaction(actor.tenantId, async (client) => {
       const message = (
-        await client.query<MoMessageRow>(
-          `SELECT ${MESSAGE_COLUMNS} FROM mo_messages WHERE id=$1`,
-          [moMessageId],
-        )
+        await client.query<MoMessageRow>(`SELECT ${MESSAGE_COLUMNS} FROM mo_messages WHERE id=$1`, [
+          moMessageId,
+        ])
       ).rows[0];
       if (!message) throw new NotFoundException('Inbound message not found');
 

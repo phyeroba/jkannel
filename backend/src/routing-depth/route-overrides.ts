@@ -120,7 +120,10 @@ export function applyRouteRule(
  * Null and not an empty string: "the rule changed nothing" and "the rule
  * changed something we could not describe" must not render the same.
  */
-export function describeOverrides(overrides: OverrideSet, ruleName = 'a routing rule'): string | null {
+export function describeOverrides(
+  overrides: OverrideSet,
+  ruleName = 'a routing rule',
+): string | null {
   const parts: string[] = [];
   if (overrides.sender)
     parts.push(`sender ${overrides.sender.from ?? '(none)'} → ${overrides.sender.to}`);

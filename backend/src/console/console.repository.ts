@@ -245,9 +245,10 @@ export class ConsoleRepository {
    * throws rather than one that quietly returns the wrong rows.
    */
   private liveOnly(from: string): string {
-    const match = /\bfrom\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?/i.exec(
-      from,
-    );
+    const match =
+      /\bfrom\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?/i.exec(
+        from,
+      );
     if (!match) return '';
     const [, table, rawAlias] = match;
     if (!ConsoleRepository.SOFT_DELETED.has(table.toLowerCase())) return '';
@@ -1196,9 +1197,9 @@ export class ConsoleRepository {
         // NULL when the user has never signed in since auditing began, which
         // the console renders as "never seen" rather than as a date.
         select:
-          "SELECT u.id,u.username,u.status,u.created_at,u.updated_at," +
+          'SELECT u.id,u.username,u.status,u.created_at,u.updated_at,' +
           "(SELECT COALESCE(array_agg(r.name),'{}') FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id) roles," +
-          "(SELECT max(a.created_at) FROM audit_log a " +
+          '(SELECT max(a.created_at) FROM audit_log a ' +
           "  WHERE a.actor_id = u.id::text AND a.action = 'login.succeeded') AS last_seen_at",
         from: 'FROM users u',
       },

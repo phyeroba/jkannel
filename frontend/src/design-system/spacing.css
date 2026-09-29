@@ -13,11 +13,11 @@
   --sp-12: 38px;
 
   /* Radii */
-  --r-xs: 6px;    /* environment chip */
-  --r-sm: 7px;    /* nav item, metric icon */
-  --r-md: 8px;    /* buttons, inputs */
-  --r-lg: 10px;   /* cards, panels, topbar */
-  --r-xl: 14px;   /* dialogs, auth cards */
+  --r-xs: 6px; /* environment chip */
+  --r-sm: 7px; /* nav item, metric icon */
+  --r-md: 8px; /* buttons, inputs */
+  --r-lg: 10px; /* cards, panels, topbar */
+  --r-xl: 14px; /* dialogs, auth cards */
   --r-pill: 999px;
 
   /* Grid + inset */
@@ -37,8 +37,14 @@
 
 /* DocFlow-parallel aliases: same concepts, JKANNEL values. Use either name. */
 :root {
-  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
 
   --radius-xs: var(--r-xs);
   --radius-sm: var(--r-sm);

@@ -66,14 +66,17 @@ describe('MiniChart x axis', () => {
      * the case that was reported.
      */
     for (const count of [7, 12, 13, 24, 25, 37, 48, 72, 73, 145]) {
-      const marks = axisFor(sixHours.slice(0, 1).concat(Array.from({ length: count - 1 }, (_, i) => `${i}:00`)));
+      const marks = axisFor(
+        sixHours.slice(0, 1).concat(Array.from({ length: count - 1 }, (_, i) => `${i}:00`)),
+      );
       const spacing = gaps(marks);
       const widest = Math.max(...spacing);
       // Half the regular spacing is the threshold: below it two labels read as
       // one smudge. The old code produced ratios as bad as 1/7 here.
-      expect(Math.min(...spacing), `count=${count} spacing=${spacing.join(',')}`).toBeGreaterThanOrEqual(
-        widest / 2,
-      );
+      expect(
+        Math.min(...spacing),
+        `count=${count} spacing=${spacing.join(',')}`,
+      ).toBeGreaterThanOrEqual(widest / 2);
     }
   });
 
@@ -93,7 +96,10 @@ describe('MiniChart x axis', () => {
       Array.from({ length: count }, (_, i) => `${String(i % 24).padStart(2, '0')}:00`),
     );
     const long = axisFor(
-      Array.from({ length: count }, (_, i) => `Sep ${(i % 28) + 1}, 2026 at ${String(i % 24).padStart(2, '0')}:00 EAT`),
+      Array.from(
+        { length: count },
+        (_, i) => `Sep ${(i % 28) + 1}, 2026 at ${String(i % 24).padStart(2, '0')}:00 EAT`,
+      ),
     );
     expect(long.length).toBeLessThan(short.length);
     // Every long label must have room for its own text.

@@ -216,5 +216,14 @@ export function summarise(readings: ServiceReading[]): {
     ? `${parts.join(', ')} of ${readings.length} components. ${advice}`
     : `All ${healthy} components healthy on their last probe.`;
 
-  return { total: readings.length, healthy, degraded, critical, unknown, worst, rootFailures, statement };
+  return {
+    total: readings.length,
+    healthy,
+    degraded,
+    critical,
+    unknown,
+    worst,
+    rootFailures,
+    statement,
+  };
 }

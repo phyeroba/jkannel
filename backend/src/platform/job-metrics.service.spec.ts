@@ -13,13 +13,24 @@ const row = (overrides: Record<string, string | null> = {}) => ({
 const database = (answer: () => any) => ({ query: jest.fn(answer) }) as any;
 const lines = (text: string) => text.split('\n');
 const gauge = (text: string, name: string) =>
-  lines(text).find((line) => line.startsWith(`${name} `))?.split(' ')[1];
+  lines(text)
+    .find((line) => line.startsWith(`${name} `))
+    ?.split(' ')[1];
 
 describe('the job queue finally appears on /metrics', () => {
   it('emits a gauge for every state an alert would need', async () => {
     const service = new JobMetricsService(
       database(async () => ({
-        rows: [row({ pending: '120', overdue: '7', running: '3', stuck: '1', dead: '2', oldest_overdue_seconds: '900' })],
+        rows: [
+          row({
+            pending: '120',
+            overdue: '7',
+            running: '3',
+            stuck: '1',
+            dead: '2',
+            oldest_overdue_seconds: '900',
+          }),
+        ],
       })),
     );
     const text = await service.render();
@@ -47,7 +58,9 @@ describe('the job queue finally appears on /metrics', () => {
   it('counts stuck jobs separately from running ones', async () => {
     // Folded into `running`, a job whose worker died mid-execution looks like
     // healthy work in progress. That is how a wedged queue stays invisible.
-    const service = new JobMetricsService(database(async () => ({ rows: [row({ running: '5', stuck: '5' })] })));
+    const service = new JobMetricsService(
+      database(async () => ({ rows: [row({ running: '5', stuck: '5' })] })),
+    );
     const text = await service.render();
     expect(gauge(text, 'jkannel_jobs_running')).toBe('5');
     expect(gauge(text, 'jkannel_jobs_stuck')).toBe('5');

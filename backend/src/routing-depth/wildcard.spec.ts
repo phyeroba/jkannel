@@ -138,7 +138,11 @@ describe('describeWildcardProblem', () => {
   it('bounds length and alternative count, so one rule cannot dominate a send', () => {
     expect(describeWildcardProblem('a'.repeat(MAX_PATTERN_LENGTH + 1))?.code).toBe('too-long');
     expect(
-      describeWildcardProblem(Array(MAX_ALTERNATIVES + 1).fill('a').join('|'))?.code,
+      describeWildcardProblem(
+        Array(MAX_ALTERNATIVES + 1)
+          .fill('a')
+          .join('|'),
+      )?.code,
     ).toBe('too-many-alternatives');
   });
 

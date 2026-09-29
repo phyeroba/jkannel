@@ -16,7 +16,11 @@ describe('the sender-id failover the document describes', () => {
   it('rewrites the sender and records both values', () => {
     // "Ordinal 2 Rule is set and ENABLED to act as a failover for MTN traffic
     // ... SenderID overwrites to 7077 for all MTN traffic."
-    const result = applyRouteRule(message(), { action: 'route', overrideSender: '7077' }, 'UraMtn-failover');
+    const result = applyRouteRule(
+      message(),
+      { action: 'route', overrideSender: '7077' },
+      'UraMtn-failover',
+    );
     expect(result.decision).toBe('send');
     if (result.decision !== 'send') throw new Error('unreachable');
 
@@ -68,7 +72,10 @@ describe('the sender-id failover the document describes', () => {
 
 describe('recipient and body overrides', () => {
   it('rewrites the recipient, recording the original', () => {
-    const result = applyRouteRule(message(), { action: 'route', overrideRecipient: '256700111222' });
+    const result = applyRouteRule(message(), {
+      action: 'route',
+      overrideRecipient: '256700111222',
+    });
     if (result.decision !== 'send') throw new Error('unreachable');
     expect(result.message.recipient).toBe('256700111222');
     expect(result.overrides.recipient).toEqual({ from: '256772000118', to: '256700111222' });

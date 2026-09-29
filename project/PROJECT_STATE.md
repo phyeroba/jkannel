@@ -28,9 +28,16 @@ external evidence, not code.
 
 ## Scale
 
-39 API controllers · ~250 endpoints · 34 database migrations · 26 console screens ·
-81 tables · 100 backend test suites (836 tests) · 18 frontend suites (112 tests) ·
-14-service Compose topology across 4 isolated networks.
+**Re-counted 2026-09-29 against `49cf542`.** 44 API controllers · **282 endpoints**
+(counted from the running `/api/v1/openapi.json`, not from the source) · 52 forward
+migrations, all 52 applied in production · 42 console screens · 101 tables ·
+**177 backend test suites (2,064 tests)** · **63 frontend suites (704 tests)** ·
+10 Playwright e2e spec files · 18-service Compose topology across 4 isolated networks,
+of which 10 run in the default + `engine-kamex` shape used locally and in production.
+
+> The figures above replace the 2026-08-05 set (39 controllers, ~250 endpoints, 34
+> migrations, 26 screens, 81 tables, 100/18 suites), which had fallen roughly 130
+> commits behind and **understated every dimension of the product**.
 
 ## Stack
 
@@ -165,9 +172,12 @@ Console: `https://jkannel.34-134-248-1.sslip.io` · tenant `default` · username
 `operator`. **There is no email login** — the users table has `username` and no email
 column, and the login form's "Email or Username" label is misleading.
 
-The frontend container runs the **Vite dev server** (`vite --host 0.0.0.0`), not a
-static build behind nginx. It is deployable behind a reverse proxy via
-`VITE_ALLOWED_HOSTS`, which satisfies Vite's host check.
+**Corrected 2026-09-29: the frontend container serves a static build behind nginx**
+(`nginx -g "daemon off;"`), both in production and in the local Compose stack. It no
+longer runs the Vite dev server, so a `.vue` edit is invisible until the image is
+rebuilt. For design work, run a dev server on the host instead
+(`cd frontend && npx vite --port 15174`, with `VITE_API_BASE_URL` pointed at the
+backend and that origin added to `FRONTEND_ORIGIN` so CORS admits it).
 
 ## Release gates outstanding
 
@@ -184,13 +194,35 @@ Not code. Not fabricated. See [`progress/blockers.md`](../progress/blockers.md).
 
 ## Next milestone
 
-Two loose ends from the catch-up: delete the stale alerts note that denies a shipped
-capability, and make the Log Explorer state its own non-durable limits prominently.
+**Both loose ends from the catch-up are closed** (verified in code 2026-09-29, not
+assumed): the stale alerts note is gone — `AlertResponseView.vue` now states the
+opposite, that `POST /alerts/:id/suppress` exists and ships on the Alert Lifecycle
+screen — and the Log Explorer carries its `durable: false` / `scope: process` caveat
+prominently, above the results.
 
-Then: **encrypt notification-channel secrets** — now the most serious remaining security
-defect — and **re-run the independent verification** against the current commit so
-`FEATURES.md` stops understating the product. Ordered plan:
-[`../progress/next-actions.md`](../progress/next-actions.md).
+Next, in order:
+
+1. **Encrypt notification-channel secrets at rest, redact them on read, and replace the
+   static `x-jkannel-signature` with an HMAC.** Still the most serious remaining
+   security defect: as of `49cf542` the secret is sent verbatim as the signature header
+   in both `monitoring/notification-delivery.service.ts` and
+   `messaging-depth/mo-delivery.service.ts`, so the "signature" is replayable and the
+   secret is stored and returned in plaintext.
+2. **Surface `POST /auth/api-keys` in the console.** The only credential that actually
+   authenticates the gateway still has no screen — the CPAAS-SMSONE key had to be issued
+   over HTTP.
+3. **Re-run the independent verification** against the current commit so `FEATURES.md`
+   and `IMPLEMENTATION_VERIFICATION.md` stop understating the product; both are still
+   anchored to `eefa320`.
+
+Ordered plan: [`../progress/next-actions.md`](../progress/next-actions.md).
+
+**The design system is not the bottleneck.** A full sixteen-audit run on 2026-09-29
+came back clean on eleven of them, including 622 CSS selectors matching the kit with
+zero divergences, every comparable component rendering identically to it, and 0 of 352
+API operations without a console surface. The audits are in
+`docs/HANDOVER.md` §3; run them against a dev server, not while the test suites are
+running, because contention makes them report empty grids as "no rows".
 
 ## Where to read more
 

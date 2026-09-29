@@ -252,9 +252,7 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function smscOptionsFrom(
-  rows: readonly Record<string, unknown>[],
-): SmscOption[] {
+export function smscOptionsFrom(rows: readonly Record<string, unknown>[]): SmscOption[] {
   return rows
     .map((row) => {
       const id = typeof row.id === 'string' ? row.id : '';

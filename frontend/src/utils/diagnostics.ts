@@ -485,7 +485,8 @@ export function buildDiagnosticSummary(
 ): string {
   const lines: string[] = [`Message ${trace.id}`];
   const push = (label: string, value: string | null | undefined) => {
-    if (value !== null && value !== undefined && String(value).trim()) lines.push(`${label}: ${value}`);
+    if (value !== null && value !== undefined && String(value).trim())
+      lines.push(`${label}: ${value}`);
   };
 
   push('Carrier message ID', row?.externalRef);
@@ -497,7 +498,10 @@ export function buildDiagnosticSummary(
   push('Outcome', row?.deliveryStatus);
 
   const total = trace.lifecycle?.totalMs;
-  push('Elapsed across recorded stages', typeof total === 'number' ? formatMilliseconds(total) : null);
+  push(
+    'Elapsed across recorded stages',
+    typeof total === 'number' ? formatMilliseconds(total) : null,
+  );
   push('Stages recorded', String(trace.lifecycle?.stages?.length ?? 0));
 
   const problem = trace.lifecycle?.firstProblem;

@@ -143,9 +143,13 @@ describe('GET /messages/export.csv', () => {
   }
 
   it('asks the repository for a masked export by default', async () => {
-    const exportCsv = jest
-      .fn()
-      .mockResolvedValue({ filename: 'x.csv', rowCount: 1, masked: true, content: 'a', nextCursor: null });
+    const exportCsv = jest.fn().mockResolvedValue({
+      filename: 'x.csv',
+      rowCount: 1,
+      masked: true,
+      content: 'a',
+      nextCursor: null,
+    });
     const controller = new ReadModelsController(
       sqlboxStub({ exportCsv }) as any,
       undefined,

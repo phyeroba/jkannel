@@ -336,10 +336,12 @@ const id = (suffix: string) => `${props.testid ?? 'smsc-form'}-${suffix}`;
             @input="set('systemType', ($event.target as HTMLInputElement).value)"
           />
           <small v-if="isSmpp && !str('systemType').trim()" class="req-note">
-            <span class="mono">system-type</span> — required for SMPP. Left blank, bearerbox
-            panics on startup and every other SMSC goes down with it.
+            <span class="mono">system-type</span> — required for SMPP. Left blank, bearerbox panics
+            on startup and every other SMSC goes down with it.
           </small>
-          <small v-else><span class="mono">system-type</span> — part of the bind, set by the carrier.</small>
+          <small v-else
+            ><span class="mono">system-type</span> — part of the bind, set by the carrier.</small
+          >
         </label>
         <label class="field">
           <span>Username reference (optional)</span>
