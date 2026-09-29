@@ -326,7 +326,58 @@ PATCH /mo/rules/c7798671-097a-4e5e-9b49-66d19fd158dd
 
 Notes on `config`: unknown keys are **dropped, not stored** (so a header that
 looks configured but is not cannot happen silently), and `Host` /
-`Content-Length` are refused. `maxAttempts` is 1–20.
+`Content-Length` are refused. `maxAttempts` is 1–20. The `secret` is encrypted
+at rest and never returned by any read endpoint — a read shows
+`"secret": "__redacted__"`, and echoing that back on a write leaves the stored
+value untouched rather than overwriting it with the marker.
+
+### How to verify the signature — CHANGED 2026-09-29, implement this
+
+**Until 2026-09-29 JKANNEL put the shared secret verbatim in
+`x-jkannel-signature`.** That was a bearer token wearing a signature's name:
+identical on every request, proving nothing about the body, replayable forever
+by anyone who saw one. It has been replaced. If you already wrote a receiver
+that compares the header to the secret, it will now reject every call.
+
+Two headers are sent:
+
+```
+x-jkannel-timestamp: 1759140000          unix seconds
+x-jkannel-signature: v1=<hex hmac-sha256>
+```
+
+The signed string is `${timestamp}.${rawBody}` — the **raw body bytes as
+received**, not a re-serialisation of the parsed JSON. Two JSON encoders
+disagree about key order and whitespace, so verifying against a re-encoded
+object will fail intermittently and undebuggably. Capture the raw body before
+your JSON body-parser consumes it.
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verify(secret: string, rawBody: string, sig?: string, ts?: string): boolean {
+  if (!sig?.startsWith('v1=') || !ts || !/^\d+$/.test(ts)) return false;
+  // Without this the replay window is unbounded and the change buys nothing.
+  if (Math.abs(Math.floor(Date.now() / 1000) - Number(ts)) > 300) return false;
+  const expected = createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(sig.slice(3), 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);   // throws on length mismatch
+}
+```
+
+Three things that are easy to get wrong, and all three are silent:
+
+- **Reject a timestamp outside your tolerance** (300s each way is what JKANNEL
+  assumes). Skipping it leaves replay wide open.
+- **Compare in constant time.** `===` on a hex string leaks by timing.
+- `timingSafeEqual` **throws** when the buffers differ in length, which a
+  guessed signature will — catch it or length-check first, or a probe gets a 500
+  that tells them their guess was the wrong shape.
+
+The reference implementation is
+`backend/src/security/webhook-secret.ts` (`signBody`, `verifySignature`); its
+tests in `webhook-secret.spec.ts` are the contract.
 
 Nothing is being lost in the meantime — a catch-all rule already records every
 inbound message. Read them with `GET /mo/messages`, and delivery attempts with
@@ -546,6 +597,7 @@ tell him in one line, so he can tell the other window to pull.
 | # | Item | Owed by | Status |
 |---|---|---|---|
 | 1 | Confirm the MO/DLR webhook URL, method and auth mode (§6) | **CPAAS** | Open — code exists, URL unconfirmed |
+| 1b | Implement the **new** signature scheme in your receiver (§6) | **CPAAS** | Open — the old "header equals the secret" check will now reject everything |
 | 2 | HMAC secret for that webhook, if `hmac` is chosen | **Peter** | Open |
 | 3 | Switch on MO rule `c7798671-…` once 1 and 2 land | JKANNEL | Blocked on 1 |
 | 4 | Base URL for production (§1) | Peter | **Decided 2026-09-29 — public `https://gw1.speedamobile.com/api/v1`** |

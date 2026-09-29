@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { GATEWAY_REDIS, RedisLike } from './redis.provider';
+import { sharedJsonLogger } from '../platform/json.logger';
 
 export interface RateLimitResult {
   /** False only when the key has exceeded its window budget. */
@@ -85,14 +86,20 @@ export class GatewayRateLimiter {
     }
   }
 
+  /**
+   * Through the shared logger, not `console.warn`.
+   *
+   * The line was already structured JSON, so it LOOKED fine on stdout — but it
+   * went straight to the console and so never reached the ring buffer behind
+   * `GET /observability/logs`. A rate limiter failing open is precisely the
+   * event an operator goes to the Log Explorer to find, and it was the one
+   * class of warning that could not be found there.
+   */
   private logDegraded(keyId: string, reason: string): void {
-    console.warn(
-      JSON.stringify({
-        level: 'warn',
-        message: 'gateway rate limiter failing open',
-        keyId,
-        reason,
-      }),
+    sharedJsonLogger().warnWith(
+      'gateway rate limiter failing open',
+      { keyId, reason },
+      'GatewayRateLimiter',
     );
   }
 }

@@ -1472,7 +1472,13 @@ const canManageConfig = computed(() => canAccess(session.value, 'configuration.m
  * the one read on this screen with a real cost, and an operator who came to
  * look at the version list should not pay it.
  */
-const generatedConfig = ref<{ content?: string; checksum?: string; engine?: string } | null>(null);
+const generatedConfig = ref<{
+  content?: string;
+  checksum?: string;
+  engine?: string;
+  /** Environment variables the rendered file expects the ENGINE to supply. */
+  requiredSecrets?: string[];
+} | null>(null);
 const generatedBusy = ref(false);
 const generatedError = ref('');
 
@@ -6553,6 +6559,33 @@ onUnmounted(() => {
         <pre class="json-block" data-testid="generated-config-content">{{
           generatedConfig.content
         }}</pre>
+
+        <!--
+          The backend has always returned `requiredSecrets` — the environment
+          variables the rendered file expects the ENGINE container to supply —
+          and this screen dropped it on the floor. That made the single most
+          actionable part of the response invisible: an operator could deploy a
+          configuration and only discover the missing variable when the engine
+          failed to start with it.
+        -->
+        <div v-if="generatedConfig.requiredSecrets?.length" data-testid="generated-config-secrets">
+          <h3>Environment variables the engine must supply</h3>
+          <p class="source-note">
+            {{ generatedConfig.requiredSecrets.length }} referenced by this render. The values are
+            never returned here — these are the names the engine container must already have set,
+            and a deploy whose engine is missing one will fail to start.
+          </p>
+          <ul class="secret-ref-list">
+            <li v-for="name in generatedConfig.requiredSecrets" :key="name" class="mono">
+              {{ name }}
+            </li>
+          </ul>
+        </div>
+        <p v-else class="source-note" data-testid="generated-config-secrets-none">
+          This render references no secrets, so the engine needs no extra environment variables for
+          it.
+        </p>
+
         <p class="source-note">
           Secret references are resolved to render this, but the values are never returned — a
           reference that cannot be resolved fails the render and names the environment variable it

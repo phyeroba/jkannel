@@ -8,6 +8,7 @@ import { PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { GridDefinition } from '../platform/list-query';
 import { GridResult, runGrid } from '../platform/grid-runner';
+import { sealSecret } from '../security/webhook-secret';
 import { Actor } from './message-send.service';
 import {
   CompiledMoRule,
@@ -340,7 +341,10 @@ export class MoRulesService {
             kind,
             target,
             input.enabled ?? true,
-            JSON.stringify(config),
+            // Encrypted at rest. `DESTINATION_COLUMNS` already redacts it on the
+            // way back out, so neither the caller nor the audit row below sees
+            // the value — but until now the COLUMN held it in the clear.
+            JSON.stringify(sealSecret(config)),
             maxAttempts,
             actor.userId,
           ],

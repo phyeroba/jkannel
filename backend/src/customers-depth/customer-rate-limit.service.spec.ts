@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { GatewayRateLimiter } from '../api-gateway/gateway-rate-limiter';
 import { CustomerRateLimitService } from './customer-rate-limit.service';
+import { sharedLogBuffer } from '../platform/log-buffer';
 
 /**
  * The in-memory stand-in performs the same fixed-window INCR the Lua script
@@ -139,17 +140,33 @@ describe('when there is nothing to enforce', () => {
 });
 
 describe('fail open', () => {
-  it('allows the send when Redis is absent, and logs the degradation', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const outcome = await service(null).consumeInClient(client(1), '7', 'cust-1');
-      expect(outcome).toMatchObject({ degraded: true, enforced: false, limit: 1 });
-      const logged = warn.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logged).toContain('customer rate limit failing open');
-      expect(logged).toContain('cust-1');
-    } finally {
-      warn.mockRestore();
-    }
+  it('allows the send when Redis is absent, and logs the degradation WHERE IT CAN BE FOUND', async () => {
+    /*
+     * This used to spy on `console.warn`. The warning was structured JSON and
+     * looked fine on stdout, but it went straight to the console and so never
+     * reached the ring buffer behind `GET /observability/logs` — the one place
+     * an operator goes to ask "did the limiter fail open?".
+     *
+     * The assertion is now against the buffer, because that is the property
+     * that matters. Asserting on console output would pass again the day
+     * someone reverts the logger and re-breaks the Log Explorer.
+     */
+    const buffer = sharedLogBuffer();
+    const outcome = await service(null).consumeInClient(client(1), '7', 'cust-1');
+    expect(outcome).toMatchObject({ degraded: true, enforced: false, limit: 1 });
+
+    const entry = buffer
+      .query({ limit: 50, contains: 'customer rate limit failing open' })
+      .items.at(0) as (Record<string, unknown> & { message: string }) | undefined;
+    expect(entry).toBeDefined();
+    expect(entry).toMatchObject({
+      level: 'warn',
+      context: 'CustomerRateLimit',
+      customerId: 'cust-1',
+    });
+    // The customer id is a queryable FIELD, not a substring of the message —
+    // which is all a stringified object would have given us.
+    expect(entry?.message).not.toContain('cust-1');
   });
 
   it('allows the send when Redis errors, however far over the cap', async () => {

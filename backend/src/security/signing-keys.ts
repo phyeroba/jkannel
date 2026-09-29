@@ -1,3 +1,5 @@
+import { sharedJsonLogger } from '../platform/json.logger';
+
 const MINIMUM_KEY_BYTES = 32;
 
 let warnedAboutFallback = false;
@@ -13,13 +15,11 @@ function resolveKey(preferred: string | undefined, purpose: 'access' | 'refresh'
   }
   if (!preferred && fallback && !warnedAboutFallback) {
     warnedAboutFallback = true;
-    console.warn(
-      JSON.stringify({
-        level: 'warn',
-        message:
-          'AUTH_SIGNING_KEY is deprecated; set AUTH_ACCESS_TOKEN_KEY and AUTH_REFRESH_TOKEN_KEY ' +
-          'so access and refresh tokens use independent keys.',
-      }),
+    sharedJsonLogger().warnWith(
+      'AUTH_SIGNING_KEY is deprecated; set AUTH_ACCESS_TOKEN_KEY and AUTH_REFRESH_TOKEN_KEY ' +
+        'so access and refresh tokens use independent keys.',
+      { purpose },
+      'SigningKeys',
     );
   }
   return key;

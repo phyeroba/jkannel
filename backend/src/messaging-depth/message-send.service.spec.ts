@@ -10,6 +10,7 @@ import { ContentRuleRow } from './content-filter';
 import { MessageBlocklistService } from './message-blocklist.service';
 import { MessageSendService } from './message-send.service';
 import { SendEntitlementsService } from './send-entitlements.service';
+import { sharedLogBuffer } from '../platform/log-buffer';
 
 const actor = { tenantId: '1', userId: 'u1' };
 
@@ -761,17 +762,17 @@ describe('MessageSendService — per-customer rate limit (customers.rate_limit_p
   });
 
   it('FAILS OPEN when Redis is unavailable, rather than refusing live traffic', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const { service, sqlbox } = makeStack({ routes, rateLimitPerMin: 1, redis: null });
-      for (let attempt = 0; attempt < 5; attempt += 1) await send(service);
-      expect(sqlbox.submit).toHaveBeenCalledTimes(5);
-      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
-        'customer rate limit failing open',
-      );
-    } finally {
-      warn.mockRestore();
-    }
+    const { service, sqlbox } = makeStack({ routes, rateLimitPerMin: 1, redis: null });
+    for (let attempt = 0; attempt < 5; attempt += 1) await send(service);
+    expect(sqlbox.submit).toHaveBeenCalledTimes(5);
+    // Asserted against the queryable buffer rather than console.warn: the point
+    // of the warning is that an operator can FIND it in the Log Explorer, and a
+    // console assertion would still pass if it never got there.
+    expect(
+      sharedLogBuffer()
+        .query({ limit: 50, contains: 'customer rate limit failing open' })
+        .items.at(0),
+    ).toMatchObject({ level: 'warn', context: 'CustomerRateLimit' });
   });
 });
 

@@ -1,6 +1,7 @@
 import { PermanentJobError } from '../platform/job-registry';
 import { MoDeliveryService } from './mo-delivery.service';
 import { MoDeliveryRow, MoMessageRow } from './mo-inbound.service';
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifySignature } from '../security/webhook-secret';
 
 const actor = { tenantId: '1', userId: 'u1' };
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -113,7 +114,17 @@ describe('MoDeliveryService — a single delivery', () => {
     });
   });
 
-  it('sends the configured shared secret and headers, and never lets a rule rewrite Host', async () => {
+  it('SIGNS the body rather than sending the shared secret, and never lets a rule rewrite Host', async () => {
+    /*
+     * This test used to assert `x-jkannel-signature === 's3cret'` — it encoded
+     * the defect. The header carried the shared secret verbatim, which made it
+     * a bearer token: identical on every request, provable against nothing, and
+     * replayable forever by anyone who saw one.
+     *
+     * It is now an HMAC over `${timestamp}.${body}`, so the assertions are that
+     * the secret does NOT appear, and that a receiver holding the same secret
+     * can verify what did.
+     */
     const fetchMock = jest.fn(async () => ({ ok: true, status: 202, statusText: 'Accepted' }));
     global.fetch = fetchMock as never;
     const { service } = makeStack([
@@ -122,9 +133,44 @@ describe('MoDeliveryService — a single delivery', () => {
     await service.dispatch(actor, id(300), 1);
     const init = (fetchMock.mock.calls[0] as unknown as [string, any])[1];
     expect(init.method).toBe('PUT');
-    expect(init.headers['x-jkannel-signature']).toBe('s3cret');
     expect(init.headers['x-tenant']).toBe('acme');
     expect(init.headers.host).toBeUndefined();
+
+    expect(JSON.stringify(init.headers)).not.toContain('s3cret');
+    expect(
+      verifySignature(
+        's3cret',
+        init.body,
+        init.headers[SIGNATURE_HEADER],
+        init.headers[TIMESTAMP_HEADER],
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('a configured header cannot impersonate the signature', async () => {
+    // The signing headers are applied after the destination's own, so a rule
+    // that sets x-jkannel-signature itself cannot pin a value of its choosing.
+    const fetchMock = jest.fn(async () => ({ ok: true, status: 202, statusText: 'Accepted' }));
+    global.fetch = fetchMock as never;
+    const { service } = makeStack([
+      delivery({
+        config: {
+          secret: 's3cret',
+          headers: { 'X-Jkannel-Signature': 'v1=deadbeef' },
+        },
+      }),
+    ]);
+    await service.dispatch(actor, id(300), 1);
+    const init = (fetchMock.mock.calls[0] as unknown as [string, any])[1];
+    expect(init.headers[SIGNATURE_HEADER]).not.toBe('v1=deadbeef');
+    expect(
+      verifySignature(
+        's3cret',
+        init.body,
+        init.headers[SIGNATURE_HEADER],
+        init.headers[TIMESTAMP_HEADER],
+      ),
+    ).toEqual({ ok: true });
   });
 
   it('refuses at delivery time to POST to a private host, even if the row says so', async () => {

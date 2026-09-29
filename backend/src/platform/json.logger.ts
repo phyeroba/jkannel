@@ -53,6 +53,29 @@ export class JsonLogger implements LoggerService {
   }
 
   /**
+   * A warning that carries STRUCTURED FIELDS alongside its message.
+   *
+   * `warn()` takes only a message, so a caller with fields had to stringify an
+   * object into it — which produces `"message":"{\"message\":\"…\",\"keyId\":…}"`,
+   * a JSON document nested inside a JSON string. That is worse than the
+   * `console.warn` it replaced: the Log Explorer can no longer filter on the
+   * message, because the message is now a blob.
+   *
+   * Fields are merged as siblings of `message`, exactly as {@link http} does,
+   * so `keyId` and `reason` are queryable columns rather than substrings.
+   */
+  warnWith(message: string, fields: Record<string, unknown>, context?: string): void {
+    this.emit({
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      context,
+      message,
+      ...requestLogFields(),
+      ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)),
+    });
+  }
+
+  /**
    * One line per completed HTTP request: method, route, status, duration and
    * the same correlation fields, so a slow or failing call can be found by id.
    */

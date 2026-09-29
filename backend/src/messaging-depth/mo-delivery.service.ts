@@ -5,6 +5,7 @@ import { PermanentJobError } from '../platform/job-registry';
 import { Actor, MessageSendService } from './message-send.service';
 import { MoDeliveryRow, MoMessageRow } from './mo-inbound.service';
 import { allowPrivateWebhookTargets, isPrivateHost } from './mo-routing';
+import { openSecret, signBody } from '../security/webhook-secret';
 
 export interface DeliveryAttemptResult {
   status: 'delivered' | 'failed';
@@ -224,16 +225,20 @@ export class MoDeliveryService {
         detail: `refusing to POST to private host ${url.hostname}`,
       };
 
+    // Serialised once: the signature covers the exact bytes sent. See
+    // security/webhook-secret.ts.
+    const rawBody = JSON.stringify(this.payload(delivery, message));
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     for (const [key, value] of Object.entries((config.headers ?? {}) as Record<string, unknown>))
       headers[key.toLowerCase()] = String(value);
-    if (typeof config.secret === 'string' && config.secret)
-      headers['x-jkannel-signature'] = config.secret;
+    // Signing headers go on AFTER the configured ones, so a destination cannot
+    // pin its own x-jkannel-signature and defeat the mechanism.
+    Object.assign(headers, signBody(openSecret(config), rawBody));
 
     const response = await fetch(url.toString(), {
       method: String(config.method ?? 'POST'),
       headers,
-      body: JSON.stringify(this.payload(delivery, message)),
+      body: rawBody,
       signal: AbortSignal.timeout(webhookTimeoutMs()),
     });
     return {

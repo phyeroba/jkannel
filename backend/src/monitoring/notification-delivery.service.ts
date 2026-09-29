@@ -1,6 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { createTransport, Transporter } from 'nodemailer';
 import { KamexSqlboxRepository } from '../engine/kamex-sqlbox.repository';
+import { openSecret, signBody } from '../security/webhook-secret';
 
 export interface NotificationChannel {
   id: string;
@@ -194,21 +195,28 @@ export class NotificationDeliveryService {
         target: url,
         response: { error: 'webhook url must be http or https' },
       };
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    // Optional shared-secret header for the receiver to authenticate the hook.
-    const secret = channel.config?.secret;
-    if (typeof secret === 'string' && secret) headers['x-jkannel-signature'] = secret;
+    // The body is serialised ONCE and both signed and sent, because the digest
+    // covers the exact bytes on the wire. Re-serialising for the signature would
+    // work until a key order or a float rendering differed, and then fail for
+    // one message in a thousand with no way to reproduce it.
+    const rawBody = JSON.stringify({
+      source: 'jkannel',
+      category: payload.category,
+      subject: payload.subject,
+      body: payload.body,
+      ...payload.data,
+    });
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      // An HMAC over timestamp + body, not the shared secret itself. See
+      // security/webhook-secret.ts for why that distinction is the whole point.
+      ...signBody(openSecret(channel.config), rawBody),
+    };
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          source: 'jkannel',
-          category: payload.category,
-          subject: payload.subject,
-          body: payload.body,
-          ...payload.data,
-        }),
+        body: rawBody,
         signal: AbortSignal.timeout(5000),
       });
       return {

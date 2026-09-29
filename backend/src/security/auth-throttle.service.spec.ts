@@ -7,6 +7,7 @@ import {
   authThrottleLimits,
 } from './auth-throttle.service';
 import { AuthThrottleGuard, ThrottlePolicy } from './auth-throttle.guard';
+import { sharedLogBuffer } from '../platform/log-buffer';
 
 /**
  * In-memory Redis stand-in with a controllable clock so the window can be
@@ -177,17 +178,29 @@ describe('AuthThrottleService', () => {
   // The single most important property: a cache outage must never lock the
   // operator out of their own platform.
   describe('fail open', () => {
+    /*
+     * These assert against the QUERYABLE LOG BUFFER, not `console.warn`.
+     *
+     * The warning used to go straight to the console, so it never reached the
+     * ring buffer behind `GET /observability/logs` — and "did auth throttling
+     * fail open?" is a question asked in the Log Explorer, not by reading
+     * container stdout. Asserting on console output would pass again the day
+     * someone reverts that.
+     */
+    const lastWarning = (contains: string) =>
+      sharedLogBuffer().query({ limit: 50, contains }).items.at(0);
+
     it('allows and warns when there is no Redis client at all', async () => {
-      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const throttle = new AuthThrottleService(null);
       const decision = await throttle.inspect(throttle.mfaBuckets('t1', 'u1', '203.0.113.7'));
       expect(decision).toMatchObject({ allowed: true, degraded: true });
-      expect(warn).toHaveBeenCalled();
-      expect(String(warn.mock.calls[0][0])).toContain('auth throttle failing open');
+      expect(lastWarning('auth throttle failing open')).toMatchObject({
+        level: 'warn',
+        context: 'AuthThrottle',
+      });
     });
 
     it('allows and warns when Redis errors', async () => {
-      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const throttle = new AuthThrottleService(new BrokenRedis());
       await expect(
         throttle.inspect(throttle.loginBuckets('acme', 'operator', '203.0.113.7')),
@@ -196,11 +209,10 @@ describe('AuthThrottleService', () => {
       await expect(
         throttle.assertAllowed(throttle.loginBuckets('acme', 'operator', '203.0.113.7')),
       ).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalled();
+      expect(lastWarning('auth throttle failing open')).toBeDefined();
     });
 
     it('swallows a failing penalty write rather than turning a 401 into a 500', async () => {
-      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const throttle = new AuthThrottleService(new BrokenRedis());
       await expect(
         throttle.penalize(throttle.mfaBuckets('t1', 'u1', '203.0.113.7')),

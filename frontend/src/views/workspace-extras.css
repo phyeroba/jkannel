@@ -129,6 +129,25 @@ tr.clickable-row:hover td {
   color: var(--muted);
   margin-left: auto;
 }
+/* The environment variables a generated configuration expects the engine to
+   supply. A wrapping grid rather than a list, because these are short tokens
+   and a one-per-line column wastes the panel at any real count. */
+.secret-ref-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.secret-ref-list li {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  word-break: break-all;
+}
 .json-block {
   margin: 4px 0 0;
   padding: 10px 12px;

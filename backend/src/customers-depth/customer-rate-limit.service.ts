@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { GatewayRateLimiter } from '../api-gateway/gateway-rate-limiter';
+import { sharedJsonLogger } from '../platform/json.logger';
 
 export interface CustomerRateLimitOutcome {
   customerId: string | null;
@@ -94,14 +95,12 @@ export class CustomerRateLimitService {
       result = await this.limiter.consume(keyId, limit, CustomerRateLimitService.WINDOW_SECONDS);
 
     if (result.degraded) {
-      console.warn(
-        JSON.stringify({
-          level: 'warn',
-          message: 'customer rate limit failing open (send allowed)',
-          tenantId,
-          customerId,
-          limit,
-        }),
+      // Shared logger, not console.warn: a limiter failing open means sends are
+      // going out unmetered, and that must be findable in the Log Explorer.
+      sharedJsonLogger().warnWith(
+        'customer rate limit failing open (send allowed)',
+        { tenantId, customerId, limit },
+        'CustomerRateLimit',
       );
       return { customerId, limit, remaining: result.remaining, degraded: true, enforced: false };
     }

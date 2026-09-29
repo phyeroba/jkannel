@@ -1,4 +1,5 @@
 import { HttpException, HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
+import { sharedJsonLogger } from '../platform/json.logger';
 
 /**
  * Redis-backed throttling for the authentication surface (`/auth/*`).
@@ -301,13 +302,8 @@ export class AuthThrottleService {
     }
   }
 
+  /** Through the shared logger so it reaches the queryable ring buffer. */
   private warn(reason: string): void {
-    console.warn(
-      JSON.stringify({
-        level: 'warn',
-        message: 'auth throttle failing open',
-        reason,
-      }),
-    );
+    sharedJsonLogger().warnWith('auth throttle failing open', { reason }, 'AuthThrottle');
   }
 }

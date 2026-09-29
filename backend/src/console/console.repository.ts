@@ -9,6 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { DatabaseService } from '../database/database.service';
 import { GridDefinition, buildGridSql, parseListQuery } from '../platform/list-query';
 import { DEFAULT_SETTINGS } from './settings-defaults';
+import { sealSecret } from '../security/webhook-secret';
 
 export interface Actor {
   tenantId: string;
@@ -1044,28 +1045,50 @@ export class ConsoleRepository {
       return row;
     });
   }
+  /**
+   * Redact `config.secret` IN SQL, exactly as `mo-inbound.service.ts` does for
+   * its own destinations.
+   *
+   * In SQL rather than in TypeScript after the query, because the raw value then
+   * cannot leave the database through this constant at all — a second reader
+   * added later inherits the redaction instead of having to remember it. The
+   * secret is stored encrypted as well (see `security/webhook-secret.ts`); this
+   * is the second of the two locks, not a substitute for the first.
+   */
+  private static readonly REDACTED_CHANNEL_CONFIG =
+    `CASE WHEN config->'secret' IS NOT NULL ` +
+    `THEN jsonb_set(config, '{secret}', '"__redacted__"'::jsonb) ELSE config END AS config`;
+
   listNotificationChannels(actor: Actor) {
     return this.list(
       actor,
-      'SELECT id,name,type,enabled,severities,config,created_at,updated_at FROM notification_channels ORDER BY enabled DESC,name',
+      `SELECT id,name,type,enabled,severities,${ConsoleRepository.REDACTED_CHANNEL_CONFIG},created_at,updated_at ` +
+        `FROM notification_channels ORDER BY enabled DESC,name`,
     );
   }
   async createNotificationChannel(actor: Actor, value: any) {
     return this.inTenant(actor, async (c) => {
       const row = (
         await c.query(
-          'INSERT INTO notification_channels(tenant_id,name,type,enabled,severities,config,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,name,type,enabled,severities,config,created_at',
+          `INSERT INTO notification_channels(tenant_id,name,type,enabled,severities,config,created_by) ` +
+            `VALUES($1,$2,$3,$4,$5,$6,$7) ` +
+            `RETURNING id,name,type,enabled,severities,${ConsoleRepository.REDACTED_CHANNEL_CONFIG},created_at`,
           [
             actor.tenantId,
             value.name,
             value.type,
             value.enabled ?? true,
             value.severities ?? ['warning', 'critical'],
-            JSON.stringify(value.config ?? {}),
+            // Encrypted before it reaches the column. The RETURNING clause above
+            // redacts it again on the way back, so the caller never sees either
+            // the plaintext it sent or the ciphertext now stored.
+            JSON.stringify(sealSecret(value.config ?? {})),
             actor.userId,
           ],
         )
       ).rows[0];
+      // `row` is already redacted by RETURNING, so the audit entry cannot carry
+      // the secret either — which it did before, into a table built to be kept.
       await this.audit(
         c,
         actor,

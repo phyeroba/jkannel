@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-09-29b (the signature that was the secret)
+
+The longest-standing security defect on the board, closed. Two separate problems
+were hiding behind one line of code, and fixing either alone would have left the
+other.
+
+**The secret was stored and returned in plaintext.** `notification_channels.config`
+and `mo_rule_destinations.config` are JSONB blobs written straight from the request
+body, so `config.secret` sat in the database in the clear *and* came back out of
+every list endpoint — readable by any `system.view` holder, and copied verbatim
+into `audit_log` on create.
+
+**The "signature" was the secret itself.** The sender put the shared secret into
+`x-jkannel-signature` unchanged. That is a bearer token wearing a signature's
+name: identical on every request, proving nothing about the body, and replayable
+forever by anyone who ever received one — or read one out of the list endpoint
+above.
+
+Now, in `backend/src/security/webhook-secret.ts`:
+
+- Secrets are **AES-256-GCM sealed** before they reach the column (reusing the
+  MFA key helper), and **redacted in SQL** on every read — in SQL rather than in
+  TypeScript so a reader added later inherits the redaction instead of having to
+  remember it. `notification_channels` now does what `mo_rule_destinations`
+  already did.
+- The wire signature is an **HMAC-SHA256 over `${timestamp}.${rawBody}`**, sent as
+  `x-jkannel-signature: v1=<hex>` beside `x-jkannel-timestamp`. The body is
+  serialised **once** and both signed and sent, because two JSON encoders disagree
+  about key order and a re-serialised digest would fail for one message in a
+  thousand.
+- Signing headers are applied **after** a destination's configured headers, so a
+  rule cannot pin its own signature and defeat the mechanism.
+- `verifySignature` is exported and enforces the replay window, because a receiver
+  that skips the timestamp check buys nothing from the change.
+- **Legacy plaintext rows still work** and are upgraded on next write; a value that
+  cannot be decrypted sends the hook *unsigned* rather than throwing, so one bad
+  row cannot stall the delivery queue forever.
+
+The old behaviour was asserted by a *passing* test — `mo-delivery.service.spec.ts`
+expected `x-jkannel-signature` to equal `'s3cret'`. That test failed the moment the
+fix landed, which is the falsification, and it now asserts the opposite.
+
+Also closed: **`requiredSecrets` is displayed** in the generated-configuration panel
+(the backend always returned it and the frontend dropped it, so the most actionable
+part of the response was invisible until the engine failed to start), and all four
+raw `console.warn` callers now go through the shared logger, so "the rate limiter
+failed open" is finally findable in the Log Explorer.
+
+CPAAS must implement the new scheme before inbound is switched on — the worked
+example and the three easy-to-get-wrong parts are in
+`docs/CPAAS-HANDOFF-JKANNEL-SMS.md` §6.
+
 ## 2026-09-29 (three dialogs that laid their fields out like a filter bar)
 
 Found by `scripts/dialog-audit.mjs` on the first full audit run since the local stack
