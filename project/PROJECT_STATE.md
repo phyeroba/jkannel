@@ -46,6 +46,35 @@ row-level security) · Redis (rate limiting, idempotency, throttling) · Docker 
 Kamex 1.8.3 pinned by OCI digest, behind a generic Engine Adapter · upstream Kannel as a
 sibling adapter.
 
+## Why this exists, and what sits on it
+
+**JKANNEL replaces SMSSTUDIO.** SMSSTUDIO was written by an outside supplier
+(Codesegment) and carries problems this platform was built to avoid; the plan is to
+migrate **every SMSSTUDIO client onto JKANNEL**. That is the reason the routing,
+content-filtering and duplicate-control depth exists at all — those are SMS Studio
+capabilities operators here already rely on, and a replacement that lacked them would
+not be a replacement. (Recorded 2026-09-29 from Peter; it is the product intent behind
+the work, not a claim that the migration has happened.)
+
+**JKANNEL is the SMPP server the other platforms send through.** The direct telecom
+SMPP binds are configured *here*, and other products reach the carriers by calling
+JKANNEL rather than by holding binds of their own:
+
+```
+  CPaaS ──HTTP──▶ JKANNEL ──SMPP──▶ telecom carriers
+  (and, in time, the migrated SMSSTUDIO clients)
+```
+
+The practical consequence, learned the hard way on 2026-09-29: **adding a carrier bind
+to JKANNEL does nothing for a customer until that customer is entitled to it.** A new
+bind and a matching route were added and CPAAS still could not send, because
+`customer_routes` bound it to the old SMSC alone. Entitlement is per customer, and a
+new bind is a two-part change — the bind, then the bindings.
+
+The `kamdixy` bind added on 2026-09-29 is a **functionality test** first: prove the
+second-bind path works end to end, and keep it as an alternative carrier route if it
+proves stable.
+
 ## Architectural position
 
 **JKANNEL is a control plane; the engine owns the data plane.**

@@ -3,9 +3,19 @@
 **Audience:** the Claude Code instance working in the CPAAS repo
 (`D:\CpaSS\Project`, github.com/phyeroba/cpaas), and whoever reviews its work.
 
-JKANNEL is the **SMS backbone for CPAAS**: CPAAS owns the customer-facing
-platform, JKANNEL owns the carrier connection, routing, delivery receipts and
-inbound fan-out. CPAAS does not talk to the carrier; it talks to JKANNEL.
+JKANNEL is the **SMPP server**. CPAAS owns the customer-facing platform; JKANNEL
+holds the direct telecom SMPP binds and owns routing, delivery receipts and
+inbound fan-out. **CPAAS does not hold a carrier bind and does not speak SMPP** —
+it sends over HTTP to the gateway API below.
+
+```
+CPaaS ──HTTP──▶ JKANNEL ──SMPP──▶ telecom carriers
+```
+
+JKANNEL is also the replacement for SMSSTUDIO, and the SMSSTUDIO client base is
+to migrate onto it. That matters to you only in one way: **the carrier set will
+grow**, and a bind added to JKANNEL does not become usable by CPAAS
+automatically — see §9.6.
 
 This is a working brief, not a specification. Everything was exercised against
 the live gateway — endpoints, payloads and error strings are copied from real
@@ -467,6 +477,29 @@ path routes correctly. It is a legacy evaluator that reads only
 If you are verifying routing, use an actual send or
 `GET /gateway/routing-decisions`. Do not conclude from the simulator that
 routing is broken.
+
+### 9.6 A new carrier bind does not reach you automatically
+
+Entitlement is per customer. A bind can exist in JKANNEL, be enabled, be rendered
+into the engine config and have a deployed route that matches your destination
+perfectly — and your traffic will still be refused, because `customer_routes`
+decides which binds and routes your account may use.
+
+This is not hypothetical. On 2026-09-29 a second bind (`kamdixy`, sender `KAMEX`)
+was added with a matching deployed route, and CPAAS sends were refused with
+**"no route matched the destination"** — which sends you to check prefixes that
+are fine. The actual cause was that CPAAS was bound to the first SMSC alone.
+
+Two consequences for you:
+
+- **When a carrier is added for you, confirm the binding, not just the bind.**
+  `GET /gateway/routing-decisions` after one send shows which route was chosen
+  and why; a refusal there is faster to read than a 400 on the submit.
+- **The refusal now names entitlement** when bindings removed candidates before
+  matching — it will say how many deployed routes were excluded. If you see that
+  sentence, the problem is an account permission, not your payload.
+
+CPAAS is currently entitled to **both** binds (`kololo` and `kamdixy`).
 
 ### 9.5 Quota and credit ARE now enforced — this reversed on 2026-09-17
 
