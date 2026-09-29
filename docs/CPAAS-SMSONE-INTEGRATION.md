@@ -15,14 +15,26 @@ delivered separately. This file names it only by its public prefix, `12a88b72`.
 |---|---|
 | Customer | `CPAAS-SMSONE` — `f1c61448-9134-4318-8cf9-197532706188` |
 | API key | prefix `12a88b72` — id `e726afc2-a45c-4249-a553-164d3b9fa0ea` |
+| Key ↔ customer link | **linked 2026-09-17** — entitlements enforced, see §8 |
 | Approved sender ID | `8888` |
 | Route | `CPAAS-SMSONE Uganda mobile` — `e575e305-a0d3-4917-8a52-aa185cd3a398`, deployed |
-| Carrier bind | `kololo` (SMPP), bound |
+| Carrier bind | `kololo` (SMPP) — **DOWN since 2026-09-08**, refused by the carrier |
 | MO rule | `CPAAS-SMSONE inbound` — `c7798671-097a-4e5e-9b49-66d19fd158dd`, **disabled** |
 | Daily quota | 100,000 |
 | Rate limit | 600 requests/minute |
 
-Base URL: `https://gw1.speedamobile.com/api/v1`
+Base URL: `https://gw1.speedamobile.com/api/v1` (public) or
+`http://127.0.0.1:8081/api/v1` (loopback — same host, recommended for
+production; see the handoff brief §1).
+
+> **🔴 Sends fail today.** The carrier has refused the `kololo` bind since
+> 2026-09-08 18:40 UTC, so `POST /gateway/messages` returns 400
+> `No route is available … no available SMSC`. JKANNEL's side is verified clean;
+> resolution is with the carrier. Everything except the final carrier hop still
+> works and is worth building against.
+>
+> The old console host `jkannel.34-134-248-1.sslip.io` was retired on 2026-08-15
+> and now fails the TLS handshake — use `gw1.speedamobile.com`.
 
 ---
 
@@ -241,30 +253,31 @@ only value the route matches.
 
 ---
 
-## 8. One thing not yet wired
+## 8. Entitlements — wired on 2026-09-17
 
-`api_keys.customer_id` is what binds a credential to a customer's quota, credit,
-approved sender IDs and route bindings — the send path enforces all four inside
+`api_keys.customer_id` binds a credential to a customer's quota, credit,
+approved sender IDs and route bindings; the send path enforces all four inside
 the same transaction as the send.
 
-**No API endpoint sets it.** `POST /auth/api-keys` does not accept it and
-`PATCH /gateway/keys/{id}` handles only rate limit, IP allowlist, expiry and
-enabled. It can currently only be set with SQL:
+**This is now set.** The key (`e726afc2-…`) was linked to customer
+`CPAAS-SMSONE` (`f1c61448-…`) on 2026-09-17, behind a gated check that verified
+credit, account status, sender ID and bind state before writing the single row.
 
-```sql
-UPDATE api_keys
-   SET customer_id = 'f1c61448-9134-4318-8cf9-197532706188'
- WHERE id = 'e726afc2-a45c-4249-a553-164d3b9fa0ea';
-```
+Consequences, all live:
 
-Until then the key submits **as the tenant**, and the customer's quota, credit
-and sender-ID allowlist are recorded but not enforced against CPAAS traffic.
-Sending, routing, delivery reports and MO are unaffected — this governs
-entitlement accounting only.
+- The **100,000/day quota** now applies to CPAAS traffic.
+- **Prepaid credit is deducted per message** from an append-only ledger. A load
+  test spends real balance — check it first.
+- The **sender-ID allowlist** is enforced, so a sender other than `8888` is now
+  refused rather than silently accepted by JKANNEL. (The carrier-side trap in §7
+  still stands for anything that gets past us.)
+- Exhausted quota or credit produces a 4xx that reads like a validation error
+  but is an **account** condition. Do not retry it; alert a human.
 
-That statement needs host access, which is blocked while the office IP is
-banned from port 22 (see `scripts/prod-ssh.ps1`). It is the first thing to run
-once that clears.
+There is still no API endpoint that sets `customer_id` — `POST /auth/api-keys`
+does not accept it and `PATCH /gateway/keys/{id}` handles only rate limit, IP
+allowlist, expiry and enabled. Linking a *future* key still needs one SQL
+statement on the host. That gap is tracked in the JKANNEL backlog.
 
 ---
 

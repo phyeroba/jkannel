@@ -1,15 +1,67 @@
 # Handoff: integrating CPAAS with the JKANNEL SMS gateway
 
-**Audience:** whoever is building the SMS integration inside CPAAS.
+**Audience:** the Claude Code instance working in the CPAAS repo
+(`D:\CpaSS\Project`, github.com/phyeroba/cpaas), and whoever reviews its work.
 
-This is a working brief, not a specification. Everything in it was exercised
-against the live gateway on 2026-09-03 — endpoints, payloads and error strings
-are copied from real responses, not from a schema. Where something does not work
-yet, it is marked and the reason is given, so you do not spend time debugging a
-gap that is already known.
+JKANNEL is the **SMS backbone for CPAAS**: CPAAS owns the customer-facing
+platform, JKANNEL owns the carrier connection, routing, delivery receipts and
+inbound fan-out. CPAAS does not talk to the carrier; it talks to JKANNEL.
 
-Read §9 before you write any code. Four of the traps in it cost real time to
-find and all four look like bugs in your integration when you hit them.
+This is a working brief, not a specification. Everything was exercised against
+the live gateway — endpoints, payloads and error strings are copied from real
+responses, not from a schema.
+
+Read **§0** and **§9** before you write any code.
+
+---
+
+## 0. STATE OF PLAY — read this first · updated 2026-09-29
+
+> ### 🔴 The carrier has been down for 21 days. Every send fails right now.
+>
+> The `kololo` SMPP bind has been refused by the carrier since
+> **2026-09-08 18:40 UTC**. `POST /gateway/messages` returns
+> **400 `No route is available for <msisdn>: primary and fallback unavailable;
+> no available SMSC`**.
+>
+> **This is not your integration, and not something you can fix.** JKANNEL's
+> side is verified clean: DNS unchanged, egress IP unchanged (`34.134.248.1`),
+> the same carrier host answers on :80 and :443, an unrelated host answers on
+> :4089, and the host firewall permits the traffic. Only the carrier's SMPP port
+> refuses us. Resolution sits with the carrier. (The carrier's hostname and
+> credentials are deliberately absent from this repo — they live only in the
+> gitignored `.env` on the host. Ask Peter if you need them.)
+>
+> **Build and test against this anyway.** The failure is a clean, correct 400 on
+> a healthy API — it is a good negative test. Everything except the final carrier
+> hop is exercisable: auth, validation, routing decisions, quota, credit,
+> history, and the MO path. When the bind returns, nothing needs restarting on
+> either side; bearerbox retries every 10s by itself.
+
+### What changed since the 2026-09-03 brief
+
+| | Then | Now |
+|---|---|---|
+| Entitlements | Not enforced — key submitted "as the tenant" | **Enforced.** The key is linked to customer `CPAAS-SMSONE`; quota, credit, sender-ID allowlist and route bindings all apply. See §9.5 — this changes your error handling. |
+| Carrier | Bound and delivering | **Down since 2026-09-08.** See above. |
+| Console URL | `jkannel.34-134-248-1.sslip.io` | **`gw1.speedamobile.com`.** The sslip.io names were retired on 2026-08-15 and now fail the TLS handshake. |
+| Loopback path | "not tested" | **Documented and recommended** — see §1. |
+
+### What CPAAS already has (found in your repo on 2026-09-29)
+
+You are further along than this document used to assume. Commit `362c721`
+already ships:
+
+- `services/messaging-service/src/providers/adapters/http-apikey.provider.ts` —
+  the JKANNEL provider adapter
+- `services/messaging-service/src/webhooks/dlr-receiver.controller.ts` —
+  `POST /webhooks/dlr/:carrier` and `POST /webhooks/dlr/:carrier/:providerMessageId`,
+  with `hmac | ip_allowlist | key_auth` per your ADR 0025
+- `docs/integrations/JKANNEL-SMSONE-INTEGRATION-PLAN.md`
+
+**That DLR receiver is the missing input JKANNEL has been blocked on since
+2026-09-03** (§6). Confirm its public path and auth mode and inbound can be
+switched on the same day. See §12 for how to send that answer back.
 
 ---
 
@@ -27,9 +79,43 @@ find and all four look like bugs in your integration when you hit them.
 | Max body | 1,530 characters |
 | Server time | UTC |
 
-CPAAS and JKANNEL run on the same host, so this call does not leave the machine.
-Use the public URL anyway unless you have a reason not to: it is the address the
-key was tested against, and the loopback path has not been.
+### Which address to use — the host layout, verified 2026-09-29
+
+CPAAS and JKANNEL run on the **same GCP instance** (`caps`, `34.134.248.1`).
+A single system nginx is the only ingress; every application port is bound
+either to loopback or is closed at the GCP firewall. Probed from outside, all of
+`5432 6379 9000 9001 8080 9080 9180 5672 15672 3000 3100 5273 8081` are closed.
+
+| Public name | → upstream | Owner |
+|---|---|---|
+| `app.speedamobile.com` | `127.0.0.1:5273`, `/auth/`→`:3000`, `/msg/`→`:3100` | CPaaS console + services |
+| `iam.speedamobile.com` | `127.0.0.1:8080` | Keycloak |
+| `dev.speedamobile.com` | `127.0.0.1:9080` | APISIX data plane |
+| **`gw1.speedamobile.com`** | **`127.0.0.1:8081`** | **JKANNEL — this API** |
+
+So there are two ways for CPAAS to reach JKANNEL:
+
+```bash
+JKANNEL_API_BASE=https://gw1.speedamobile.com/api/v1   # public, via nginx
+JKANNEL_API_BASE=http://127.0.0.1:8081/api/v1          # loopback, same box
+```
+
+**Recommendation: use the loopback address in production, the public one from
+your workstation.** Loopback skips TLS, nginx and the public internet for a call
+that never needed to leave the machine — lower latency, fewer moving parts, and
+it keeps working if a certificate or DNS record lapses. The public URL remains
+correct and is what the key was originally tested against.
+
+Two caveats if you take the loopback path:
+
+- **Only from a process on the host.** A CPAAS service running in a container
+  reaches it over the docker bridge, not `127.0.0.1` — use the host gateway
+  address or keep that service on the public name. Your PM2 services
+  (`auth-service`, `messaging-service`, `console-web`) run directly on the host,
+  so loopback works for them.
+- **It changes the source address JKANNEL records.** See §10 on the IP
+  allowlist: pin the allowlist only after you have seen the address actually
+  observed in `GET /gateway/request-log`.
 
 ---
 
@@ -186,7 +272,25 @@ So:
 
 ## 6. Receiving messages (MO) — not active yet
 
-**Status: blocked on one input from your side.**
+**Status: blocked on one input from your side — which you appear to already
+have.** Your repo ships `POST /webhooks/dlr/:carrier` with `hmac |
+ip_allowlist | key_auth` auth modes (`dlr-receiver.controller.ts`). That is
+almost certainly the endpoint this rule should point at. What is missing is not
+the code, it is the **confirmed URL, method and auth choice** — see §12.
+
+Likely shape, for you to confirm or correct:
+
+```
+target  http://127.0.0.1:3100/webhooks/dlr/jkannel          (loopback)
+   or   https://app.speedamobile.com/msg/webhooks/dlr/jkannel  (public)
+method  POST
+auth    hmac, with a shared secret
+```
+
+Note the public form goes through the `/msg/` prefix on `app.speedamobile.com`,
+which strips the prefix before forwarding to `:3100` — so your service still
+sees `/webhooks/dlr/jkannel`.
+
 
 A routing rule exists and is **disabled**:
 
@@ -313,20 +417,32 @@ If you are verifying routing, use an actual send or
 `GET /gateway/routing-decisions`. Do not conclude from the simulator that
 routing is broken.
 
-### 9.5 Quota and credit are not enforced yet
+### 9.5 Quota and credit ARE now enforced — this reversed on 2026-09-17
 
-`api_keys.customer_id` is what binds a credential to a customer's quota, credit,
-approved sender IDs and route bindings. No API endpoint sets it, and it has not
-been set for this key — that needs one SQL statement on the host, which is
-pending.
+The 2026-09-03 brief said entitlements were not enforced. **That is no longer
+true.** `api_keys.customer_id` was linked to customer `CPAAS-SMSONE`
+(`f1c61448-9134-4318-8cf9-197532706188`) on 2026-09-17, behind a gated check
+that verified credit, account status, sender ID and bind first.
 
-Until then the key submits **as the tenant**: the 100,000/day quota and the
-sender-ID allowlist exist on the customer record but are not enforced against
-CPAAS traffic. The 600/min **rate limit is** enforced (it lives on the key, not
-the customer).
+Every send now consumes, inside the same database transaction as the submit:
 
-Practical consequence: do not rely on the gateway to stop you exceeding quota.
-Count on your side if that matters.
+| Entitlement | Effect when exhausted |
+|---|---|
+| Daily quota — 100,000 | submit refused |
+| Prepaid credit (append-only ledger) | submit refused |
+| Approved sender IDs — `8888` only | submit refused |
+| Route bindings | submit refused |
+| Rate limit — 600/min (on the key) | `429` + `Retry-After` |
+
+**What this means for your error handling.** A submit can now fail for reasons
+that have nothing to do with the message: an exhausted quota or an empty credit
+balance produces a 4xx that looks like a validation error but is an *account*
+condition. Do not retry those, and do not report them to the end user as a bad
+request — surface them as a platform/billing alert. Treat them the same way you
+treat a 401: stop, alert a human.
+
+Because credit is now deducted per message, **a load test spends real balance.**
+Check the balance before running one.
 
 ---
 
@@ -366,3 +482,74 @@ Count on your side if that matters.
 
 A fuller human-facing reference lives in
 [`CPAAS-SMSONE-INTEGRATION.md`](./CPAAS-SMSONE-INTEGRATION.md).
+
+---
+
+## 12. How the two sides exchange information
+
+Two Claude Code instances work on this integration — one in `D:\JKANNEL`, one in
+`D:\CpaSS\Project` — in separate VS Code windows with **no shared memory**.
+Neither sees the other's conversation. Everything that must survive the gap has
+to be written down somewhere both can read.
+
+This section is the protocol. It exists because the MO webhook sat "blocked
+awaiting a URL" for 26 days while the endpoint that answers it was already
+committed in the other repo.
+
+### The three channels, in order of preference
+
+**1. Ask the running system.** Anything the API can answer, do not write down —
+query it. These never go stale:
+
+```bash
+GET /api/v1/openapi.json          # every route that exists, authoritative
+GET /api/v1/gateway/whoami        # scopes, rate limit, tenant, key prefix
+GET /api/v1/gateway/routing-decisions   # why a message went where it did
+GET /api/v1/health                # dependencies
+```
+
+A fact that can be queried should never be copied into a document. Copies rot;
+this brief has been wrong twice for exactly that reason (entitlements, console
+URL).
+
+**2. The two repos, via GitHub.** Each side owns one file and writes only to it:
+
+| Direction | File | Owner |
+|---|---|---|
+| JKANNEL → CPAAS | `docs/CPAAS-HANDOFF-JKANNEL-SMS.md` in **github.com/phyeroba/jkannel** | the JKANNEL Claude |
+| CPAAS → JKANNEL | `docs/integrations/JKANNEL-REPLY.md` in **github.com/phyeroba/cpaas** | the CPAAS Claude |
+
+Neither side edits the other's file. To read the other side's, `git pull` in
+that repo, or `gh api` the raw contents — both repos are on the same GitHub
+account and `gh` is installed on the workstation.
+
+**3. Peter.** Anything needing a decision rather than a fact — see the register
+below. He is also the signal that an update exists: after writing to your file,
+tell him in one line, so he can tell the other window to pull.
+
+### Rules for whatever you write
+
+- **Date every claim and say how it was verified.** "Verified 2026-09-29 by
+  `curl`" and "assumed from the schema" are different kinds of fact and the
+  reader must be able to tell them apart.
+- **State what is NOT true**, not just what is. The most expensive errors in
+  this integration have all been a document describing an intention as if it
+  were a shipped behaviour.
+- **Never write a credential.** Reference it by public prefix (`12a88b72`).
+  Secrets move through Peter, never through a repo, a doc or a commit.
+- **When you find the other side's document wrong, say so in your own file**
+  rather than editing theirs. The owner corrects it; that keeps one author per
+  file and makes the history readable.
+
+### Open items — who owes what
+
+| # | Item | Owed by | Status |
+|---|---|---|---|
+| 1 | Confirm the MO/DLR webhook URL, method and auth mode (§6) | **CPAAS** | Open — code exists, URL unconfirmed |
+| 2 | HMAC secret for that webhook, if `hmac` is chosen | **Peter** | Open |
+| 3 | Switch on MO rule `c7798671-…` once 1 and 2 land | JKANNEL | Blocked on 1 |
+| 4 | Decide loopback vs public base URL for production (§1) | **CPAAS** | Open — JKANNEL recommends loopback |
+| 5 | Pin the IP allowlist after first real traffic (§10) | JKANNEL | Blocked on 4 and on first traffic |
+| 6 | Carrier bind restored | **Peter → the carrier** | Open since 2026-09-08 |
+| 7 | Re-test an end-to-end send once 6 clears | Both | Blocked on 6 |
+| 8 | Entitlements linked | JKANNEL | **Done 2026-09-17** |
