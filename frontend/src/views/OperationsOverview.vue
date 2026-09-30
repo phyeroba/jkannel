@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import AppIcon from '../components/AppIcon.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MiniChart from '../components/MiniChart.vue';
 import { ApiError, apiRequest } from '../api';
@@ -410,11 +411,22 @@ interface HealthRow {
   name: string;
   detail: string;
   status: string;
+  /**
+   * The KIND of component, not its state.
+   *
+   * The list carried a status dot and a status badge — two encodings of the
+   * same fact — and nothing at all to say what each row was. An operator
+   * scanning three rows reads the names; an operator scanning a dozen reads
+   * the shapes, and there were none. The colour stays with the status; the
+   * icon says whether this is an engine, a store or an API.
+   */
+  icon: string;
 }
 
 const healthRows = computed<HealthRow[]>(() => [
   {
     name: engineName.value || 'Messaging engine',
+    icon: 'server',
     detail:
       monitoringState.value === 'ok'
         ? `transport ${engineTransport.value}`
@@ -430,6 +442,7 @@ const healthRows = computed<HealthRow[]>(() => [
   },
   {
     name: 'SQLBox message store',
+    icon: 'db',
     detail:
       queueState.value === 'ok'
         ? 'PostgreSQL SQLBox reachable'
@@ -445,10 +458,37 @@ const healthRows = computed<HealthRow[]>(() => [
   },
   {
     name: 'JKANNEL API',
+    icon: 'api',
     detail: apiState.value === 'healthy' ? 'REST control plane responding' : apiState.value,
     status: apiState.value,
   },
 ]);
+
+/**
+ * "30 Sep 08:11" rather than "2026-09-30T08:11:53.046Z".
+ *
+ * The incidents panel is the narrow half of the dashboard grid and the raw
+ * ISO string was the widest unbreakable thing in it. Wrapping it closed the
+ * overflow and took the rows to 141px, which is the same problem wearing the
+ * other axis. The seconds, the milliseconds and the offset are not what
+ * anyone reads off a dashboard; the duration beside it carries the precision.
+ *
+ * The year is dropped only when it is THIS year — an incident carried over
+ * from last year must not read as one from this week.
+ */
+function openedAtLabel(alert: RecordValue): string {
+  const raw = alert.opened_at ?? alert.openedAt;
+  if (raw === null || raw === undefined || raw === '') return 'unknown';
+  const parsed = new Date(String(raw));
+  if (Number.isNaN(parsed.getTime())) return String(raw);
+  return parsed.toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: parsed.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 function statusTone(status: string) {
   const value = status.toLowerCase();
@@ -490,31 +530,60 @@ function statusTone(status: string) {
       immediately to its right and there is no second field to confuse it with.
     -->
     <div class="dashboard-actions toolbar">
-      <button
-        class="secondary-button"
-        data-testid="refresh-dashboard"
-        :disabled="refreshing"
-        @click="manualRefresh"
-      >
-        {{ refreshing ? 'Refreshing…' : 'Refresh dashboard' }}</button
-      ><RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
+      <!--
+        The one thing on this bar that GOES somewhere keeps full button
+        weight. Everything else here is plumbing for the view itself.
+      -->
+      <RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
         >Ask AI Copilot</RouterLink
-      ><label class="filter-select"
-        ><span>Auto refresh</span
-        ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
-          <option :value="true">On</option>
-          <option :value="false">Off</option>
-        </select></label
-      ><label class="filter-select"
-        ><span>Every</span
-        ><select v-model.number="intervalSeconds" data-testid="dashboard-interval">
-          <option v-for="choice in refreshChoices" :key="choice" :value="choice">
-            {{ choice }}s
-          </option>
-        </select></label
-      ><span data-testid="dashboard-last-checked"
-        >Last checked: {{ refreshed }}{{ autoRefresh ? '' : ' — auto refresh is off' }}</span
       >
+      <!--
+        THE REFRESH CLUSTER.
+
+        "Refresh dashboard" was a full-width secondary button sitting first on
+        the bar, which gave the most prominent control on the screen to the
+        least consequential action — the dashboard already refreshes itself,
+        and the button only pulls the same numbers a few seconds early. Beside
+        it, "Auto refresh [On]" and "Every [30s]" were two separate labelled
+        selects reading as two unrelated filters.
+
+        They are one idea: how this page keeps itself current. Grouped to the
+        right, compacted, and — the functional half — the interval is disabled
+        while auto refresh is off, because an interval that governs nothing is
+        a control that answers questions it is not being asked.
+      -->
+      <div class="refresh-cluster">
+        <button
+          class="secondary-button is-compact"
+          data-testid="refresh-dashboard"
+          :disabled="refreshing"
+          @click="manualRefresh"
+        >
+          <AppIcon name="refresh" :size="14" />{{ refreshing ? 'Refreshing…' : 'Refresh' }}
+        </button>
+        <label class="filter-select is-compact"
+          ><span>Auto</span
+          ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
+            <option :value="true">On</option>
+            <option :value="false">Off</option>
+          </select></label
+        >
+        <label class="filter-select is-compact"
+          ><span>Every</span
+          ><select
+            v-model.number="intervalSeconds"
+            data-testid="dashboard-interval"
+            :disabled="!autoRefresh"
+          >
+            <option v-for="choice in refreshChoices" :key="choice" :value="choice">
+              {{ choice }}s
+            </option>
+          </select></label
+        >
+        <span class="refresh-stamp" data-testid="dashboard-last-checked"
+          >Last checked {{ refreshed }}{{ autoRefresh ? '' : ' · auto refresh off' }}</span
+        >
+      </div>
     </div>
     <section class="metrics-grid">
       <!--
@@ -627,8 +696,10 @@ function statusTone(status: string) {
         </header>
         <ul class="health-list" data-testid="health-list">
           <li v-for="row in healthRows" :key="row.name">
-            <span class="status-dot" :class="statusTone(row.status)"></span
-            ><span
+            <span class="health-icon" :class="statusTone(row.status)" aria-hidden="true"
+              ><AppIcon :name="row.icon" :size="15"
+            /></span>
+            <span
               ><strong>{{ row.name }}</strong
               ><small>{{ row.detail }}</small></span
             ><span class="status-badge" :class="statusTone(row.status)">{{ row.status }}</span>
@@ -653,12 +724,18 @@ function statusTone(status: string) {
         <div v-else class="table-wrap">
           <table>
             <thead>
+              <!--
+                This panel shares a row with System health, so it is the
+                narrow half of the grid, and five nowrap columns — one of
+                them a full timestamp — ran 681px past its edge. The condition
+                is prose and wraps; when it opened and how long it has been
+                open are one answer to "how bad is this".
+              -->
               <tr>
                 <th>Severity</th>
                 <th>Condition</th>
                 <th>Status</th>
                 <th>Opened</th>
-                <th>Duration</th>
               </tr>
             </thead>
             <tbody>
@@ -676,26 +753,39 @@ function statusTone(status: string) {
                     >{{ text(alert.severity) }}</span
                   >
                 </td>
-                <td>{{ text(alert.summary ?? alert.rule_name) }}</td>
+                <!-- Clamped on an inner SPAN, never on the cell. `-webkit-line-clamp`
+                     needs `display: -webkit-box`, and putting that on a `td`
+                     destroys its table-cell semantics — the column stops
+                     aligning with its header. The full text stays in `title`,
+                     and the row opens the alert. -->
+                <td class="cell-wrap">
+                  <span class="clamp-2" :title="text(alert.summary ?? alert.rule_name)">{{
+                    text(alert.summary ?? alert.rule_name)
+                  }}</span>
+                </td>
                 <td>{{ text(alert.status) }}</td>
-                <td>{{ text(alert.opened_at ?? alert.openedAt) }}</td>
                 <!--
                 "Longest running first" is this panel's own subtitle, and until
                 now nothing on it showed how long anything had been running.
                 Measured to now while open and to resolution once closed, so a
                 settled incident stops ageing on the dashboard.
               -->
-                <td class="mono" :data-testid="`incident-duration-${text(alert.id)}`">
-                  {{ alertDuration(alert) }}
+                <td>
+                  <span class="metric-stack">
+                    <span class="v mono" :data-testid="`incident-duration-${text(alert.id)}`">{{
+                      alertDuration(alert)
+                    }}</span>
+                    <small class="row-id">{{ openedAtLabel(alert) }}</small>
+                  </span>
                 </td>
               </tr>
               <tr v-if="alertsState === 'ok' && !recentAlerts.length">
-                <td colspan="5" class="empty-cell" data-testid="alerts-empty">
+                <td colspan="4" class="empty-cell" data-testid="alerts-empty">
                   No alert instances recorded.
                 </td>
               </tr>
               <tr v-if="alertsState === 'checking'">
-                <td colspan="5" class="empty-cell">Loading alerts…</td>
+                <td colspan="4" class="empty-cell">Loading alerts…</td>
               </tr>
             </tbody>
           </table>
@@ -724,18 +814,20 @@ function statusTone(status: string) {
       <div class="table-wrap">
         <table>
           <thead>
+            <!--
+              SIX COLUMNS, NOT ELEVEN. Same treatment as the Carriers
+              register, and for the same reason: eleven narrow columns of
+              figures is a spreadsheet, and the panel's own promise is that a
+              shift can be assessed in ten seconds. Metrics read together now
+              share a cell — nothing is dropped.
+            -->
             <tr>
               <th scope="col">Carrier</th>
               <th scope="col">Health</th>
-              <th scope="col">SMSCs</th>
-              <th scope="col">Sessions</th>
-              <th scope="col" class="numeric">MT TPS</th>
-              <th scope="col" class="numeric">Utilisation</th>
-              <th scope="col" class="numeric">Queue</th>
-              <th scope="col" class="numeric">P95 DLR</th>
-              <th scope="col" class="numeric">Reject</th>
-              <th scope="col" class="numeric">Open alerts</th>
-              <th scope="col">Last event</th>
+              <th scope="col">Connections</th>
+              <th scope="col">Traffic</th>
+              <th scope="col">Delivery</th>
+              <th scope="col">Alerts</th>
             </tr>
           </thead>
           <tbody>
@@ -760,51 +852,90 @@ function statusTone(status: string) {
                   carrier.health
                 }}</span>
               </td>
-              <td class="figures">{{ carrier.smscCount }}</td>
-              <td class="figures">{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</td>
-              <td class="figures numeric">
-                {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps }}
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.smscCount }}</span
+                    ><span class="k">SMSCs</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono"
+                      >{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</span
+                    ><span class="k">binds up</span></span
+                  >
+                </span>
               </td>
-              <td class="figures numeric">{{ utilisationLabel(carrier) }}</td>
-              <td class="figures numeric">{{ carrier.queuedMessages.toLocaleString() }}</td>
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{
+                      carrier.observedTps === null ? 'unknown' : carrier.observedTps
+                    }}</span
+                    ><span class="k">MT TPS</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ utilisationLabel(carrier) }}</span
+                    ><span class="k">of ceiling</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.queuedMessages.toLocaleString() }}</span
+                    ><span class="k">queued</span></span
+                  >
+                </span>
+              </td>
               <!--
               Delivery quality over the last 24 hours, from the DLR report. It
               is a second request and may be refused on its own — reports.view
               is not smsc.view — so these two cells say "not permitted" rather
               than an em dash an operator would read as "no receipts".
             -->
-              <td class="figures numeric" :data-testid="`dashboard-p95-${carrier.id}`">
-                {{
-                  deliveryDenied
-                    ? 'not permitted'
-                    : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
-                }}
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`dashboard-p95-${carrier.id}`">{{
+                      deliveryDenied
+                        ? 'not permitted'
+                        : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                    }}</span
+                    ><span class="k">P95 DLR</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`dashboard-reject-${carrier.id}`">{{
+                      deliveryDenied ? 'not permitted' : rejectShare(carrier.id)
+                    }}</span
+                    ><span class="k">reject</span></span
+                  >
+                </span>
               </td>
-              <td class="figures numeric" :data-testid="`dashboard-reject-${carrier.id}`">
-                {{ deliveryDenied ? 'not permitted' : rejectShare(carrier.id) }}
-              </td>
-              <td class="figures numeric">{{ carrier.openAlerts }}</td>
-              <!--
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.openAlerts }}</span
+                    ><span class="k">open</span></span
+                  >
+                  <!--
               The newest bind transition across the carrier's connections. "no
               transitions recorded" is meaningful on history that is never
               pruned: nothing has been observed to change, rather than older
               entries having aged out.
             -->
-              <td class="mono cell-tight" :data-testid="`dashboard-last-event-${carrier.id}`">
-                {{ carrier.lastEvent || 'no transitions recorded' }}
+                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
+                    carrier.lastEvent || 'no transitions recorded'
+                  }}</small>
+                </span>
               </td>
             </tr>
             <tr v-if="carriersState === 'ok' && !carriers.length">
-              <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-empty">
+              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
                 No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
                 network.
               </td>
             </tr>
             <tr v-if="carriersState === 'checking'">
-              <td colspan="11" class="empty-cell">Loading carriers…</td>
+              <td colspan="6" class="empty-cell">Loading carriers…</td>
             </tr>
             <tr v-if="carriersState === 'unavailable'">
-              <td colspan="11" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
                 Carrier connectivity is unavailable — the register could not be read.
               </td>
             </tr>

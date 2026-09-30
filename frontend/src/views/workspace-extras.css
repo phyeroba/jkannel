@@ -1124,3 +1124,89 @@ tbody td .chip-list {
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
 }
+
+/* COMPACT CONTROLS AND THE REFRESH CLUSTER -------------------------------
+   A page that keeps itself current needs a control for it, and that control
+   should not be the loudest thing on the screen. `.is-compact` is the smaller
+   size for a button or a labelled select that governs the VIEW rather than
+   the data — refresh, auto-refresh, its interval. */
+.secondary-button.is-compact,
+.primary-button.is-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+.filter-select.is-compact {
+  gap: 5px;
+}
+.filter-select.is-compact > span {
+  font-size: 11.5px;
+}
+.filter-select.is-compact select {
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+/* A select that governs nothing reads as a setting you have not made yet,
+   rather than one that does not apply. */
+.filter-select.is-compact select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.refresh-cluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  padding: 4px 4px 4px 10px;
+  border-left: 1px solid var(--border);
+}
+.refresh-stamp {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* SYSTEM HEALTH ROW ICONS -------------------------------------------------
+   The list had a status dot AND a status badge — the same fact twice — and
+   nothing saying what each row WAS. The badge keeps the state; the icon takes
+   the dot's place and says engine, store or API. It is tinted by status so
+   the row still reads at a glance, and it is aria-hidden because the badge
+   beside it already states the status in words. */
+.health-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.health-icon.good {
+  background: var(--ok-soft, var(--brand-soft));
+  color: var(--ok-strong, var(--ok, #1a7f37));
+}
+.health-icon.warn {
+  background: var(--warn-soft, var(--surface-2));
+  color: var(--warn-strong, var(--warn, #9a6700));
+}
+.health-icon.bad {
+  background: var(--bad-soft, var(--surface-2));
+  color: var(--bad-strong, var(--bad, #b42318));
+}
+
+/* Two lines, then an ellipsis. Always on an inner element, never on the cell:
+   `-webkit-line-clamp` requires `display: -webkit-box`, and a `td` carrying
+   that stops being a table cell — the column silently unaligns from its
+   header. The untruncated text belongs in `title` so nothing is lost. */
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
