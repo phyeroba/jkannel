@@ -195,3 +195,104 @@ carry across the console:
 - **Empty states that explain**, centred, rather than one grey line in an empty
   table.
 - **Export as a menu**, not one button per format.
+
+---
+
+## 4. Routing and Advanced Routing (`/routing`, `/routing-advanced`)
+
+Added 2026-09-30 from a second round of captures and write-up. Four pictures:
+the current Create-route dialog, the current Routing page, the redesigned
+Routing page, and the redesigned Advanced Routing page with its Edit panel.
+
+### What it looks like now
+
+`/routing` is 15 columns (priority, route, strategy, matches, target, fallback,
+alternatives, used/capacity, last transition, cost, window, deployment,
+enabled, updated, actions) with `Validate / Deploy / Rollback` on every row. A
+"Route simulator" panel sits above it with a **Simulate route** button that has
+to be pressed. `/routing-advanced` shows the same three routes again with a
+"Resolve preview" panel and a similar 12-column table.
+
+Create route is a small centre dialog: Name, Target SMSC, Destination prefix,
+Sender ID, Fallback SMSC — flat, ungrouped, with the fields in two uneven
+columns and a sentence of policy text at the bottom. Edit route is a larger
+dialog of the same shape plus seven day checkboxes stacked vertically.
+
+### Target — Routing
+
+**Header.** Subtitle becomes "Which SMSC carries each message, what happens
+when it fails, and a safe place to test before you deploy." `Export ▾` and
+`New route` on the right.
+
+**Summary strip**, four figures: `3 of 3` Live routes · `1 of 3` With a
+fallback (amber when any route has none) · `0` Awaiting deploy · `0 msg/s`
+Throughput now.
+
+**Test a destination** — replaces both "Route simulator" and "Resolve preview".
+Left half: Destination MSISDN and Sender ID, and an `Operator & rotation…`
+disclosure link. **It updates as you type**; there is no Simulate button. A
+caption states "Preview only: nothing is sent and no counter moves."
+
+Right half, `RESULT`: a heading `Sent via Kololo`, the route line
+`Route CPAAS-SMSONE Uganda mobile · priority 200 · priority`, then a failover
+row — a `Kololo · primary` pill, `if it fails →`, and an amber
+`No fallback, messages queue` pill. Beneath it **every route in priority order
+with a reason**: priority, name, why, and a pill reading `Selected`,
+`No match` or outranked. Reasons are written out: "Destination does not start
+with +25677", "Matches pattern and sender 8888", "Sender must be KAMEX".
+
+**Route table — six columns.** Tabs `All 3` · `Live 3` · `Not deployed 0` ·
+`Disabled 0`, with a search box and an All-SMSCs filter to their right (moving
+to their own line when narrow). Columns: `PRIORITY ↑ ROUTE` (sortable by
+clicking the header; name with `static · priority` beneath), `MATCHES`
+(**shortened wildcard lists** — `25670*|25671*|25672*|25674*…` becomes
+`25670–2*, 25674–9*` — with `sender 8888` in mono beneath), `TARGET →
+FALLBACK` (target, then `→ Local Fake B` or an amber `No fallback`), `LOAD`
+(`0 / 50/s` with a small bar beneath), `STATUS` (`● Live`).
+
+**No per-row Validate/Deploy/Rollback.** Those move into the route detail
+panel, opened by clicking the row. The footer says so:
+`3 of 3 routes · click a route for failover, history and deployment`.
+
+**Route detail panel** (right): failover chain, version history, and the
+`Validate`, `Deploy`, `Roll back`, `Archive` buttons.
+
+### Target — Advanced Routing
+
+Same shell, kept as its own page under Routing in the sidebar. Subtitle
+"Prefix, pattern and weighted routes, selection strategies, time windows and
+version history." Same summary strip.
+
+**Resolve preview** shows Operator and Rotation straight away rather than
+behind a link, with the caption "Rotation is the round-robin / load-balance
+counter. Increase it to see which target a weighted route picks next."
+
+Table adds `WEIGHTED TARGETS` (a split bar, or `— priority only`) and
+`WINDOW · COST` (`Always` / `06:00–22:00 Mon–Fri`, then `0.012 / msg` or
+`no cost set` in mono) in place of Load.
+
+### Target — the route editor (create and edit, one panel)
+
+A **side panel, not a centre dialog**, in four numbered steps:
+
+1. **ROUTE** — Name; Priority with an `Enabled` toggle beside it; hint
+   `Lower runs first. In use: 100, 200, 210`.
+2. **WHICH MESSAGES** — a `Prefix | Patterns` segmented control, then
+   Destination prefix and Sender ID side by side.
+3. **WHERE THEY GO** — Primary SMSC and Fallback SMSC side by side, each
+   showing capacity (`Kololo (kololo) · 50/s`); a
+   `Priority | Weighted | Round-robin` segmented control with a one-line
+   explanation of the chosen strategy; Cost per message.
+4. **WHEN IT APPLIES** — an `Always | Time window` segmented control. Days are
+   **toggle buttons, not seven stacked checkboxes**.
+
+On edit, a fifth step: **CHANGE REASON**, required, captioned "Recorded in the
+audit log and version history."
+
+Subtitle on create: "Validated and dry-run on create. Nothing goes live until
+you deploy." On edit: "Saving creates a new version and runs a dry-run. It goes
+live when you deploy."
+
+The panel warns when a priority is already taken and when there is no fallback,
+and the save button names what is still missing rather than sitting disabled
+without explanation.
