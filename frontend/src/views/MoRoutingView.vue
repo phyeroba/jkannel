@@ -30,6 +30,7 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import DetailDrawer from '../components/DetailDrawer.vue';
 import ModalDialog from '../components/ModalDialog.vue';
+import TabStrip from '../components/TabStrip.vue';
 import { canAccess, session } from '../stores/session';
 
 type RecordValue = Record<string, unknown>;
@@ -274,6 +275,19 @@ async function setPolling(enabled: boolean) {
 
 /** '' when the last sweep succeeded; the backend writes `last_error` on every sweep. */
 const lastSweepError = computed(() => text(ingest.value?.last_error, ''));
+
+/*
+ * TABS. The screen stacked five panels into 4,153px of a 1,000px viewport, and
+ * they are not stages of one task: configuring ingest is done once, reading the
+ * message log is daily, chasing a failed fan-out is an incident. Whoever was
+ * doing one scrolled past the other three.
+ *
+ * Rules is the default because it is the screen's subject, and the simulator
+ * shares that tab — "what would happen to this message?" is a question asked
+ * while looking at the rules, not instead of them.
+ */
+type MoTab = 'rules' | 'messages' | 'deliveries' | 'ingest';
+const activeTab = ref<MoTab>('rules');
 
 // --- Rules -------------------------------------------------------------------
 const rules = ref<RecordValue[]>([]);
@@ -828,6 +842,14 @@ async function retryDelivery(delivery: RecordValue) {
   }
 }
 
+/** Counts on the tabs, so a filling delivery backlog is visible unopened. */
+const moTabs = computed(() => [
+  { id: 'rules', label: 'Rules', count: ruleTotal.value || null },
+  { id: 'messages', label: 'Inbound messages', count: messageTotal.value || null },
+  { id: 'deliveries', label: 'Fan-out deliveries', count: deliveryTotal.value || null },
+  { id: 'ingest', label: 'Ingest', count: null },
+]);
+
 onMounted(() => {
   void loadSmscOptions();
   void loadIngest();
@@ -846,8 +868,35 @@ onMounted(() => {
       permission — an ingest can fan out to an SMS destination, so it can cause outbound traffic.
     </p>
 
+    <!--
+      FIVE PANELS, FOUR JOBS — SO TABS.
+
+      This screen stacked ingest configuration, a rule simulator, the rule
+      register, the inbound message log and the fan-out delivery log: 4,153px
+      in a 1,000px viewport. They are not stages of one task. Setting up ingest
+      is a configuration job done once; reading the message log is an everyday
+      one; chasing a failed fan-out is an incident one. An operator doing any
+      of them scrolled past the other three.
+
+      "Rules" leads because it is the screen's subject, and the simulator rides
+      with it — asking "what would happen to this message?" is something you do
+      while looking at the rules, not instead of it.
+    -->
+    <TabStrip
+      v-model="activeTab"
+      class="queue-tabs"
+      label="Inbound routing sections"
+      testid="mo-tab"
+      :tabs="moTabs"
+    />
+
     <!-- Ingest ---------------------------------------------------------------- -->
-    <section class="panel" data-testid="mo-ingest-panel" aria-label="Inbound ingest">
+    <section
+      v-show="activeTab === 'ingest'"
+      class="panel"
+      data-testid="mo-ingest-panel"
+      aria-label="Inbound ingest"
+    >
       <header class="panel-header">
         <div>
           <h2>Ingest</h2>
@@ -1038,7 +1087,12 @@ onMounted(() => {
     </section>
 
     <!-- Preview ---------------------------------------------------------------- -->
-    <section class="panel" data-testid="mo-preview-panel" aria-label="Inbound routing preview">
+    <section
+      v-show="activeTab === 'rules'"
+      class="panel"
+      data-testid="mo-preview-panel"
+      aria-label="Inbound routing preview"
+    >
       <header class="panel-header">
         <div>
           <h2>What would happen to this inbound message?</h2>
@@ -1159,7 +1213,12 @@ onMounted(() => {
     </section>
 
     <!-- Rules ------------------------------------------------------------------ -->
-    <section class="panel" data-testid="mo-rules-panel" aria-label="MO routing rules">
+    <section
+      v-show="activeTab === 'rules'"
+      class="panel"
+      data-testid="mo-rules-panel"
+      aria-label="MO routing rules"
+    >
       <header class="panel-header">
         <div>
           <h2>Inbound routing rules</h2>
@@ -1682,7 +1741,12 @@ onMounted(() => {
     </DetailDrawer>
 
     <!-- Inbound messages -------------------------------------------------------- -->
-    <section class="panel" data-testid="mo-messages-panel" aria-label="Inbound messages">
+    <section
+      v-show="activeTab === 'messages'"
+      class="panel"
+      data-testid="mo-messages-panel"
+      aria-label="Inbound messages"
+    >
       <header class="panel-header">
         <div>
           <h2>Inbound messages</h2>
@@ -1861,7 +1925,12 @@ onMounted(() => {
     </section>
 
     <!-- Deliveries ----------------------------------------------------------------- -->
-    <section class="panel" data-testid="mo-deliveries-panel" aria-label="Fan-out deliveries">
+    <section
+      v-show="activeTab === 'deliveries'"
+      class="panel"
+      data-testid="mo-deliveries-panel"
+      aria-label="Fan-out deliveries"
+    >
       <header class="panel-header">
         <div>
           <h2>Fan-out deliveries</h2>

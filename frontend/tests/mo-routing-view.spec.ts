@@ -163,6 +163,36 @@ describe('inbound (MO) routing view', () => {
     vi.unstubAllGlobals();
   });
 
+  /*
+   * The screen stacked five panels into 4,153px of a 1,000px viewport — ingest
+   * configuration, a simulator, the rule register, the message log and the
+   * fan-out log. Those are not stages of one task, so whoever was doing one
+   * scrolled past three others. It is 1,450px across four tabs now.
+   *
+   * `v-show`, not `v-if`: switching tabs is instant, and the panels keep their
+   * loaded state and scroll position rather than refetching.
+   */
+  it('shows one section at a time, defaulting to the rules it is about', async () => {
+    const { wrapper } = await mountView();
+    const visible = (id: string) => {
+      const el = wrapper.find(`[data-testid="${id}"]`);
+      return el.exists() && !(el.element as HTMLElement).style.display.includes('none');
+    };
+
+    expect(visible('mo-rules-panel')).toBe(true);
+    // The simulator rides with the rules: it is a question you ask while
+    // looking at them, not instead of them.
+    expect(visible('mo-preview-panel')).toBe(true);
+    expect(visible('mo-messages-panel')).toBe(false);
+    expect(visible('mo-deliveries-panel')).toBe(false);
+    expect(visible('mo-ingest-panel')).toBe(false);
+
+    await wrapper.get('[data-testid="mo-tab-deliveries"]').trigger('click');
+    expect(visible('mo-deliveries-panel')).toBe(true);
+    expect(visible('mo-rules-panel')).toBe(false);
+    wrapper.unmount();
+  });
+
   it('states which ingest path is active without claiming the push path is wired', async () => {
     const { wrapper } = await mountView();
     const sweep = overlay(wrapper, '[data-testid="mo-ingest-sweep-claim"]').text();
