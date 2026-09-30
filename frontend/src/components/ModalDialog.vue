@@ -40,6 +40,17 @@ const props = withDefaults(
     open: boolean;
     title: string;
     /**
+     * One line under the title saying what the dialog is for.
+     *
+     * Added because every create form in this console opened with a bare noun
+     * — "New carrier" — and then asked for a network code, an operational
+     * status and a country, with the explanation crammed into the field labels
+     * ("Name (required, up to 120 characters)"). The label should name the
+     * field; the dialog should say what it is for; the hint under a control
+     * should carry the rule.
+     */
+    subtitle?: string;
+    /**
      * Widens the card past the kit's 620px.
      *
      * A create form with two columns of fields does not fit the default, and
@@ -49,7 +60,7 @@ const props = withDefaults(
     wide?: boolean;
     testid?: string;
   }>(),
-  { wide: false, testid: 'modal-dialog' },
+  { wide: false, subtitle: '', testid: 'modal-dialog' },
 );
 
 const emit = defineEmits<{ close: [] }>();
@@ -141,15 +152,28 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         :aria-label="title"
         tabindex="-1"
       >
-        <header>
-          <h2>{{ title }}</h2>
+        <!--
+          The close control is an icon, not a full secondary button.
+
+          A 72px "Close" button sat level with the title and competed with it
+          for the eye, and on a dialog whose footer already has Cancel it was
+          the same action offered twice at equal weight. The icon keeps the
+          affordance, gives the title the header, and leaves Cancel as the one
+          worded way out. It keeps its accessible name.
+        -->
+        <header class="dialog-head">
+          <div class="dialog-heading">
+            <h2>{{ title }}</h2>
+            <p v-if="subtitle" class="dialog-subtitle">{{ subtitle }}</p>
+          </div>
           <button
-            class="secondary-button"
+            class="dialog-close"
             type="button"
+            aria-label="Close"
             :data-testid="`${testid}-close`"
             @click="emit('close')"
           >
-            Close
+            <span aria-hidden="true">×</span>
           </button>
         </header>
         <div class="dialog-body"><slot /></div>
@@ -165,5 +189,65 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
    needs the width, and wraps into unreadability without it. */
 .command-dialog.dialog-wide {
   width: min(900px, calc(100vw - 30px));
+}
+
+.dialog-head {
+  align-items: flex-start;
+}
+.dialog-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dialog-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  max-width: 62ch;
+}
+.dialog-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-md, 8px);
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dialog-close:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.dialog-close:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+/* A long form must scroll its BODY, not the whole card: the footer holds the
+   only way to commit, and pushing it off-screen is how a dialog ends up with an
+   invisible Save. `.dialog-body` already scrolls in the kit; this pins the
+   header and footer either side of it. */
+.command-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 60px);
+}
+.dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dialog-head,
+.dialog-foot {
+  flex-shrink: 0;
 }
 </style>

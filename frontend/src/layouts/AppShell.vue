@@ -9,7 +9,7 @@ import {
 } from '../navigation';
 import AppIcon from '../components/AppIcon.vue';
 import { canAccess, logout, session } from '../stores/session';
-import { clearBreadcrumbTrail, resolveBreadcrumbs } from '../stores/breadcrumbs';
+import { clearBreadcrumbTrail, resolveBreadcrumbs, resolvePageTitle } from '../stores/breadcrumbs';
 import { RANGE_PRESETS, selectedRange, setRangePreset } from '../stores/time-range';
 import { apiRequest } from '../api';
 
@@ -130,6 +130,8 @@ watch(activeGroup, expandActiveGroup, { immediate: true });
  * worse than no breadcrumb at all — it is a wrong answer to "where am I".
  */
 const breadcrumbs = computed(() => resolveBreadcrumbs(route));
+/** The entity's name on a detail route, the route's static title everywhere else. */
+const pageTitle = computed(() => resolvePageTitle(route));
 watch(
   () => route.path,
   () => clearBreadcrumbTrail(),
@@ -730,7 +732,7 @@ onUnmounted(() => {
         </nav>
         <div class="page-heading">
           <div>
-            <h1>{{ route.meta.title }}</h1>
+            <h1>{{ pageTitle }}</h1>
             <p>{{ route.meta.description }}</p>
           </div>
           <!--

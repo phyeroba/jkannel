@@ -43,6 +43,41 @@ export function setBreadcrumbTrail(path: string, crumbs: Crumb[]): void {
 export function clearBreadcrumbTrail(): void {
   dynamicTrail.value = null;
   trailPath.value = null;
+  dynamicTitle.value = null;
+}
+
+/**
+ * The page heading, for the same reason the trail exists.
+ *
+ * The shell renders `route.meta.title`, which is a STATIC string per route. On
+ * a register that is right — "Carriers" is the name of the page. On a detail
+ * route it is a lie of omission: opening MTN Uganda from the carrier list gave
+ * a page headed "Carrier", and opening Airtel from the same list gave a page
+ * headed "Carrier". The heading did not change, the URL is not in view once you
+ * are reading, and the only thing that distinguished the two screens was a
+ * breadcrumb in 12px grey. Operators reported "Open does nothing" — it worked
+ * every time; it just did not look like it had.
+ *
+ * So a detail view publishes the entity's name once it has loaded, under the
+ * same path guard as the trail: a heading belonging to the previous record is
+ * worse than a generic one, because a generic heading is merely vague while a
+ * stale one is wrong.
+ */
+const dynamicTitle = ref<string | null>(null);
+
+/**
+ * Publish the heading for the current route. Usually called alongside
+ * `setBreadcrumbTrail`, with the same `path`.
+ */
+export function setPageTitle(path: string, title: string): void {
+  trailPath.value = path;
+  dynamicTitle.value = title;
+}
+
+/** The heading to render: the published name when it belongs to this route. */
+export function resolvePageTitle(route: RouteLocationNormalizedLoaded): string {
+  if (dynamicTitle.value && trailPath.value === route.path) return dynamicTitle.value;
+  return typeof route.meta.title === 'string' ? route.meta.title : '';
 }
 
 /**

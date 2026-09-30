@@ -137,6 +137,124 @@ tbody td .chip-list {
   margin-left: auto;
 }
 /* ---------------------------------------------------------------------------
+   FORM ALERTS — what a form says when it refuses
+
+   `.form-error` was an unadorned pink bar with a sentence in it, sitting
+   between the last field and the buttons. It reads as decoration until you
+   notice the colour, it does not say WHICH field is wrong when there are
+   several, and it looks identical whether the form refused, the server
+   refused, or something merely needs noting.
+
+   These three share one shape — icon, bold lead, detail — and differ only in
+   tone, so an operator learns it once:
+
+     .form-alert.is-error    the form or the server refused; nothing was saved
+     .form-alert.is-warn     it will save, but read this first
+     .form-alert.is-ok       it saved
+
+   The icon is a CSS pseudo-element, so no markup change is needed at a call
+   site beyond the class, and it cannot be read out twice by a screen reader
+   (the block carries role="alert" and the glyph is decorative).
+   --------------------------------------------------------------------------- */
+.form-alert {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: start;
+  gap: var(--sp-3);
+  margin: var(--sp-4) 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-md, 8px);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.form-alert::before {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+.form-alert.is-error {
+  border-color: var(--bad, #dc2626);
+  background: color-mix(in srgb, var(--bad, #dc2626) 8%, transparent);
+  color: var(--text-strong);
+}
+.form-alert.is-error::before {
+  content: '!';
+  background: var(--bad, #dc2626);
+}
+.form-alert.is-warn {
+  border-color: var(--warn, #d97706);
+  background: color-mix(in srgb, var(--warn, #d97706) 10%, transparent);
+  color: var(--text-strong);
+}
+.form-alert.is-warn::before {
+  content: '!';
+  background: var(--warn, #d97706);
+}
+.form-alert.is-ok {
+  border-color: var(--good, #16a34a);
+  background: color-mix(in srgb, var(--good, #16a34a) 8%, transparent);
+  color: var(--text-strong);
+}
+.form-alert.is-ok::before {
+  content: '✓';
+  background: var(--good, #16a34a);
+}
+.form-alert strong {
+  display: block;
+}
+/* Several problems at once list rather than run together in one sentence. */
+.form-alert ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.form-alert li + li {
+  margin-top: 2px;
+}
+
+/* "required" as a quiet marker beside the label, rather than "(required, up to
+   120 characters)" inside it. The rule belongs in the hint under the control;
+   the label should be the field's name. */
+.field .req,
+.filter-select .req {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+/* A field the form is complaining about says so itself, so the operator does
+   not have to map a sentence at the bottom onto a box at the top. */
+.field.is-invalid input,
+.field.is-invalid select,
+.field.is-invalid textarea,
+.filter-select.is-invalid input,
+.filter-select.is-invalid select {
+  border-color: var(--bad, #dc2626);
+}
+.field-error {
+  display: block;
+  margin-top: 4px;
+  color: var(--bad, #dc2626);
+  font-size: 11.5px;
+}
+
+/* ---------------------------------------------------------------------------
    THE SHARED TABLE PAGER
 
    Geometry borrowed from `.pager` in design-authority.css, which is the kit's
@@ -903,4 +1021,54 @@ tbody td .chip-list {
 .status-presets .preset-active .preset-count {
   background: var(--surface);
   color: var(--brand);
+}
+
+/* GROUPED METRIC CELL ------------------------------------------------------
+   A register that gives every metric its own column stops fitting the panel
+   long before it stops being useful. The Carriers roll-up had sixteen columns
+   in a 1,292px pane: 1,910px of table, with Actions off the right edge.
+
+   The fix is not to delete metrics — an operator triaging a carrier wants all
+   of them. It is to stop pretending that metrics read as a PAIR are two
+   independent columns. Configured sessions and observed binds-up are one
+   question asked twice; queued and failed are one question; delivery rate and
+   its P95 are one question. Stacking each pair inside a single cell costs one
+   line of row height and returns a whole column of width.
+
+   Value first, label second, because the operator is scanning values down the
+   column and the label is there to say which one they are looking at. The
+   values are tabular-numeric so the digits line up between rows even though
+   each cell lays itself out. */
+.metric-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.metric-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+.metric-line .v {
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  color: var(--text-strong);
+}
+.metric-line .k {
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A stacked cell's own trailing note (a timestamp, a "never observed") already
+   has `.row-id`, which is block-level and mono. Inside the stack it needs to
+   stop being a third font size. */
+.metric-stack .row-id {
+  margin-top: 1px;
+  font-size: 11px;
+}
+/* An administrative status that is NOT active has to be legible as an
+   exception without becoming a second badge competing with the health one. */
+.is-warn-text {
+  color: var(--warn-strong, var(--warn, #9a6700));
 }

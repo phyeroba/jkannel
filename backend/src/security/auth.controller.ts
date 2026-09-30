@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthGuard, AuthenticatedRequest } from './auth.guard';
 import { AuthThrottleGuard, ThrottlePolicy } from './auth-throttle.guard';
@@ -49,6 +49,22 @@ export class AuthController {
     },
     @Req() request: RequestInfo,
   ) {
+    // `@Body()` is a TYPE ANNOTATION, not a check. A request with no body, a
+    // non-JSON body, or a JSON scalar reaches here as `undefined`, and reading
+    // `.tenant` off it threw — so the console's login endpoint answered a
+    // malformed request with 500 and an "internal error" correlation id. On an
+    // UNAUTHENTICATED endpoint that is the worst of both: it tells a caller
+    // they found a server fault when they sent a bad request, and it puts an
+    // UnhandledException in the log for anyone to provoke at will.
+    //
+    // 400 is the honest answer, and it must not name which field was missing
+    // beyond the shape — this endpoint is a guessing oracle and says as little
+    // as it can.
+    if (!body || typeof body !== 'object') {
+      throw new BadRequestException(
+        'A JSON object with tenant, username and password is required.',
+      );
+    }
     return this.auth.login(body.tenant, body.username, body.password, this.context(request), {
       totp: body.totp,
       recoveryCode: body.recoveryCode,
@@ -58,6 +74,10 @@ export class AuthController {
   @Post('refresh')
   @ThrottlePolicy('token', 'refresh')
   refresh(@Body() body: { refreshToken: string }, @Req() request: RequestInfo) {
+    // Same hazard as `login`, same answer.
+    if (!body || typeof body !== 'object') {
+      throw new BadRequestException('A JSON object with refreshToken is required.');
+    }
     return this.auth.refresh(body.refreshToken, this.context(request));
   }
 

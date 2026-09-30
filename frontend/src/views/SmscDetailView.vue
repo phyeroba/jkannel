@@ -32,7 +32,7 @@ import ObservabilityLimits from '../components/ObservabilityLimits.vue';
 import EventTimeline from '../components/EventTimeline.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import { canAccess, session } from '../stores/session';
-import { setBreadcrumbTrail } from '../stores/breadcrumbs';
+import { setBreadcrumbTrail, setPageTitle } from '../stores/breadcrumbs';
 import {
   controlEndpoint,
   operationVerb,
@@ -171,6 +171,7 @@ async function load() {
           ]
         : [{ label: 'SMSC Connections', to: '/smsc' }, { label: detail.name }],
     );
+    setPageTitle(route.path, detail.name);
   } catch (reason) {
     smsc.value = null;
     notFound.value = reason instanceof ApiError && reason.status === 404;

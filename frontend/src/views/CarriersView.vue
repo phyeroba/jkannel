@@ -236,6 +236,7 @@ const draftNotes = ref('');
 function openForm(carrier?: CarrierSummary) {
   showForm.value = true;
   formError.value = '';
+  invalid.value = { name: '', country: '', network: '' };
   notice.value = '';
   editingId.value = carrier?.id ?? '';
   draftName.value = carrier?.name ?? '';
@@ -248,29 +249,53 @@ function closeForm() {
   showForm.value = false;
   editingId.value = '';
   formError.value = '';
+  invalid.value = { name: '', country: '', network: '' };
+}
+
+/**
+ * Per-field complaints, so the message sits under the box it is about.
+ *
+ * The form used to stop at the FIRST problem and print one sentence between
+ * the last field and the buttons: fix the name, press Save, learn the country
+ * is wrong too, press Save again. All three are checked at once now and each
+ * one is shown where it applies; the block at the bottom summarises.
+ */
+const invalid = ref<{ name: string; country: string; network: string }>({
+  name: '',
+  country: '',
+  network: '',
+});
+const problemList = computed(() =>
+  [invalid.value.name, invalid.value.country, invalid.value.network].filter(Boolean),
+);
+
+/** Returns true when the draft is sound, filling `invalid` when it is not. */
+function validateDraft(): boolean {
+  const country = draftCountry.value.trim().toUpperCase();
+  const network = draftNetwork.value.trim();
+  invalid.value = {
+    name: draftName.value.trim() ? '' : 'A carrier name is required.',
+    // Checked here as well as server-side so the operator is told WHICH of the
+    // two codes is wrong, rather than handed a joined validation string.
+    country:
+      !country || /^[A-Z]{2}$/.test(country)
+        ? ''
+        : 'Use the two-letter ISO 3166-1 alpha-2 code, for example UG.',
+    network:
+      !network || /^[0-9]{4,6}$/.test(network)
+        ? ''
+        : '4–6 digits, MCC then MNC. Leading zeros count, so it is stored as text.',
+  };
+  return problemList.value.length === 0;
 }
 
 async function saveCarrier() {
   if (!canManage.value) return;
   formError.value = '';
+  if (!validateDraft()) return;
   const name = draftName.value.trim();
-  if (!name) {
-    formError.value = 'A carrier name is required.';
-    return;
-  }
-  // Checked here as well as server-side so the operator is told which of the
-  // two codes is wrong, rather than being handed a joined validation string.
   const country = draftCountry.value.trim().toUpperCase();
-  if (country && !/^[A-Z]{2}$/.test(country)) {
-    formError.value = 'Country must be a two-letter ISO 3166-1 alpha-2 code, for example UG.';
-    return;
-  }
   const network = draftNetwork.value.trim();
-  if (network && !/^[0-9]{4,6}$/.test(network)) {
-    formError.value =
-      'Network code must be 4–6 digits (MCC then MNC). Leading zeros are significant, so it stays text.';
-    return;
-  }
   const body = {
     name,
     countryCode: country || null,
@@ -388,15 +413,26 @@ onMounted(() => {
         testid="unassigned-state"
         :on-retry="loadUnassigned"
       >
+        <!--
+          THREE COLUMNS, NOT SIX.
+
+          This table used one column each for name, engine id, type, enabled and
+          lifecycle, plus a sixth holding a carrier `<select>` and an Attach
+          button. Six columns of which the last is two controls wide does not
+          fit the panel, so the pane scrolled sideways — and the control you
+          have to reach, Attach, was the one off the right edge.
+
+          Nothing was dropped. Name and engine id are one identity; type,
+          enabled and lifecycle are one status. Pairing them the way they are
+          read costs two lines of height and buys back the horizontal room the
+          action column actually needs.
+        -->
         <div class="table-wrap">
           <table data-testid="unassigned-table">
             <thead>
               <tr>
                 <th scope="col">Connection</th>
-                <th scope="col">Engine id</th>
-                <th scope="col">Type</th>
-                <th scope="col">Enabled</th>
-                <th scope="col">Lifecycle</th>
+                <th scope="col">Status</th>
                 <th scope="col">File under</th>
               </tr>
             </thead>
@@ -406,15 +442,17 @@ onMounted(() => {
                   <router-link class="text-link" :to="`/smsc/${smsc.engine_id}`">{{
                     smsc.name
                   }}</router-link>
+                  <small class="row-id">{{ smsc.engine_id }}</small>
                 </td>
-                <td class="mono">{{ smsc.engine_id }}</td>
-                <td>{{ smsc.type }}</td>
                 <td>
-                  <span class="status-badge" :class="smsc.enabled ? 'good' : 'muted'">{{
-                    smsc.enabled ? 'enabled' : 'disabled'
-                  }}</span>
+                  <span class="chip-list">
+                    <span class="status-badge" :class="smsc.enabled ? 'good' : 'muted'">{{
+                      smsc.enabled ? 'enabled' : 'disabled'
+                    }}</span>
+                    <span class="chip">{{ smsc.type }}</span>
+                    <span class="chip mono">{{ smsc.lifecycle_state }}</span>
+                  </span>
                 </td>
-                <td class="mono">{{ smsc.lifecycle_state }}</td>
                 <td class="row-actions">
                   <template v-if="canManage">
                     <label class="filter-select">
@@ -533,21 +571,38 @@ onMounted(() => {
           <table data-testid="carriers-table">
             <thead>
               <tr>
+                <!--
+                  EIGHT COLUMNS, NOT SIXTEEN.
+
+                  Every metric this register has ever shown is still here. What
+                  changed is that the ones an operator reads TOGETHER now share
+                  a cell instead of each claiming a column.
+
+                  Sixteen columns is 1,910px of table in a 1,292px panel, so
+                  the last four — open alerts, the connectivity event, status,
+                  and the Actions column — were off the right edge at 1600px.
+                  A register whose Actions are past the horizon is a register
+                  you cannot act from, and widening the screen is not a fix
+                  anyone has.
+
+                  The pairings are by question, not by tidiness:
+                    Carrier      who it is, and in which market
+                    Health       the roll-up verdict, and the admin status
+                                 (a healthy carrier can still be suspended)
+                    Connections  configured vs observed, side by side — the
+                                 whole point of Sessions next to Binds up
+                    Queue        waiting vs failed
+                    Throughput   rate, and that rate against its ceiling
+                    Delivery     how much arrived, and how long it took
+                    Alerts       what is open, and what last changed
+                -->
                 <th scope="col">Carrier</th>
-                <th scope="col">Market</th>
                 <th scope="col">Health</th>
-                <th scope="col">SMSCs</th>
-                <th scope="col">Sessions</th>
-                <th scope="col">Binds up</th>
-                <th scope="col">Queued</th>
-                <th scope="col">Failed</th>
-                <th scope="col">MT TPS</th>
-                <th scope="col">Utilisation</th>
+                <th scope="col">Connections</th>
+                <th scope="col">Queue</th>
+                <th scope="col">Throughput</th>
                 <th scope="col">Delivery</th>
-                <th scope="col">P95 DLR</th>
-                <th scope="col">Open alerts</th>
-                <th scope="col">Last connectivity event</th>
-                <th scope="col">Status</th>
+                <th scope="col">Alerts</th>
                 <th scope="col">Actions</th>
               </tr>
             </thead>
@@ -580,47 +635,95 @@ onMounted(() => {
                   <router-link class="text-link" :to="`/carriers/${carrier.id}`">{{
                     carrier.name
                   }}</router-link>
+                  <small class="row-id">{{ formatMarket(carrier) }}</small>
                   <small v-if="carrier.notes" class="row-id">{{ carrier.notes }}</small>
                 </td>
-                <td class="mono">{{ formatMarket(carrier) }}</td>
                 <td>
                   <!-- §17.1: the word carries the meaning; the colour only repeats it. -->
-                  <span
-                    class="status-badge"
-                    :class="healthTone(carrier.health)"
-                    :data-testid="`carrier-health-${carrier.id}`"
-                    :title="healthExplanation(carrier)"
-                    >{{ carrier.health }}</span
-                  >
+                  <span class="chip-list">
+                    <span
+                      class="status-badge"
+                      :class="healthTone(carrier.health)"
+                      :data-testid="`carrier-health-${carrier.id}`"
+                      :title="healthExplanation(carrier)"
+                      >{{ carrier.health }}</span
+                    >
+                  </span>
+                  <!-- Administrative status, not observed health. A carrier can
+                       be perfectly healthy and still be suspended, and the two
+                       answers must not be mistaken for one another. -->
+                  <small class="row-id" :class="{ 'is-warn-text': carrier.status !== 'active' }">{{
+                    carrier.status
+                  }}</small>
                 </td>
-                <td class="mono">{{ displayValue(carrier.smscCount, carrierState) }}</td>
                 <!--
-                  Configured, not observed. `instances = N` forks N SMPP
+                  Configured beside observed, which is the only reason those two
+                  numbers were ever adjacent. `instances = N` forks N SMPP
                   sessions behind one smsc-id and the engine reports them as
-                  one, so this is what we asked for rather than what is up. The
-                  Binds up column beside it is the observed half.
+                  one, so `sessions` is what we asked for and `binds up` is what
+                  answered.
                 -->
-                <td class="mono" :data-testid="`carrier-sessions-${carrier.id}`">
-                  {{ displayValue(carrier.configuredSessions, carrierState) }}
-                  <small class="row-id">configured</small>
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono">{{
+                        displayValue(carrier.smscCount, carrierState)
+                      }}</span>
+                      <span class="k">SMSCs</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-sessions-${carrier.id}`">{{
+                        displayValue(carrier.configuredSessions, carrierState)
+                      }}</span>
+                      <span class="k">sessions configured</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-binds-${carrier.id}`"
+                        >{{ displayValue(carrier.bindsHealthy, carrierState) }} /
+                        {{ displayValue(carrier.bindsTotal, carrierState) }}</span
+                      >
+                      <span class="k">binds up</span>
+                    </span>
+                    <span v-if="carrier.bindsUnobserved" class="metric-line">
+                      <span class="v mono">{{ carrier.bindsUnobserved }}</span>
+                      <span class="k">never observed</span>
+                    </span>
+                  </span>
                 </td>
-                <td class="mono" :data-testid="`carrier-binds-${carrier.id}`">
-                  {{ displayValue(carrier.bindsHealthy, carrierState) }} /
-                  {{ displayValue(carrier.bindsTotal, carrierState) }}
-                  <small v-if="carrier.bindsUnobserved" class="row-id"
-                    >{{ carrier.bindsUnobserved }} never observed</small
-                  >
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono">{{
+                        displayValue(carrier.queuedMessages, carrierState)
+                      }}</span>
+                      <span class="k">queued</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono">{{
+                        displayValue(carrier.failedMessages, carrierState)
+                      }}</span>
+                      <span class="k">failed</span>
+                    </span>
+                  </span>
                 </td>
-                <td class="mono">{{ displayValue(carrier.queuedMessages, carrierState) }}</td>
-                <td class="mono">{{ displayValue(carrier.failedMessages, carrierState) }}</td>
                 <!-- Summed from the latest snapshot of each bind. `unknown`,
                      not 0, when no bind has ever been sampled: an unobserved
                      carrier is not an idle one. -->
-                <td class="mono" :data-testid="`carrier-tps-${carrier.id}`">
-                  {{ carrier.observedTps === null ? 'unknown' : carrier.observedTps.toFixed(1) }}
-                </td>
-                <td class="mono" :data-testid="`carrier-utilisation-${carrier.id}`">
-                  {{ formatUtilisation(carrier.utilisation, carrierState) }}
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-tps-${carrier.id}`">{{
+                        carrier.observedTps === null ? 'unknown' : carrier.observedTps.toFixed(1)
+                      }}</span>
+                      <span class="k">MT TPS</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-utilisation-${carrier.id}`">{{
+                        formatUtilisation(carrier.utilisation, carrierState)
+                      }}</span>
+                      <span class="k">of ceiling</span>
+                    </span>
+                  </span>
                 </td>
                 <!--
                   Delivery quality over the last 24 hours, from the DLR report.
@@ -628,26 +731,43 @@ onMounted(() => {
                   reports.view: they must be able to tell a permission boundary
                   from a carrier that delivered nothing.
                 -->
-                <td class="mono" :data-testid="`carrier-delivery-${carrier.id}`">
-                  <template v-if="deliveryDenied">not permitted</template>
-                  <template v-else>{{
-                    formatShare(qualityFor(carrier.id)?.quality.deliveryRate ?? null, deliveryState)
-                  }}</template>
-                </td>
-                <td class="mono" :data-testid="`carrier-p95-${carrier.id}`">
-                  <template v-if="deliveryDenied">not permitted</template>
-                  <template v-else>{{
-                    formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
-                  }}</template>
-                </td>
-                <td class="mono">{{ displayValue(carrier.openAlerts, carrierState) }}</td>
-                <td class="mono" :data-testid="`carrier-last-event-${carrier.id}`">
-                  {{ carrier.lastEvent || 'no transitions recorded' }}
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-delivery-${carrier.id}`">
+                        <template v-if="deliveryDenied">not permitted</template>
+                        <template v-else>{{
+                          formatShare(
+                            qualityFor(carrier.id)?.quality.deliveryRate ?? null,
+                            deliveryState,
+                          )
+                        }}</template>
+                      </span>
+                      <span class="k">delivered</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`carrier-p95-${carrier.id}`">
+                        <template v-if="deliveryDenied">not permitted</template>
+                        <template v-else>{{
+                          formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                        }}</template>
+                      </span>
+                      <span class="k">P95 DLR</span>
+                    </span>
+                  </span>
                 </td>
                 <td>
-                  <span class="status-badge" :class="carrier.status === 'active' ? '' : 'warn'">{{
-                    carrier.status
-                  }}</span>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono">{{
+                        displayValue(carrier.openAlerts, carrierState)
+                      }}</span>
+                      <span class="k">open</span>
+                    </span>
+                    <small class="row-id" :data-testid="`carrier-last-event-${carrier.id}`">{{
+                      carrier.lastEvent || 'no transitions recorded'
+                    }}</small>
+                  </span>
                 </td>
                 <td class="row-actions">
                   <router-link class="secondary-button" :to="`/carriers/${carrier.id}`"
@@ -701,52 +821,137 @@ onMounted(() => {
          record. This was an inline composer that unfolded below a register of
          every carrier on the gateway, so on any real estate the form opened
          off-screen and pressing "New carrier" looked like it did nothing. -->
+    <!--
+      THE LABEL NAMES THE FIELD; THE HINT CARRIES THE RULE.
+
+      Every caption here used to be a sentence — "Name (required, up to 120
+      characters)", "Country (ISO 3166-1 alpha-2, e.g. UG)" — and because these
+      were `.filter-select` labels, the caption sat BESIDE its input and ate
+      half the row. Five fields of that read as a wall of parenthetical prose
+      with boxes wedged between them.
+
+      Now: a short label above its control, the rule in a `<small>` hint under
+      it where it is read at the moment of typing, and the fields grouped so
+      "who is this carrier" is visibly separate from "how do we treat it".
+    -->
     <ModalDialog
       :open="showForm"
       :title="editingId ? 'Edit carrier' : 'New carrier'"
+      :subtitle="
+        editingId
+          ? 'A carrier is the operator the connections underneath it belong to. Changing it does not touch those connections.'
+          : 'Create the operator that SMSC connections will be filed under. You can add the connections afterwards.'
+      "
       testid="carrier-form"
       wide
       @close="closeForm"
     >
-      <div class="dialog-grid">
-        <label class="filter-select filter-search">
-          <span>Name (required, up to 120 characters)</span>
-          <input v-model="draftName" data-testid="carrier-form-name" type="text" />
-        </label>
-        <label class="filter-select">
-          <span>Country (ISO 3166-1 alpha-2, e.g. UG)</span>
-          <input
-            v-model="draftCountry"
-            data-testid="carrier-form-country"
-            type="text"
-            maxlength="2"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Network code (MCC+MNC, 4–6 digits)</span>
-          <input v-model="draftNetwork" data-testid="carrier-form-network" type="text" />
-        </label>
-        <label class="filter-select">
-          <span>Operational status</span>
-          <select v-model="draftStatus" data-testid="carrier-form-status">
-            <option v-for="status in CARRIER_STATUSES" :key="status" :value="status">
-              {{ status }}
-            </option>
-          </select>
-        </label>
-        <label class="filter-select filter-search">
-          <span>Notes</span>
-          <input v-model="draftNotes" data-testid="carrier-form-notes" type="text" />
-        </label>
+      <fieldset class="dialog-group">
+        <legend>Identity</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span" :class="{ 'is-invalid': invalid.name }">
+            <span>Name <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftName"
+              data-testid="carrier-form-name"
+              type="text"
+              maxlength="120"
+              placeholder="MTN Uganda"
+              :aria-invalid="Boolean(invalid.name) || undefined"
+            />
+            <small v-if="invalid.name" class="field-error">{{ invalid.name }}</small>
+            <small v-else>Up to 120 characters. Shown wherever this carrier appears.</small>
+          </label>
+          <label class="field" :class="{ 'is-invalid': invalid.country }">
+            <span>Country</span>
+            <input
+              v-model="draftCountry"
+              data-testid="carrier-form-country"
+              type="text"
+              maxlength="2"
+              placeholder="UG"
+              :aria-invalid="Boolean(invalid.country) || undefined"
+            />
+            <small v-if="invalid.country" class="field-error">{{ invalid.country }}</small>
+            <small v-else>Two letters, ISO 3166-1 alpha-2.</small>
+          </label>
+          <label class="field" :class="{ 'is-invalid': invalid.network }">
+            <span>Network code</span>
+            <input
+              v-model="draftNetwork"
+              data-testid="carrier-form-network"
+              type="text"
+              inputmode="numeric"
+              placeholder="64110"
+              :aria-invalid="Boolean(invalid.network) || undefined"
+            />
+            <small v-if="invalid.network" class="field-error">{{ invalid.network }}</small>
+            <small v-else>MCC + MNC, 4–6 digits.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>Handling</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Operational status</span>
+            <select v-model="draftStatus" data-testid="carrier-form-status">
+              <option v-for="status in CARRIER_STATUSES" :key="status" :value="status">
+                {{ status }}
+              </option>
+            </select>
+            <small
+              >Suspended and retired carriers stay listed; only active ones take traffic.</small
+            >
+          </label>
+          <label class="field dialog-span">
+            <span>Notes</span>
+            <input
+              v-model="draftNotes"
+              data-testid="carrier-form-notes"
+              type="text"
+              placeholder="Account manager, contract reference, anything the next operator needs"
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      <!--
+        One block, whether the complaint came from this form or from the server,
+        and it lists every problem rather than only the first.
+      -->
+      <div
+        v-if="formError || problemList.length"
+        class="form-alert is-error"
+        role="alert"
+        data-testid="carrier-form-error"
+      >
+        <div>
+          <strong>{{
+            problemList.length > 1
+              ? `${problemList.length} things need fixing`
+              : 'This cannot be saved yet'
+          }}</strong>
+          <ul v-if="problemList.length > 1">
+            <li v-for="problem in problemList" :key="problem">{{ problem }}</li>
+          </ul>
+          <template v-else>{{ problemList[0] ?? formError }}</template>
+        </div>
       </div>
-      <p v-if="formError" class="form-error" role="alert" data-testid="carrier-form-error">
-        {{ formError }}
-      </p>
-      <p v-if="editingId" class="warn-notice" role="note" data-testid="carrier-form-clear-note">
-        Emptying the country, network code or notes field leaves the stored value unchanged. The
-        update endpoint treats a null as “no change”, so this form cannot clear a field once it has
-        been set — it can only replace it.
-      </p>
+
+      <div
+        v-if="editingId"
+        class="form-alert is-warn"
+        role="note"
+        data-testid="carrier-form-clear-note"
+      >
+        <div>
+          <strong>Emptying a field will not clear it</strong>
+          The update endpoint treats an empty value as “no change”, so country, network code and
+          notes can be replaced here but not removed.
+        </div>
+      </div>
       <template #footer>
         <button class="secondary-button" data-testid="carrier-form-cancel" @click="closeForm">
           Cancel
@@ -823,6 +1028,41 @@ onMounted(() => {
 }
 .unassigned-panel .row-actions {
   align-items: flex-end;
+}
+/* The carrier picker sizes itself to the LONGEST carrier name in the list, so
+   one verbosely-named carrier widened this column — and with it the table —
+   for every row. Cap it: the names that matter are distinguishable well inside
+   this width, and the full text is still in the open dropdown. */
+.unassigned-panel .row-actions .filter-select {
+  min-width: 0;
+}
+/* An explicit width, not `width: 1%`.
+   `1%` is the usual idiom for "shrink to your content", and it is wrong here:
+   it made the browser treat 1% as the PREFERRED width, hand the slack to the
+   first two columns, and leave this one 40px narrower than the select inside
+   it — so the control overflowed the cell and the pane scrolled sideways. The
+   three columns need only 436px of the 1,289px available, so there is no
+   contest to win; the column just has to state the size it wants. */
+.unassigned-panel th:last-child,
+.unassigned-panel td.row-actions {
+  width: 236px;
+}
+/* `min-width: 0` on the SELECT, not just on its label wrapper.
+   A form control carries an intrinsic minimum width, and while that minimum
+   stood the column could not shrink to the size declared above — narrowing
+   the column from 232px to 228px made the overflow WORSE, which is the
+   signature of a floor being hit rather than a width being respected. */
+.unassigned-panel .row-actions select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+/* Status chips wrap HERE, against the global nowrap for table chip lists.
+   That rule exists so a chip list does not become a ragged multi-line block in
+   a dense register; this cell holds at most three short chips and letting them
+   fall onto a second line is what frees the width the action column needs. */
+.unassigned-panel tbody td .chip-list {
+  flex-wrap: wrap;
 }
 </style>
 <style src="./workspace-extras.css"></style>

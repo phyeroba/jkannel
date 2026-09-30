@@ -37,7 +37,7 @@ import { ApiError, apiRequest } from '../api';
 import DataState from '../components/DataState.vue';
 import TabStrip from '../components/TabStrip.vue';
 import { canAccess, session } from '../stores/session';
-import { setBreadcrumbTrail } from '../stores/breadcrumbs';
+import { setBreadcrumbTrail, setPageTitle } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
 
@@ -101,6 +101,7 @@ async function loadCustomer() {
       { label: 'Customers', to: '/customers' },
       { label: text(customer.value?.name, customerId.value) },
     ]);
+    setPageTitle(route.path, text(customer.value?.name, customerId.value));
   } catch (cause) {
     customer.value = null;
     notFound.value = cause instanceof ApiError && cause.status === 404;

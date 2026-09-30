@@ -26,7 +26,7 @@ import { canAccess, session } from '../stores/session';
 import DataState from '../components/DataState.vue';
 import EventTimeline from '../components/EventTimeline.vue';
 import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
-import { setBreadcrumbTrail } from '../stores/breadcrumbs';
+import { setBreadcrumbTrail, setPageTitle } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import {
   bindTone,
@@ -85,6 +85,9 @@ async function loadCarrier() {
       { label: 'Carriers', to: '/carriers' },
       { label: carrier.value.name },
     ]);
+    // The heading, not just the crumb. Without this every carrier's page is
+    // headed "Carrier" and opening one from the register looks like a no-op.
+    setPageTitle(route.path, carrier.value.name);
   } catch (reason) {
     carrier.value = null;
     notFound.value = reason instanceof ApiError && reason.status === 404;

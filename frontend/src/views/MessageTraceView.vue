@@ -37,7 +37,7 @@ import DetailDrawer from '../components/DetailDrawer.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import { canAccess, session } from '../stores/session';
 import { privacyOf, type PrivacyState } from '../utils/privacy';
-import { setBreadcrumbTrail } from '../stores/breadcrumbs';
+import { setBreadcrumbTrail, setPageTitle } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
 import { formatMoment } from '../utils/connectivity';
 import {
@@ -267,6 +267,7 @@ async function load(id: string) {
       { label: 'Message Trace', to: '/message-trace' },
       { label: clean },
     ]);
+    setPageTitle(route.path, `Message ${clean}`);
   } catch (reason) {
     trace.value = null;
     error.value = messageFrom(reason, 'The message lifecycle could not be read.');
