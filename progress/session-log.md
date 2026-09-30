@@ -1,4 +1,4 @@
-﻿# Session Log
+# Session Log
 
 ## 2026-07-06 - Repository foundation and Phase 1 scaffold
 
@@ -212,7 +212,7 @@ Validate package builds and Docker Compose, repair any failures, then update the
 - Frontend delivered by two disjoint agents (AnalyticsView + MiniChart + sessions toolbar; ModuleWorkspace per-module detail drawers, status dots, config help, plugin/backup/api-gateway/runtime/settings surfaces) plus AppShell notification detail by the main thread. Fixed api.spec IPv4 expectation and the app-shell notification test for the new click-to-open behavior.
 - Repository restructure: deleted 25 duplicate/stale root spec .md (canonical copies remain under docs/), moved 9 living project docs to project/, kept only README.md and AGENTS.md at root; updated all cross-references and the documentation catalog.
 - docker-compose + .env.example: added REPORT_JOBS_ENABLED/INTERVAL_MS passthrough; API base already on 127.0.0.1 (IPv4 login fix).
-- Verification: backend 32 suites/105 tests, frontend 12 suites/59 tests, both typecheck + frontend build clean; 16 migrations apply to a fresh DB on boot; live UI smoke of notification detail, Plugins, and the Analytics dashboard all pass with real data; all 8 services healthy. New suggestions catalogued in project/SYSTEM_IMPROVEMENT_PROPOSALS.md Â§5.
+- Verification: backend 32 suites/105 tests, frontend 12 suites/59 tests, both typecheck + frontend build clean; 16 migrations apply to a fresh DB on boot; live UI smoke of notification detail, Plugins, and the Analytics dashboard all pass with real data; all 8 services healthy. New suggestions catalogued in project/SYSTEM_IMPROVEMENT_PROPOSALS.md §5.
 
 ## 2026-07-10 - Spec-conformance waves 1-6
 
@@ -294,3 +294,14 @@ Executed against the gap analysis's recommended build order.
 - **Three dialogs laid their fields out like a filter bar** — the only substantive finding. Fixed; see `project/CHANGELOG.md`.
 - **Corrected a false positive in `layout-audit.mjs`.** It reported three refresh toolbars as defects because its inline-label rule grouped by `section, .panel` without excluding toolbars. A toolbar is supposed to run its labels inline. Verified by screenshot before changing the tool, and the exclusion is narrow enough that the Log Explorer's actual search form (`.log-filters`) is still audited.
 - **Noted, not fixed:** 13 files under `frontend/src` fail `prettier --check` on `main`, and `/mo-routing` is the one register where no row opens anything and nothing on screen says why.
+
+## 2026-09-30 - The layout audit was only ever pointed at six screens
+
+- **Root cause was the tool.** `scripts/layout-audit.mjs` has had the right rules since it was written and defaulted to the six routes from the complaint that produced it; the other 44 screens were never measured. Pointed at all fifty (read from `navigation.ts`, as `route-smoke` already does, so a new screen is swept automatically) it found **23 findings across 15 screens**. Now **zero**, plus one exemption that is printed rather than swallowed.
+- **A correction.** I reported that seven screens had 20+ row tables with no pagination. That was wrong: my survey looked for `.cursor-pager` and missed ModuleWorkspace's `.pager`, so screens that page perfectly well were counted as broken. The real number was four, and two of those are bounded reference tables that should not page at all.
+- **Tall rows: one cause, eleven screens.** `/alerts` rendered 31 rows at 243px each. Nothing was broken — 14 columns shared 1,300px and a 126-character condition wrapped fourteen times in a 93px cell. Fixed once in the design system rather than eleven times.
+- **Three classes were used and never defined.** `.field-grid` — five views, eleven places — existed only in one `<style scoped>` block in a sixth view, where it could not reach them. `.split-fields` and `.button-row` were referenced and never written. Five findings, one cause.
+- **Heights:** `/api-reference` 30,623→4,626 · `/messages` 8,767→4,998 · `/alerts` 8,328→2,983 · `/alert-lifecycle` 7,464→2,781 · `/roles` 7,015→<2,500 · `/mo-routing` 4,153→1,450 · `/live-queue` 3,202→1,059. Nothing is over five screens; it was thirty.
+- **Two mistakes the tools caught.** `overflow: hidden` + ellipsis fixed the towers and failed the overflow audit 84 times, because hiding a value is not shortening it. Pinning `.button-row` with `flex: 0 0 100%` split the cluster on nine workspace screens, and `min-width: max-content` overflowed `.toolbar`, which is a three-column grid and not a flex row.
+- **One mistake nothing caught but me.** Four string replacements via PowerShell `Get-Content`/`Set-Content` re-encoded every em dash and arrow in LiveQueueView.vue. The repair script's first version refused to run because the damage was CP1252, not Latin-1, and a blanket inverse would have destroyed the characters above U+00FF.
+- Deployed to production: `e16f5b6`, then `0dace9a`. Engine untouched both times.

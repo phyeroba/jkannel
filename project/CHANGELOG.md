@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-09-30 (the audit only ever looked at six screens)
+
+`scripts/layout-audit.mjs` has had the right rules since it was written and
+defaulted to the six routes from the complaint that produced it. Pointed at all
+fifty — read from `navigation.ts`, as `route-smoke` already does — it found **23
+findings across 15 screens** on the first run. It is now at **zero**, plus one
+exemption that is printed rather than swallowed.
+
+**Tall rows had one cause on eleven screens.** `/alerts` rendered 31 rows at an
+average of 243px: 14 columns sharing 1,300px, so a 126-character condition landed
+in a 93px cell and wrapped fourteen times. Fixed in the design system — cells keep
+to one line, columns keep a usable minimum, and the table scrolls sideways in
+`.table-wrap`, which already had `overflow: auto`. An intermediate version added
+`overflow: hidden` and a max-width, fixed the towers, and failed the overflow
+audit 84 times: an ellipsis on a row that does not open a detail view does not
+shorten the value, it hides it. Nothing is clipped now.
+
+**Three classes were used and never defined.** `.field-grid` is used by five views
+in eleven places and existed only inside one `<style scoped>` block in a sixth,
+where it could not reach them; `.split-fields` and `.button-row` were referenced
+and never written at all. That accounted for five findings.
+
+**Heights**, measured before and after:
+
+| screen | before | after |
+|---|---|---|
+| `/api-reference` | 30,623px | 4,626px — groups start closed, a search opens them |
+| `/messages` | 8,767px | 4,998px — page size 100 → 50 |
+| `/alerts` | 8,328px | 2,983px |
+| `/alert-lifecycle` | 7,464px | 2,781px, and it finally has a pager |
+| `/roles` | 7,015px | under 2,500px |
+| `/mo-routing` | 4,153px | 1,450px across four tabs |
+| `/live-queue` | 3,202px | 1,059px across four tabs |
+
+Nothing in the product is over five screens now; it was thirty.
+
+Also: a shared `TablePager` supporting both paging models the backend has (offset
+with a real total, cursor with none, which it refuses to invent); Live Queue's
+binds became a collapsible list that distinguishes *disabled here* from *down*,
+which needed a new `enabled` field on `/queue-console/live`; and the audit learned
+that a container measures only the buttons it owns directly, because `.button-row`
+is how a screen declares which buttons mean one thing.
+
 ## 2026-09-29b (the signature that was the secret)
 
 The longest-standing security defect on the board, closed. Two separate problems
