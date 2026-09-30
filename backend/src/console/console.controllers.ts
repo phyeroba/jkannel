@@ -610,6 +610,17 @@ export class AlertsController {
   @Get() @RequirePermissions('alerts.view') list(@Req() r: Request, @Query() q: any = {}) {
     return this.repository.listAlerts(actor(r), q);
   }
+  /**
+   * Counts by status and severity for the whole table, so the console's
+   * status tabs can carry a real number instead of counting the page they
+   * happen to have loaded.
+   *
+   * Declared before `:id`, or Nest matches "summary" as an alert id and this
+   * route is never reached.
+   */
+  @Get('summary') @RequirePermissions('alerts.view') summary(@Req() r: Request) {
+    return this.repository.alertSummary(actor(r));
+  }
   @Get('export.csv') @RequirePermissions('alerts.view') exportCsv(
     @Req() r: Request,
     @Query() q: any = {},

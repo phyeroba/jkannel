@@ -1028,6 +1028,44 @@ export class ConsoleRepository {
       query,
     );
   }
+  /**
+   * Counts by status and by severity, over the WHOLE alert table.
+   *
+   * The console wants to put a count on each status tab, and the obvious way
+   * to get one — count the rows already loaded — is wrong: the alerts grid is
+   * server-paginated, so that counts the current page. A tab reading
+   * "open 50" when there are 312 open alerts is worse than a tab with no
+   * count at all, because it looks like an answer.
+   *
+   * Runs through `inTenant` like every other read here, so row-level security
+   * applies to the aggregate exactly as it does to the list. A summary that
+   * counted rows the caller may not read would leak the size of another
+   * tenant's problem.
+   */
+  async alertSummary(actor: Actor) {
+    return this.inTenant(actor, async (c) => {
+      const tally = async (column: 'status' | 'severity') => {
+        // The column name is not interpolated from input — it is one of two
+        // literals chosen here — and severity falls back to the rule's when
+        // the instance did not record one, matching what the list displays.
+        const expression = column === 'status' ? 'a.status' : 'COALESCE(a.severity, r.severity)';
+        const rows = (
+          await c.query(
+            `SELECT ${expression} AS key, COUNT(*)::int AS n
+               FROM alert_instances a
+               LEFT JOIN alert_rules r ON r.id = a.rule_id
+              GROUP BY 1`,
+          )
+        ).rows as Array<{ key: string | null; n: number }>;
+        // A NULL key is a real state of the data, not a row to drop: an alert
+        // with no severity recorded anywhere still exists and still counts.
+        return Object.fromEntries(rows.map((row) => [row.key ?? 'unknown', row.n]));
+      };
+      const [byStatus, bySeverity] = await Promise.all([tally('status'), tally('severity')]);
+      const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
+      return { total, byStatus, bySeverity };
+    });
+  }
   async createAlertRule(actor: Actor, value: any) {
     return this.inTenant(actor, async (c) => {
       const row = (

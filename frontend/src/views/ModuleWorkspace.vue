@@ -170,6 +170,15 @@ interface Workspace {
   creatable?: boolean;
   createKind?: 'smsc' | 'route' | 'configuration' | 'invitation';
   grid?: GridConfig;
+  /**
+   * A whole-table tally, for the count on each status tab.
+   *
+   * It has to come from the SERVER. The obvious source — count the rows the
+   * grid has already loaded — counts the current PAGE, so on a paginated
+   * register a tab would read "open 50" while 312 alerts are open. A wrong
+   * count is worse than none, because it looks like an answer.
+   */
+  summary?: { endpoint: string; tabField: string };
   columns?: ColumnDefinition[];
 }
 
@@ -720,6 +729,7 @@ const definitions: Record<string, Workspace> = {
     search: 'Condition, severity, resource, or state',
     endpoint: '/alerts',
     action: 'Refresh',
+    summary: { endpoint: '/alerts/summary', tabField: 'status' },
     grid: {
       sortFields: ['openedAt', 'status', 'severity'],
       defaultSort: '-openedAt',
@@ -1228,6 +1238,40 @@ const MESSAGE_STATUS_CHOICES = [
 const sortField = ref('');
 const sortDirection = ref<'asc' | 'desc'>('asc');
 const gridFilters = ref<Record<string, string>>({});
+interface WorkspaceSummary {
+  total: number;
+  byStatus: Record<string, number>;
+  bySeverity: Record<string, number>;
+}
+/**
+ * Whole-table counts, or null when this workspace has none and when the
+ * request failed. Null renders NOTHING — a summary strip that silently shows
+ * zeros after a failed fetch would report an empty system.
+ */
+const summary = ref<WorkspaceSummary | null>(null);
+async function loadSummary() {
+  const config = workspace.value?.summary;
+  if (!config) {
+    summary.value = null;
+    return;
+  }
+  try {
+    const payload = await apiRequest<WorkspaceSummary>(config.endpoint);
+    summary.value = payload ?? null;
+  } catch {
+    // Deliberately silent, and deliberately null. This is decoration over a
+    // register that loaded fine; failing to tally must not raise an error
+    // banner over a working screen, and must not invent a tally either.
+    summary.value = null;
+  }
+}
+/** Set the tab's filter and reload from the first page. */
+function selectSummaryTab(value: string) {
+  const field = workspace.value?.summary?.tabField;
+  if (!field) return;
+  gridFilters.value[field] = value;
+  applyGrid();
+}
 const limit = ref(50);
 const offset = ref(0);
 const total = ref(0);
@@ -1926,6 +1970,9 @@ function detectUnavailableSource(payload: unknown) {
 
 async function load(preserveNotice = false) {
   if (!workspace.value) return;
+  // Not awaited: the tally is decoration over the register and must never
+  // delay it, nor fail it.
+  void loadSummary();
   loading.value = true;
   error.value = '';
   actionError.value = '';
@@ -4290,6 +4337,69 @@ onUnmounted(() => {
       </button>
     </section>
 
+    <!--
+      SUMMARY STRIP AND STATUS TABS.
+
+      The alerts register opened on a page of rows and a row of dropdowns,
+      and answered none of the questions an operator actually arrives with:
+      how many are open, how many are critical, is this getting worse. They
+      had to read it off the table, which showed fifty of them.
+
+      Every count here comes from `GET /alerts/summary`, which tallies the
+      whole table under the caller's own row-level security. It is not
+      derived from the loaded rows: the grid is paginated, so that would
+      count the page and put a confident wrong number on a tab.
+
+      The tabs are BUTTONS, not a `tablist`. They filter a register that
+      stays on screen; they do not swap panels. Calling them tabs in the
+      accessibility tree would promise a relationship that is not there.
+    -->
+    <div v-if="summary" class="summary-strip" data-testid="workspace-summary">
+      <div class="summary-total">
+        <strong>{{ summary.total.toLocaleString() }}</strong>
+        <span>{{ workspace?.noun }}s in total</span>
+      </div>
+      <div class="summary-severities">
+        <span
+          v-for="(count, severity) in summary.bySeverity"
+          :key="severity"
+          class="status-badge"
+          :class="badgeTone(String(severity))"
+          :data-testid="`summary-severity-${severity}`"
+        >
+          {{ severity }}
+          <b>{{ count }}</b>
+        </span>
+      </div>
+    </div>
+    <div
+      v-if="summary && workspace?.summary"
+      class="status-presets"
+      role="group"
+      aria-label="Filter by status"
+      data-testid="workspace-status-tabs"
+    >
+      <button
+        type="button"
+        class="secondary-button"
+        :class="{ 'preset-active': !gridFilters[workspace.summary.tabField] }"
+        data-testid="status-tab-all"
+        @click="selectSummaryTab('')"
+      >
+        All<span class="preset-count">{{ summary.total }}</span>
+      </button>
+      <button
+        v-for="(count, status) in summary.byStatus"
+        :key="status"
+        type="button"
+        class="secondary-button"
+        :class="{ 'preset-active': gridFilters[workspace.summary.tabField] === status }"
+        :data-testid="`status-tab-${status}`"
+        @click="selectSummaryTab(String(status))"
+      >
+        {{ status }}<span class="preset-count">{{ count }}</span>
+      </button>
+    </div>
     <section class="toolbar panel" :class="{ 'grid-toolbar': Boolean(grid) }">
       <label v-if="searchIsLive" class="filter-search">
         <span class="sr-only">Search {{ workspace.noun }} records</span>

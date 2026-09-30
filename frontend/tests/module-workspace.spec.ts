@@ -58,6 +58,29 @@ const stubDownloads = () => {
   return vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 };
 
+/**
+ * The first request to the REGISTER, ignoring anything else the screen
+ * fetches alongside it.
+ *
+ * These assertions used to read `mock.calls[0][0]`, which silently meant "the
+ * first fetch of any kind". Adding the alerts summary tally — which fires
+ * beside the grid load, deliberately not awaited — made that the summary URL
+ * and broke three tests that were not about summaries at all. Naming the call
+ * you mean is both clearer and immune to the next thing the screen loads.
+ */
+/** Every request to the register, in order — summary tallies excluded. */
+const gridCalls = (fetchMock: { mock: { calls: unknown[][] } }, path: string): string[] =>
+  fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes(path));
+
+const gridCall = (fetchMock: { mock: { calls: unknown[][] } }, path: string): string => {
+  const hit = fetchMock.mock.calls.find((call) => String(call[0]).includes(path));
+  if (!hit)
+    throw new Error(
+      `no request to ${path}; saw ${fetchMock.mock.calls.map((c) => String(c[0])).join(', ')}`,
+    );
+  return String(hit[0]);
+};
+
 describe('module workspace behavior', () => {
   /**
    * Regression: Customers, API Gateway, Plugins and Backup had no grid config,
@@ -257,40 +280,48 @@ describe('module workspace behavior', () => {
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
 
     // Initial load applies the module default sort and page bounds.
-    expect(fetchMock.mock.calls[0][0]).toContain('/alerts?sort=-openedAt&limit=50&offset=0');
+    expect(gridCall(fetchMock, '/alerts?')).toContain('/alerts?sort=-openedAt&limit=50&offset=0');
     expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 120');
 
     // The search input is debounced before it reaches the server.
     await overlay(wrapper, '[data-testid="workspace-search"]').setValue('gateway');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
-    expect(fetchMock.mock.calls[1][0]).toContain('search=gateway');
-    expect(fetchMock.mock.calls[1][0]).toContain('sort=-openedAt');
+    expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(1);
+    await vi.waitFor(() => expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(2), {
+      timeout: 2000,
+    });
+    expect(gridCalls(fetchMock, '/alerts?')[1]).toContain('search=gateway');
+    expect(gridCalls(fetchMock, '/alerts?')[1]).toContain('sort=-openedAt');
 
     // Sort field and direction changes reload immediately.
     await overlay(wrapper, '[data-testid="grid-sort"]').setValue('severity');
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(fetchMock.mock.calls[2][0]).toContain('sort=-severity');
+    await vi.waitFor(() => expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(3));
+    expect(gridCalls(fetchMock, '/alerts?')[2]).toContain('sort=-severity');
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
     await overlay(wrapper, '[data-testid="grid-sort-direction"]').trigger('click');
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(fetchMock.mock.calls[3][0]).toContain('sort=severity');
+    await vi.waitFor(() => expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(4));
+    expect(gridCalls(fetchMock, '/alerts?')[3]).toContain('sort=severity');
 
     // Enum filters render as dropdowns and produce filter.<field> params.
     await overlay(wrapper, '[data-testid="grid-filter-status"]').setValue('open');
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
-    expect(fetchMock.mock.calls[4][0]).toContain('filter.status=open');
+    await vi.waitFor(() => expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(5));
+    expect(gridCalls(fetchMock, '/alerts?')[4]).toContain('filter.status=open');
 
     // Pagination advances the offset and keeps every other parameter.
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
     await overlay(wrapper, '[data-testid="grid-next"]').trigger('click');
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
-    expect(fetchMock.mock.calls[5][0]).toContain('offset=50');
-    expect(fetchMock.mock.calls[5][0]).toContain('filter.status=open');
+    await vi.waitFor(() => expect(gridCalls(fetchMock, '/alerts?')).toHaveLength(6));
+    expect(gridCalls(fetchMock, '/alerts?')[5]).toContain('offset=50');
+    expect(gridCalls(fetchMock, '/alerts?')[5]).toContain('filter.status=open');
   });
 
   it('normalizes both bare arrays and grid envelopes defensively', async () => {
-    const fetchMock = vi.fn().mockImplementationOnce(() => apiResponse(records));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((url: string) =>
+        String(url).includes('/alerts/summary')
+          ? apiResponse({ total: 2, byStatus: {}, bySeverity: {} })
+          : apiResponse(records),
+      );
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
     await vi.waitFor(() => expect(overlayAll(wrapper, 'tbody tr')).toHaveLength(2));
@@ -371,7 +402,7 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/reports', 'Reports');
     await vi.waitFor(() => expect(wrapper.text()).toContain('120'));
-    expect(fetchMock.mock.calls[0][0]).toContain('/reports/volume?sort=-periodStart');
+    expect(gridCall(fetchMock, '/reports/volume?')).toContain('/reports/volume?sort=-periodStart');
     expect(overlayHas(wrapper, '[data-testid="grid-filter-periodType"]')).toBe(true);
     expect(overlayHas(wrapper, '[data-testid="grid-filter-scope"]')).toBe(true);
     await vi.waitFor(() =>
@@ -414,7 +445,7 @@ describe('module workspace behavior', () => {
     vi.stubGlobal('fetch', fetchMock);
     const wrapper = await mountWorkspace('/logs-audit', 'Logs & Audit');
     await vi.waitFor(() => expect(wrapper.text()).toContain('route.deploy'));
-    expect(fetchMock.mock.calls[0][0]).toContain('/audit-events?sort=-createdAt');
+    expect(gridCall(fetchMock, '/audit-events?')).toContain('/audit-events?sort=-createdAt');
     const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining([
@@ -646,5 +677,84 @@ describe('module workspace — an action that fails', () => {
     // identity and the pager rather than a column it does not have.
     expect(wrapper.text()).toContain('record-1');
     expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 2');
+  });
+});
+
+/**
+ * THE COUNTS ON THE STATUS TABS COME FROM THE SERVER.
+ *
+ * This is the whole reason `GET /alerts/summary` exists. Counting the rows
+ * the grid has loaded is one line of code and gives the size of the current
+ * PAGE — so on a register paginated at fifty, a tab reads "open 50" while
+ * three hundred alerts are open. That is a confident wrong answer, and a
+ * wrong count is worse than no count because it looks like one.
+ */
+describe('module workspace — summary strip', () => {
+  const summary = {
+    total: 312,
+    byStatus: { open: 300, resolved: 12 },
+    bySeverity: { critical: 9 },
+  };
+
+  const stub = () =>
+    vi
+      .fn()
+      .mockImplementation((url: string) =>
+        String(url).includes('/alerts/summary')
+          ? apiResponse(summary)
+          : apiResponse(gridPage(records, 312, 50, 0)),
+      );
+
+  it('shows the whole-table tally, not the size of the loaded page', async () => {
+    vi.stubGlobal('fetch', stub());
+    const wrapper = await mountWorkspace('/alerts', 'Alerts');
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="workspace-summary"]')).toBe(true),
+    );
+    // Two rows are loaded. Nothing on the strip may say "2".
+    expect(overlay(wrapper, '[data-testid="workspace-summary"]').text()).toContain('312');
+    expect(overlay(wrapper, '[data-testid="status-tab-open"]').text()).toContain('300');
+    expect(overlay(wrapper, '[data-testid="status-tab-all"]').text()).toContain('312');
+    wrapper.unmount();
+  });
+
+  it('asks the server for that status when a tab is pressed', async () => {
+    const fetchMock = stub();
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/alerts', 'Alerts');
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="status-tab-open"]')).toBe(true),
+    );
+    fetchMock.mockClear();
+    await overlay(wrapper, '[data-testid="status-tab-open"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (call) => String(call[0]).includes('/alerts?') && String(call[0]).includes('status=open'),
+        ),
+      ).toBe(true),
+    );
+    wrapper.unmount();
+  });
+
+  // A failed tally must leave the register alone. Rendering zeros would say
+  // the system is empty; raising an error would take down a screen that loaded.
+  it('renders no strip at all when the tally cannot be read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementation((url: string) =>
+          String(url).includes('/alerts/summary')
+            ? Promise.reject(new Error('summary unavailable'))
+            : apiResponse(gridPage(records, 312, 50, 0)),
+        ),
+    );
+    const wrapper = await mountWorkspace('/alerts', 'Alerts');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    expect(overlayHas(wrapper, '[data-testid="workspace-summary"]')).toBe(false);
+    expect(overlayHas(wrapper, '[data-testid="api-state"]')).toBe(false);
+    expect(wrapper.text()).toContain('record-1');
+    wrapper.unmount();
   });
 });
