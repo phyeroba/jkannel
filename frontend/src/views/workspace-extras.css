@@ -1261,3 +1261,24 @@ tbody td .chip-list {
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }
+
+/* AN OPAQUE VALUE IS CAPPED, NOT WRAPPED --------------------------------
+   A UUID, a checksum, a user agent or a request path is matched, copied or
+   ignored — never read end to end. Wrapping one makes the row tall without
+   making the value legible; leaving it at natural width makes the whole
+   table wider than its panel. One user-agent string was holding 835px of
+   the Active Sessions register open.
+
+   So: cap it, ellipsis it, and keep the full text in the cell's `title`.
+   Applied per column. A blanket version of this on every `td` was tried
+   and failed the overflow audit on 84 screens, because most cells should
+   size to their content. */
+tbody td.cell-clip {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+tbody td.cell-clip .row-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

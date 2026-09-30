@@ -665,7 +665,13 @@ onMounted(() => {
                 </span>
                 <small class="row-id mono">{{ text(role.id) }}</small>
               </td>
-              <td>{{ text(role.description) }}</td>
+              <!-- Prose. Wraps and clamps rather than setting the table's
+                   width from the longest description. -->
+              <td class="cell-wrap">
+                <span class="clamp-2" :title="text(role.description)">{{
+                  text(role.description)
+                }}</span>
+              </td>
               <!--
                 A SAMPLE, NOT THE WHOLE GRANT SET.
 
@@ -689,10 +695,9 @@ onMounted(() => {
                     v-if="stringsOf(role.permissions).length > PERMISSION_CHIPS"
                     class="chip muted"
                     :data-testid="`role-more-${text(role.id)}`"
-                    :title="stringsOf(role.permissions).join(', ')"
+                    :title="`${stringsOf(role.permissions).join(', ')} — the Capability matrix below lists these in full`"
                   >
-                    +{{ stringsOf(role.permissions).length - PERMISSION_CHIPS }} more · see the
-                    matrix below
+                    +{{ stringsOf(role.permissions).length - PERMISSION_CHIPS }} more
                   </span>
                   <span v-if="!stringsOf(role.permissions).length" class="chip muted">
                     no permissions granted
@@ -705,7 +710,11 @@ onMounted(() => {
               <td>
                 <span v-if="userState === 'error'" class="cell-health">{{ userError }}</span>
                 <span v-else-if="userState === 'loading'" class="cell-health">loading…</span>
-                <span v-else-if="holdersOf(role).length" class="mono">
+                <span
+                  v-else-if="holdersOf(role).length"
+                  class="mono clamp-1"
+                  :title="holdersOf(role).join(', ')"
+                >
                   {{ holdersOf(role).join(', ') }}
                 </span>
                 <span v-else class="cell-health">nobody holds this role</span>

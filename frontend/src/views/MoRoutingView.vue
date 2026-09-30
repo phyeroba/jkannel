@@ -1354,10 +1354,26 @@ onMounted(() => {
               @keydown.enter="openRuleDetail(text(rule.id, ''))"
             >
               <td class="mono">{{ rulesInEvaluationOrder ? ruleOffset + index + 1 : '·' }}</td>
-              <td>
+              <!--
+                THE WIDEST CELL IN THE CONSOLE, AT 1,701px.
+
+                Name, then a UUID, then a free-text description, all on
+                unwrapped lines — so this one cell put the inbound-rules table
+                1,370px past its panel and the Actions column out of reach.
+                The id is an identifier (capped, full value in `title`); the
+                description is prose (clamped to two lines).
+              -->
+              <td class="cell-wrap">
                 <strong>{{ text(rule.name) }}</strong>
-                <small class="row-id mono">{{ text(rule.id) }}</small>
-                <small v-if="rule.description" class="row-id">{{ text(rule.description) }}</small>
+                <small class="row-id mono clamp-1" :title="text(rule.id)">{{
+                  text(rule.id)
+                }}</small>
+                <small
+                  v-if="rule.description"
+                  class="row-id clamp-2"
+                  :title="text(rule.description)"
+                  >{{ text(rule.description) }}</small
+                >
               </td>
               <td>
                 <span class="status-badge" :class="rule.enabled === false ? '' : 'good'">{{

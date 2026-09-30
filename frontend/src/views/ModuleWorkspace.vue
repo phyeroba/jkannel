@@ -149,6 +149,23 @@ interface ColumnDefinition {
    */
   lines?: (raw: RecordValue) => Array<{ label: string; value: string }>;
   /**
+   * This cell holds an OPAQUE value — a UUID, a checksum, a user agent, a
+   * request path — so it is capped and truncated with the full text in
+   * `title`.
+   *
+   * Different from {@link wrap}, and the difference matters. Prose wraps
+   * because a reader reads all of it. An identifier is matched, copied or
+   * ignored; wrapping one to four lines makes the row tall without making
+   * the value any more readable. The Active Sessions register gave a single
+   * user-agent string 835px, which is most of why that table ran 541px past
+   * its panel.
+   *
+   * Applied per column, never globally: a blanket `overflow: hidden` on
+   * every cell was tried and failed the overflow audit on 84 screens,
+   * because plenty of cells legitimately size to their content.
+   */
+  clip?: boolean;
+  /**
    * This cell holds PROSE, so it may wrap, and its hint is clamped to two
    * lines rather than run out sideways as one.
    *
@@ -720,7 +737,7 @@ const definitions: Record<string, Workspace> = {
         header: 'Enabled',
         value: (raw) => (raw.enabled === false || raw.enabled === 'false' ? 'no' : 'yes'),
       },
-      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
+      { header: 'Updated', value: (raw) => shortWhen(raw.updated_at ?? raw.updatedAt), mono: true },
     ],
   },
   configuration: {
@@ -906,7 +923,7 @@ const definitions: Record<string, Workspace> = {
       },
       { header: 'Messages', value: (raw) => text(raw.message_count, '0') },
       { header: 'DLRs', value: (raw) => text(raw.dlr_count, '0') },
-      { header: 'Generated', value: (raw) => text(raw.generated_at) },
+      { header: 'Generated', value: (raw) => shortWhen(raw.generated_at), mono: true },
     ],
   },
   notifications: {
@@ -1023,14 +1040,20 @@ const definitions: Record<string, Workspace> = {
       maxExportLimit: 1000,
     },
     columns: [
-      { header: 'When', value: (raw) => text(raw.created_at ?? raw.createdAt) },
-      { header: 'Actor', value: (raw) => text(raw.actor_id ?? raw.actorId), mono: true },
+      { header: 'When', value: (raw) => shortWhen(raw.created_at ?? raw.createdAt), mono: true },
+      {
+        header: 'Actor',
+        value: (raw) => text(raw.actor_id ?? raw.actorId),
+        mono: true,
+        clip: true,
+      },
       { header: 'Action', value: (raw) => text(raw.action) },
       {
         header: 'Entity',
         value: (raw) =>
           `${text(raw.entity_type ?? raw.entityType)} ${text(raw.entity_id ?? raw.entityId, '')}`.trim(),
         mono: true,
+        clip: true,
       },
       /*
        * §12 asks an audit row to answer "what did it look like before". A
@@ -1042,12 +1065,14 @@ const definitions: Record<string, Workspace> = {
         header: 'Previous state',
         value: (raw) => summariseState(raw.old_value ?? raw.oldValue),
         mono: true,
+        clip: true,
       },
       { header: 'Reason', value: (raw) => text(raw.reason) },
       {
         header: 'Correlation',
         value: (raw) => text(raw.correlation_id ?? raw.correlationId),
         mono: true,
+        clip: true,
       },
       { header: 'Source IP', value: (raw) => text(raw.source_ip ?? raw.sourceIp), mono: true },
     ],
@@ -1101,26 +1126,54 @@ const definitions: Record<string, Workspace> = {
       ],
     },
     columns: [
-      { header: 'Label', value: (raw) => text(raw.label) },
-      { header: 'Scope', value: (raw) => text(raw.scope) },
-      { header: 'Kind', value: (raw) => text(raw.kind) },
+      // SIX COLUMNS, NOT THIRTEEN. Twelve fields plus Actions ran this
+      // register 902px past its panel. Grouped by the question each set
+      // answers: what the backup is, whether it is good, how big and where,
+      // and when it ran.
+      {
+        header: 'Backup',
+        value: (raw) => text(raw.label),
+        hint: (raw) => [text(raw.scope, ''), text(raw.kind, '')].filter(Boolean).join(' · '),
+      },
       {
         header: 'Status',
         value: (raw) => text(raw.status),
         badge: (raw) => badgeTone(raw.status),
+        hint: (raw) => text(raw.retention_class ?? raw.retentionClass, ''),
       },
-      { header: 'Retention', value: (raw) => text(raw.retention_class ?? raw.retentionClass) },
-      { header: 'Verified', value: (raw) => text(raw.verified_at ?? raw.verifiedAt, 'never') },
-      { header: 'Size', value: (raw) => formatBytes(raw.size_bytes ?? raw.sizeBytes) },
+      {
+        header: 'Integrity',
+        lines: (raw) => [
+          {
+            label: 'verified',
+            value: shortWhen(raw.verified_at ?? raw.verifiedAt) || 'never',
+          },
+          { label: 'size', value: formatBytes(raw.size_bytes ?? raw.sizeBytes) },
+        ],
+      },
       {
         header: 'Offsite',
-        value: (raw) => text(raw.offsite_synced_at ?? raw.offsiteSyncedAt, 'not synced offsite'),
+        value: (raw) =>
+          shortWhen(raw.offsite_synced_at ?? raw.offsiteSyncedAt) || 'not synced offsite',
         hint: (raw) => text(raw.offsite_location ?? raw.offsiteLocation, ''),
+        clip: true,
       },
-      { header: 'Checksum', value: (raw) => text(raw.checksum), mono: true },
-      { header: 'Started', value: (raw) => text(raw.started_at ?? raw.startedAt) },
-      { header: 'Completed', value: (raw) => text(raw.completed_at ?? raw.completedAt) },
-      { header: 'Warning', value: (raw) => truncate(raw.warning, 48) },
+      {
+        header: 'Run',
+        lines: (raw) => [
+          { label: 'started', value: shortWhen(raw.started_at ?? raw.startedAt) },
+          { label: 'completed', value: shortWhen(raw.completed_at ?? raw.completedAt) },
+        ],
+      },
+      // The checksum is an identifier and the warning is prose; both belong
+      // in one "anything to know about this run" cell rather than two wide
+      // columns of their own.
+      {
+        header: 'Notes',
+        value: (raw) => truncate(raw.warning, 48),
+        hint: (raw) => text(raw.checksum, ''),
+        wrap: true,
+      },
     ],
   },
   users: {
@@ -1177,11 +1230,12 @@ const definitions: Record<string, Workspace> = {
        */
       {
         header: 'Last seen',
-        value: (raw) => text(raw.last_seen_at ?? raw.lastSeenAt, 'never seen'),
+        // 'never seen' is a real state and must survive the shortening.
+        value: (raw) => shortWhen(raw.last_seen_at ?? raw.lastSeenAt) || 'never seen',
         mono: true,
       },
-      { header: 'Created', value: (raw) => text(raw.created_at ?? raw.createdAt) },
-      { header: 'Updated', value: (raw) => text(raw.updated_at ?? raw.updatedAt) },
+      { header: 'Created', value: (raw) => shortWhen(raw.created_at ?? raw.createdAt), mono: true },
+      { header: 'Updated', value: (raw) => shortWhen(raw.updated_at ?? raw.updatedAt), mono: true },
     ],
   },
   system: {
@@ -7173,7 +7227,8 @@ onUnmounted(() => {
                 <td
                   v-for="column in columns"
                   :key="column.header"
-                  :class="{ mono: column.mono, 'cell-wrap': column.wrap }"
+                  :class="{ mono: column.mono, 'cell-wrap': column.wrap, 'cell-clip': column.clip }"
+                  :title="column.clip ? column.value?.(row.raw) : undefined"
                 >
                   <!-- A grouped cell: several labelled values that answer one
                        question, stacked, instead of one column each. -->

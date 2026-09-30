@@ -261,7 +261,11 @@ onMounted(() => {
                 @click="selected = row.name"
               >
                 <td class="mono">{{ row.name }}</td>
-                <td class="muted-cell">{{ row.role }}</td>
+                <!-- A sentence, so it wraps and clamps. Nowrap prose is
+                     what put this table 857px past its panel. -->
+                <td class="muted-cell cell-wrap">
+                  <span class="clamp-2" :title="row.role">{{ row.role }}</span>
+                </td>
                 <td>
                   <!-- Word first; the dot is decoration, never the signal. -->
                   <span class="status-badge" :class="stateTone(row.state)">
@@ -282,8 +286,12 @@ onMounted(() => {
                       : 'not reported'
                   }}
                 </td>
-                <td class="muted-cell evidence">{{ row.detail }}</td>
-                <td class="mono">{{ row.rootCause ?? '—' }}</td>
+                <td class="muted-cell evidence cell-wrap">
+                  <span class="clamp-2" :title="row.detail">{{ row.detail }}</span>
+                </td>
+                <td class="mono cell-clip" :title="row.rootCause ?? ''">
+                  {{ row.rootCause ?? '—' }}
+                </td>
               </tr>
               <tr v-if="!rows.length">
                 <td class="empty-cell" colspan="6">No component matches this filter.</td>

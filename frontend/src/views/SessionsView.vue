@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue';
 import { ApiError, apiDownloadFile, apiRequest, saveDownloadedFile } from '../api';
+import { shortWhen } from '../utils/when';
 
 type RecordValue = Record<string, unknown>;
 
@@ -250,25 +251,56 @@ onMounted(() => void load());
         <table>
           <thead>
             <tr>
-              <th scope="col">Username</th>
-              <th scope="col">IP address</th>
-              <th scope="col">User agent</th>
-              <th scope="col">Created</th>
-              <th scope="col">Last seen</th>
-              <th scope="col">Expires</th>
-              <th scope="col">Revoked</th>
+              <!--
+                FIVE COLUMNS, NOT EIGHT.
+
+                This table ran 541px past its panel, and 835px of that was a
+                single user-agent string — a value nobody reads end to end,
+                given a column wide enough to. It is now capped with the full
+                text in `title`. The three lifecycle timestamps are one answer
+                to "is this session still live", so they share a cell and read
+                as "30 Sep, 16:03" rather than as ISO instants.
+              -->
+              <th scope="col">User</th>
+              <th scope="col">Client</th>
+              <th scope="col">Lifetime</th>
+              <th scope="col">State</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in rows" :key="rowId(row)" :data-testid="`session-row-${rowId(row)}`">
               <td>{{ text(row.username) }}</td>
-              <td class="mono">{{ text(row.ip_address ?? row.ipAddress) }}</td>
-              <td>{{ text(row.user_agent ?? row.userAgent) }}</td>
-              <td>{{ text(row.created_at ?? row.createdAt) }}</td>
-              <td>{{ text(row.last_seen_at ?? row.lastSeenAt) }}</td>
-              <td>{{ text(row.expires_at ?? row.expiresAt) }}</td>
-              <td>{{ text(row.revoked_at ?? row.revokedAt) }}</td>
+              <td class="cell-clip mono" :title="text(row.user_agent ?? row.userAgent)">
+                {{ text(row.ip_address ?? row.ipAddress) }}
+                <small class="row-id">{{ text(row.user_agent ?? row.userAgent) }}</small>
+              </td>
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ shortWhen(row.last_seen_at ?? row.lastSeenAt) }}</span
+                    ><span class="k">last seen</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ shortWhen(row.created_at ?? row.createdAt) }}</span
+                    ><span class="k">created</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ shortWhen(row.expires_at ?? row.expiresAt) }}</span
+                    ><span class="k">expires</span></span
+                  >
+                </span>
+              </td>
+              <td>
+                <span
+                  class="status-badge"
+                  :class="(row.revoked_at ?? row.revokedAt) ? 'bad' : 'good'"
+                  >{{ (row.revoked_at ?? row.revokedAt) ? 'revoked' : 'active' }}</span
+                >
+                <small v-if="row.revoked_at ?? row.revokedAt" class="row-id">{{
+                  shortWhen(row.revoked_at ?? row.revokedAt)
+                }}</small>
+              </td>
               <td class="row-actions">
                 <button
                   v-if="!(row.revoked_at ?? row.revokedAt)"
@@ -283,7 +315,7 @@ onMounted(() => void load());
               </td>
             </tr>
             <tr v-if="!loading && !rows.length">
-              <td colspan="8" class="empty-cell" data-testid="sessions-empty">
+              <td colspan="5" class="empty-cell" data-testid="sessions-empty">
                 No sessions match these filters.
               </td>
             </tr>
