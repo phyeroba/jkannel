@@ -98,3 +98,9 @@ runtime/kamex/*.tmp
 # @playwright/test relative to the script file and only frontend/ has it
 # installed. The copies are disposable and must never be committed.
 frontend/.*.mjs
+
+# Production screenshots used as design reference. Live alert text, bind
+# names and the production hostname are visible in them, so they stay local.
+# The requirement they carry is written up in
+# docs/REDESIGN-ALERTS-ESCALATION-NOTIFICATIONS.md, which IS committed.
+design/redesign-2026-09/*.png
