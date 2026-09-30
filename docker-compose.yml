@@ -183,6 +183,22 @@ services:
       KAMEX_VALIDATOR_URL: http://kamex-validator:8080
       KAMEX_VALIDATOR_TOKEN: ${KAMEX_VALIDATOR_TOKEN}
       KAMEX_SQLBOX_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # CARRIER BIND CREDENTIALS — THE API NEEDS THEM TOO, NOT JUST THE ENGINE.
+      #
+      # These were added to `kamex-bearerbox` only, on the reasoning that the
+      # engine is what dials the carrier. That is true of DELIVERY and false of
+      # TESTING: "Test connection" runs in THIS container
+      # (`smsc-connectivity.service.ts`), and without the credential it cannot
+      # attempt an SMPP bind at all. It degrades to a bare TCP probe and reports
+      #   "No SMPP bind was attempted — secret://carrier/kamdixy-password is not
+      #    present in this container's environment"
+      # which is accurate, unhelpful, and looks like a carrier fault.
+      #
+      # Every `secret://` reference an SMSC record carries must resolve in BOTH
+      # containers. `POST /configurations/generate` lists them as
+      # `requiredSecrets`; the Configuration screen now shows that list.
+      CARRIER_KOLOLO_PASSWORD: ${CARRIER_KOLOLO_PASSWORD:-}
+      CARRIER_KAMDIXY_PASSWORD: ${CARRIER_KAMDIXY_PASSWORD:-}
       # Probe targets for the services board (spec §14). Both default to EMPTY,
       # and an empty value means the board reports that component as "not
       # observed" — visibly distinct from healthy, never mistaken for it.
