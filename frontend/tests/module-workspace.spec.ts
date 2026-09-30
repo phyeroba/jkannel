@@ -611,3 +611,40 @@ describe('module workspace behavior', () => {
     });
   });
 });
+
+/**
+ * A FAILED ACTION MUST NOT LOOK LIKE A FAILED SCREEN.
+ *
+ * Every action on this workspace — twenty-nine of them — reported failure by
+ * setting the same ref the LOADER uses, and the template renders that ref as a
+ * full-panel "Unable to load workspace" with a Retry button. So pressing "Test
+ * connection" on an SMSC whose carrier was refusing the port threw away the
+ * register the operator was working from and told them the workspace had not
+ * loaded. It had. One request failed.
+ *
+ * The register must survive, and the message must be about the action.
+ */
+describe('module workspace — an action that fails', () => {
+  it('reports the failure inline and leaves the register on screen', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => apiResponse(gridPage(records, 2, 50, 0)));
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = await mountWorkspace('/alerts', 'Alerts');
+    await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
+    expect(overlayHas(wrapper, '[data-testid="export-csv"]')).toBe(true);
+
+    fetchMock.mockRejectedValueOnce(new Error('The carrier refused the connection.'));
+    await overlay(wrapper, '[data-testid="export-csv"]').trigger('click');
+
+    await vi.waitFor(() =>
+      expect(overlay(wrapper, '[data-testid="operation-error"]').text()).toContain(
+        'The carrier refused the connection.',
+      ),
+    );
+    // The whole point: the screen is still the screen.
+    expect(overlayHas(wrapper, '[data-testid="api-state"]')).toBe(false);
+    // The alerts module renders its own columns, so assert on the row
+    // identity and the pager rather than a column it does not have.
+    expect(wrapper.text()).toContain('record-1');
+    expect(overlay(wrapper, '[data-testid="grid-range"]').text()).toBe('Showing 1–2 of 2');
+  });
+});

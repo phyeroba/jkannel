@@ -1059,8 +1059,28 @@ const query = ref('');
 const state = ref('All');
 const rows = ref<Row[]>([]);
 const loading = ref(false);
+/**
+ * A LOAD failure. The register has no rows to show, so the screen is replaced
+ * by "Unable to load workspace" and a Retry.
+ */
 const error = ref('');
 const unavailable = ref(false);
+/**
+ * An OPERATION failure — a test, an enable, an export, a save.
+ *
+ * Kept apart from {@link error} because the two were the same ref, and every
+ * one of the twenty-eight actions on this screen reported its failure by
+ * setting the page-level one. Pressing "Test connection" on an SMSC whose
+ * carrier is refusing the port therefore replaced the entire register with
+ * "Unable to load workspace" — which is false twice over: the workspace had
+ * loaded, and nothing about it was unavailable. The operator lost the list
+ * they were working from, and the message blamed the console for a carrier's
+ * refusal.
+ *
+ * An action that fails says so where the action was, and leaves the screen
+ * standing.
+ */
+const actionError = ref('');
 const notice = ref('');
 const showComposer = ref(false);
 const draftName = ref('');
@@ -1829,6 +1849,7 @@ async function load(preserveNotice = false) {
   if (!workspace.value) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   unavailable.value = false;
   sourceUnavailable.value = false;
   sourceMessage.value = '';
@@ -1880,12 +1901,14 @@ async function load(preserveNotice = false) {
     if (key.value === 'messages' && reason instanceof ApiError && reason.status === 400) {
       messageFilterError.value = detail;
       error.value = '';
+      actionError.value = '';
     } else if (isDlr.value && reason instanceof ApiError && reason.status === 400) {
       // A rejected filter, not an outage. The API's 400 names the offending
       // value (e.g. "deliveryStatus contains unsupported value(s): …"), so it
       // is shown verbatim beside the controls that caused it.
       dlrFilterError.value = detail;
       error.value = '';
+      actionError.value = '';
     } else {
       error.value = detail;
     }
@@ -2061,6 +2084,7 @@ async function exportGrid(format: 'csv' | 'pdf') {
   if (!base) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const params = buildGridQuery({ limit: grid.value?.maxExportLimit ?? 500, offset: 0 });
@@ -2068,7 +2092,7 @@ async function exportGrid(format: 'csv' | 'pdf') {
     saveDownloadedFile(exported.blob, exported.filename);
     notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'} rows as ${format.toUpperCase()}.`;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The export failed.';
   } finally {
     loading.value = false;
   }
@@ -2648,6 +2672,7 @@ function closeTemplateView() {
 async function instantiateTemplate(row: RecordValue) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   instantiateResult.value = null;
   try {
@@ -2711,6 +2736,7 @@ async function createCustomer() {
   if (!custName.value.trim()) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const senders = senderIdList(custSenderIds.value);
@@ -2731,7 +2757,7 @@ async function createCustomer() {
     notice.value = 'Customer created.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2741,6 +2767,7 @@ async function saveCustomer() {
   const id = String(detail.value.id);
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/customers/${id}`, {
@@ -2759,7 +2786,7 @@ async function saveCustomer() {
     await openDetail({ id } as Row);
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2771,6 +2798,7 @@ async function archiveCustomer() {
     return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/customers/${id}`, { method: 'DELETE' });
@@ -2778,7 +2806,7 @@ async function archiveCustomer() {
     closeDetail();
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2792,6 +2820,7 @@ async function createUser() {
   if (!newUsername.value.trim() || newPassword.value.length < 12) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest('/users', {
@@ -2809,7 +2838,7 @@ async function createUser() {
     notice.value = 'User created.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2819,6 +2848,7 @@ async function saveUser() {
   const id = String(detail.value.id);
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/users/${id}`, {
@@ -2833,7 +2863,7 @@ async function saveUser() {
     await openDetail({ id } as Row);
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2845,6 +2875,7 @@ async function archiveUser() {
     return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/users/${id}`, { method: 'DELETE' });
@@ -2852,7 +2883,7 @@ async function archiveUser() {
     closeDetail();
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2863,6 +2894,7 @@ async function saveSmsc() {
   const id = String(detail.value.id);
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/smscs/${id}`, {
@@ -2885,7 +2917,7 @@ async function saveSmsc() {
     await openDetail({ id } as Row);
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2901,6 +2933,7 @@ async function archiveSmsc() {
     return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/smscs/${id}`, { method: 'DELETE' });
@@ -2913,7 +2946,7 @@ async function archiveSmsc() {
         reason.message ||
         'This SMSC is still referenced by one or more routes and cannot be archived.';
     } else {
-      error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+      actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
     }
   } finally {
     loading.value = false;
@@ -2923,6 +2956,7 @@ async function archiveSmsc() {
 async function testSmsc(row: Row) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const result = await apiRequest<RecordValue>(`/smscs/${row.id}/actions/test`, {
@@ -2936,7 +2970,7 @@ async function testSmsc(row: Row) {
     }.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2945,13 +2979,14 @@ async function testSmsc(row: Row) {
 async function pluginAction(row: Row, operation: 'enable' | 'disable') {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/plugins/${row.id}/${operation}`, { method: 'POST', body: '{}' });
     notice.value = `Plugin ${row.name} ${operation}d.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2967,6 +3002,7 @@ function openBackupModal() {
 async function submitBackup() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest('/backup-dr', {
@@ -2982,7 +3018,7 @@ async function submitBackup() {
     notice.value = 'Backup requested.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -2990,6 +3026,7 @@ async function submitBackup() {
 async function verifyBackup(row: Row) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     // POST, not GET: the route is `@Post(':id/verify')` and re-checks the
@@ -3005,7 +3042,7 @@ async function verifyBackup(row: Row) {
     )}.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3025,6 +3062,7 @@ async function confirmRestore() {
     return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/backup-dr/${target.id}/restore`, {
@@ -3036,7 +3074,7 @@ async function confirmRestore() {
     restoreReason.value = '';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3045,6 +3083,7 @@ async function confirmRestore() {
 async function downloadSamplePlugin() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const manifest = await apiRequest<RecordValue>('/plugins/sample-manifest');
@@ -3054,7 +3093,8 @@ async function downloadSamplePlugin() {
     );
     notice.value = 'Sample plugin manifest downloaded as plugin.json.';
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The sample could not be downloaded.';
+    actionError.value =
+      reason instanceof Error ? reason.message : 'The sample could not be downloaded.';
   } finally {
     loading.value = false;
   }
@@ -3080,6 +3120,7 @@ async function loadRouteSmscOptions() {
 async function loadBaseline() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const baseline = await apiRequest<RecordValue>('/configurations/baseline');
@@ -3097,6 +3138,7 @@ async function loadBaseline() {
 async function editConfiguration(row: Row) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const record = await apiRequest<RecordValue>(`/configurations/${row.id}`);
@@ -3145,6 +3187,7 @@ async function createApiClient() {
   if (!apiClientName.value.trim()) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const scopes = apiClientScopes.value;
@@ -3158,7 +3201,7 @@ async function createApiClient() {
     notice.value = 'API client created.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3166,6 +3209,7 @@ async function createApiClient() {
 async function rotateSecret(row: Row) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const result = await apiRequest<RecordValue>(`/api-gateway/clients/${row.id}/rotate-secret`, {
@@ -3177,7 +3221,7 @@ async function rotateSecret(row: Row) {
     notice.value = 'API client secret rotated.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3186,13 +3230,14 @@ async function revokeClient(row: Row) {
   if (!confirm(`Revoke API client ${row.name}? Applications using it will lose access.`)) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/api-gateway/clients/${row.id}`, { method: 'DELETE' });
     notice.value = 'API client revoked.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3213,6 +3258,7 @@ async function saveSetting(item: RecordValue) {
   else if (type === 'boolean') value = raw === 'true' || raw === '1';
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest(`/system/settings/${encodeURIComponent(settingKey)}`, {
@@ -3222,7 +3268,7 @@ async function saveSetting(item: RecordValue) {
     notice.value = `Setting ${settingKey} updated.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3262,6 +3308,7 @@ const dlrAppliedFilters = computed(() => {
 async function exportDlrCsv() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const params = dlrParams({ limit: 5000, withPaging: false });
@@ -3272,7 +3319,7 @@ async function exportDlrCsv() {
       ? `Exported ${rows} delivery reports matching ${dlrAppliedFilters.value}.`
       : `Exported ${rows} delivery reports (no filters applied).`;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The export failed.';
   } finally {
     loading.value = false;
   }
@@ -3280,13 +3327,14 @@ async function exportDlrCsv() {
 async function exportSimple(base: string, format: 'csv' | 'pdf') {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const exported = await apiDownloadFile(`${base}.${format}`);
     saveDownloadedFile(exported.blob, exported.filename);
     notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'all'} rows as ${format.toUpperCase()}.`;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The export failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The export failed.';
   } finally {
     loading.value = false;
   }
@@ -3380,13 +3428,14 @@ async function loadDeliverySummary() {
 async function generateReports() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     await apiRequest('/reports/volume/run', { method: 'POST', body: '{}' });
     notice.value = 'Volume report generation completed.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3432,6 +3481,7 @@ async function sendMessage() {
   if (!canSubmitSend.value) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     const body: Record<string, unknown> = {
       sender: sendSender.value.trim(),
@@ -3463,7 +3513,7 @@ async function sendMessage() {
     await load(true);
   } catch (reason) {
     // The API's 400 is surfaced verbatim; it names the field it rejected.
-    error.value = reason instanceof Error ? reason.message : 'The message could not be sent.';
+    actionError.value = reason instanceof Error ? reason.message : 'The message could not be sent.';
   } finally {
     loading.value = false;
   }
@@ -3472,12 +3522,13 @@ async function sendMessage() {
 async function markNotificationRead(row: Row) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     await apiRequest(`/notifications/${row.id}/read`, { method: 'POST', body: '{}' });
     notice.value = 'Notification marked as read.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3499,6 +3550,7 @@ async function acknowledgeAlert(row: Row) {
   if (note === null) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     await apiRequest(`/alerts/${row.id}/acknowledgements`, {
       method: 'POST',
@@ -3507,7 +3559,8 @@ async function acknowledgeAlert(row: Row) {
     notice.value = 'Alert acknowledged; escalation for it stops here.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The alert could not be acknowledged.';
+    actionError.value =
+      reason instanceof Error ? reason.message : 'The alert could not be acknowledged.';
   } finally {
     loading.value = false;
   }
@@ -3517,6 +3570,7 @@ async function notifyAlert(row: Row) {
   if (!canAcknowledgeAlerts.value) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     const result = await apiRequest<{ attempts?: unknown[] }>(`/alerts/${row.id}/notifications`, {
       method: 'POST',
@@ -3527,7 +3581,8 @@ async function notifyAlert(row: Row) {
       ? `Alert re-sent to ${attempts} notification channel(s).`
       : 'No notification channels are configured, so nothing was sent.';
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The notification could not be sent.';
+    actionError.value =
+      reason instanceof Error ? reason.message : 'The notification could not be sent.';
   } finally {
     loading.value = false;
   }
@@ -3560,12 +3615,13 @@ async function primaryAction() {
 
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     await apiRequest(value.actionEndpoint, { method: value.actionMethod ?? 'POST', body: '{}' });
     notice.value = `${value.action} request accepted.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3584,6 +3640,7 @@ async function createRecord() {
 
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   try {
     let payload: RecordValue = { name };
 
@@ -3673,7 +3730,7 @@ async function createRecord() {
     notice.value = `${value.noun} created.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3725,6 +3782,7 @@ async function confirmSmscAction(reason: string) {
   const { row, operation } = pending;
   smscActionBusy.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const suspension = operation === 'suspend' || operation === 'resume';
@@ -3741,7 +3799,7 @@ async function confirmSmscAction(reason: string) {
     pendingSmsc.value = null;
     await load(true);
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'The operation failed.';
+    actionError.value = cause instanceof Error ? cause.message : 'The operation failed.';
     pendingSmsc.value = null;
   } finally {
     smscActionBusy.value = false;
@@ -3751,6 +3809,7 @@ async function confirmSmscAction(reason: string) {
 async function rowAction(row: Row, operation: string) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     if (key.value === 'smsc') {
@@ -3778,7 +3837,7 @@ async function rowAction(row: Row, operation: string) {
     notice.value = `${operation} completed for ${row.name}.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3788,6 +3847,7 @@ async function compareConfigurations() {
   if (!configDiffFrom.value.trim() || !configDiffTo.value.trim()) return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   configDiffResult.value = null;
   try {
@@ -3796,7 +3856,7 @@ async function compareConfigurations() {
     );
     notice.value = 'Configuration diff generated.';
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3805,6 +3865,7 @@ async function compareConfigurations() {
 async function simulateRoute() {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   simulationResult.value = null;
   try {
@@ -3817,7 +3878,7 @@ async function simulateRoute() {
     });
     notice.value = 'Route simulation completed.';
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3826,6 +3887,7 @@ async function simulateRoute() {
 async function exportMessages(format: 'csv' | 'pdf' = 'csv') {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     // The export carries the same filter set the grid is showing.
@@ -3834,7 +3896,7 @@ async function exportMessages(format: 'csv' | 'pdf' = 'csv') {
     saveDownloadedFile(exported.blob, exported.filename);
     notice.value = `Exported ${exported.headers.get('x-jkannel-export-row-count') ?? 'filtered'} SQLBox rows.`;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3843,6 +3905,7 @@ async function exportMessages(format: 'csv' | 'pdf' = 'csv') {
 async function checkRetention(apply = false) {
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   try {
     const path = apply
@@ -3862,7 +3925,7 @@ async function checkRetention(apply = false) {
       : 'Retention dry-run completed.';
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The operation failed.';
+    actionError.value = reason instanceof Error ? reason.message : 'The operation failed.';
   } finally {
     loading.value = false;
   }
@@ -3921,6 +3984,7 @@ async function submitSchedule() {
   loading.value = true;
   notice.value = '';
   error.value = '';
+  actionError.value = '';
   try {
     await apiRequest('/backup-dr/schedules', {
       method: 'POST',
@@ -3954,6 +4018,7 @@ async function applyBackupRetention() {
     return;
   loading.value = true;
   error.value = '';
+  actionError.value = '';
   notice.value = '';
   retentionSweep.value = null;
   try {
@@ -3967,7 +4032,8 @@ async function applyBackupRetention() {
     notice.value = `Retention applied; ${removed} backup(s) expired.`;
     await load(true);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'Retention could not be applied.';
+    actionError.value =
+      reason instanceof Error ? reason.message : 'Retention could not be applied.';
   } finally {
     loading.value = false;
   }
@@ -4512,6 +4578,19 @@ onUnmounted(() => {
     </section>
 
     <p v-if="notice" class="notice" role="status" data-testid="operation-success">{{ notice }}</p>
+
+    <!--
+      An action that failed, reported where the action was.
+
+      This is deliberately NOT the `api-state` panel below: that one replaces
+      the workspace, and it should, because there is nothing to show when the
+      register did not load. A failed test, export or save is the opposite
+      case — everything on screen is still valid and still usable, and one
+      thing the operator tried did not work.
+    -->
+    <p v-if="actionError" class="form-alert is-error" role="alert" data-testid="operation-error">
+      {{ actionError }}
+    </p>
 
     <section v-if="error" class="panel empty-state" role="alert" data-testid="api-state">
       <h2>{{ unavailable ? 'Workspace API not available yet' : 'Unable to load workspace' }}</h2>
@@ -5630,26 +5709,17 @@ onUnmounted(() => {
               <dt>Lifecycle</dt>
               <dd>{{ text(detail.lifecycle_state ?? detail.lifecycleState) }}</dd>
             </dl>
-            <h3>Recent health</h3>
-            <ul class="sample-list" data-testid="smsc-health">
-              <li v-for="(sample, index) in detailArray('health')" :key="index">
-                <span class="dot" :class="healthDotClass(sample.state)"></span>
-                {{ text(sample.state) }} — {{ text(sample.detail) }}
-                <small
-                  >{{ text(sample.latency_ms ?? sample.latencyMs) }} ms ·
-                  {{ text(sample.observed_at ?? sample.observedAt) }}</small
-                >
-              </li>
-              <li v-if="!detailArray('health').length">No health samples recorded.</li>
-            </ul>
-            <h3>Recent operations</h3>
-            <ul class="sample-list" data-testid="smsc-deployments">
-              <li v-for="(op, index) in detailArray('deployments')" :key="index">
-                {{ text(op.operation) }} — {{ text(op.status) }}: {{ text(op.detail) }}
-                <small>{{ text(op.created_at ?? op.createdAt) }}</small>
-              </li>
-              <li v-if="!detailArray('deployments').length">No recent operations.</li>
-            </ul>
+            <!--
+              ACTIONS BEFORE HISTORY.
+
+              These buttons used to sit below "Recent health" and "Recent
+              operations", both of which are unbounded lists. On a connection
+              sampled all week that put Edit / Disable / Suspend several
+              screens down, behind two lists the operator was not reading —
+              they opened the drawer to act on the record, not to scroll past
+              its diary. The histories are still here, capped to a scroll
+              region by `.drawer-body .sample-list`, below the controls.
+            -->
             <div v-if="canManageSystem && !editing" class="detail-actions">
               <button class="secondary-button" data-testid="smsc-edit" @click="editing = true">
                 Edit
@@ -5699,6 +5769,32 @@ onUnmounted(() => {
                 <button class="secondary-button" @click="editing = false">Cancel</button>
               </div>
             </div>
+            <h3>
+              Recent health<span class="heading-count">{{ detailArray('health').length }}</span>
+            </h3>
+            <ul class="sample-list" data-testid="smsc-health">
+              <li v-for="(sample, index) in detailArray('health')" :key="index">
+                <span class="dot" :class="healthDotClass(sample.state)"></span>
+                {{ text(sample.state) }} — {{ text(sample.detail) }}
+                <small
+                  >{{ text(sample.latency_ms ?? sample.latencyMs) }} ms ·
+                  {{ text(sample.observed_at ?? sample.observedAt) }}</small
+                >
+              </li>
+              <li v-if="!detailArray('health').length">No health samples recorded.</li>
+            </ul>
+            <h3>
+              Recent operations<span class="heading-count">{{
+                detailArray('deployments').length
+              }}</span>
+            </h3>
+            <ul class="sample-list" data-testid="smsc-deployments">
+              <li v-for="(op, index) in detailArray('deployments')" :key="index">
+                {{ text(op.operation) }} — {{ text(op.status) }}: {{ text(op.detail) }}
+                <small>{{ text(op.created_at ?? op.createdAt) }}</small>
+              </li>
+              <li v-if="!detailArray('deployments').length">No recent operations.</li>
+            </ul>
           </template>
 
           <template v-else-if="key === 'customers'">

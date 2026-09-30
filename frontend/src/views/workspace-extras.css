@@ -1072,3 +1072,55 @@ tbody td .chip-list {
 .is-warn-text {
   color: var(--warn-strong, var(--warn, #9a6700));
 }
+
+/* CAPPED HISTORY LISTS IN A DRAWER ----------------------------------------
+   A record drawer is read top-down: what this thing is, what you can do to
+   it, and then — if you are diagnosing — what it has been doing lately.
+
+   The SMSC drawer got that order wrong in the way that matters. It rendered
+   the identity grid, then every health sample, then every deployment, and
+   only then the Edit / Disable / Suspend buttons. Both histories are
+   unbounded, so on a connection that has been sampled all week the controls
+   the operator opened the drawer to reach were several screens below the
+   fold, behind two lists they were not reading.
+
+   Two changes. The actions move up, directly under the identity grid, in the
+   markup. And a history list inside a drawer scrolls WITHIN ITSELF rather
+   than growing the sheet: about six rows visible, the rest a scroll away.
+   Nothing is hidden and nothing is truncated — the list simply stops being
+   able to push the rest of the record off the pane.
+
+   Scoped to `.drawer-body` on purpose. The same class is used for lists that
+   ARE the content of a panel, and those must keep growing. */
+.drawer-body .sample-list {
+  max-height: 252px;
+  overflow-y: auto;
+  /* Room for the scrollbar so the last row's timestamp is not under it. */
+  padding-right: 2px;
+}
+/* A capped list needs to say it is capped, or a scroll region with a flush
+   final row reads as the end of the data. */
+.drawer-body .sample-list::-webkit-scrollbar {
+  width: 10px;
+}
+.drawer-body .list-count {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+/* A count beside a capped list's heading, so the scroll region announces how
+   much it holds. Without it a list that shows six of forty rows looks like a
+   list of six. */
+.heading-count {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
