@@ -371,44 +371,82 @@ const definitions: Record<string, Workspace> = {
     endpoint: '/messages',
     action: 'Refresh',
     columns: [
-      { header: 'When', value: (raw) => text(raw.timestamp ?? raw.time) },
-      { header: 'Dir', value: (raw) => text(raw.direction ?? raw.momt) },
+      // SEVEN COLUMNS, NOT FOURTEEN.
+      //
+      // The message log ran 628px past its panel. Fourteen narrow columns is
+      // how a message is STORED; the questions asked of this screen are when,
+      // between whom, what was sent, how it was encoded, and where it went.
+      {
+        header: 'When',
+        value: (raw) => shortWhen(raw.timestamp ?? raw.time),
+        mono: true,
+        hint: (raw) => text(raw.direction ?? raw.momt, ''),
+      },
       {
         header: 'Delivery',
         value: (raw) => text(raw.deliveryStatus ?? raw.delivery_status ?? raw.status),
         badge: (raw) => badgeTone(raw.deliveryStatus ?? raw.delivery_status ?? raw.status),
         hint: (raw) => text(raw.status, ''),
       },
-      { header: 'Sender', value: (raw) => text(raw.sender), mono: true },
-      { header: 'Receiver', value: (raw) => text(raw.receiver), mono: true },
-      { header: 'Message', value: (raw) => truncate(raw.text ?? raw.msgdata) },
+      // Two numbers that are only meaningful as a pair.
       {
-        header: 'Segments',
-        value: (raw) => segmentCount(raw),
-        hint: (raw) => (raw.udhData ? 'concatenated (UDH present)' : ''),
+        header: 'Route',
+        lines: (raw) => [
+          { label: 'from', value: text(raw.sender) },
+          { label: 'to', value: text(raw.receiver) },
+        ],
       },
-      { header: 'Encoding', value: (raw) => codingLabel(raw) },
+      // The body is prose. It was the only cell here holding a sentence and
+      // it was nowrap, so one long message widened the table for every row.
+      {
+        header: 'Message',
+        value: (raw) => truncate(raw.text ?? raw.msgdata),
+        hint: (raw) => text(raw.text ?? raw.msgdata, ''),
+        wrap: true,
+      },
+      {
+        header: 'Encoding',
+        lines: (raw) => {
+          const rows = [
+            { label: 'segments', value: segmentCount(raw) },
+            { label: 'coding', value: codingLabel(raw) },
+            { label: 'priority', value: priorityCellLabel(raw.priority) },
+          ];
+          if (raw.udhData) rows.push({ label: 'concatenated', value: 'UDH' });
+          return rows;
+        },
+      },
       /*
-        Display only, deliberately. The engine row carries `priority`, but
-        SQLBOX_SORT_COLUMNS has no entry for it (a `?sort=priority` here is a
-        400) and parseMessageFilters drops an unknown query key, so there is no
-        sort or filter control the API would honour. `unset` is printed rather
-        than `—` because an absent priority is a real state, not missing data.
+        Priority is display only, deliberately, and now sits in the Encoding
+        stack above. The engine row carries it, but SQLBOX_SORT_COLUMNS has no
+        entry for it (a `?sort=priority` here is a 400) and parseMessageFilters
+        drops an unknown query key, so there is no sort or filter control the
+        API would honour. `unset` is printed rather than an em dash because an
+        absent priority is a real state, not missing data.
       */
-      { header: 'Priority', value: (raw) => priorityCellLabel(raw.priority), mono: true },
-      { header: 'SMSC', value: (raw) => text(raw.smscId ?? raw.smsc_id), mono: true },
       {
-        header: 'DLR',
-        value: (raw) => dlrEventLabel(raw),
-        hint: (raw) => text(raw.dlrAt ?? raw.dlr_at, ''),
+        header: 'Handling',
+        lines: (raw) => {
+          const rows = [
+            { label: 'SMSC', value: text(raw.smscId ?? raw.smsc_id) },
+            { label: 'DLR', value: dlrEventLabel(raw) },
+          ];
+          const at = shortWhen(raw.dlrAt ?? raw.dlr_at);
+          if (at) rows.push({ label: 'DLR at', value: at });
+          return rows;
+        },
       },
-      { header: 'Service', value: (raw) => text(raw.service) },
-      { header: 'Account', value: (raw) => text(raw.account) },
       {
-        header: 'Reference',
-        value: (raw) => text(raw.externalRef ?? raw.foreign_id),
-        mono: true,
-        hint: (raw) => text(raw.id, ''),
+        header: 'Attribution',
+        lines: (raw) => {
+          const rows = [
+            { label: 'service', value: text(raw.service) },
+            { label: 'account', value: text(raw.account) },
+          ];
+          const ref = text(raw.externalRef ?? raw.foreign_id, '');
+          if (ref) rows.push({ label: 'reference', value: ref });
+          return rows;
+        },
       },
     ],
   },
@@ -505,30 +543,41 @@ const definitions: Record<string, Workspace> = {
             .filter(Boolean)
             .join(' · '),
       },
-      { header: 'Protocol', value: (raw) => text(raw.type) },
-      { header: 'Host:port', value: (raw) => hostPort(raw), mono: true },
+      // Protocol and host:port are one answer to "where does this dial".
+      {
+        header: 'Endpoint',
+        value: (raw) => hostPort(raw),
+        mono: true,
+        hint: (raw) => text(raw.type, ''),
+      },
       {
         header: 'State',
         value: (raw) => text(raw.bind_state ?? raw.bindState, 'never observed'),
         badge: (raw) => badgeTone(raw.bind_state ?? raw.bindState),
+        // Observed bind state and administrative lifecycle are different
+        // facts and both belong here: a connection can be bound and archived.
+        hint: (raw) => text(raw.lifecycle_state ?? raw.lifecycleState, ''),
       },
       // `unknown`, not 0 — a bind the poller has never sampled has no rate, and
       // printing 0.0 would report an idle carrier as a measured silence.
-      { header: 'TPS out', value: (raw) => rateText(raw.outbound_rate ?? raw.outboundRate) },
-      { header: 'TPS in', value: (raw) => rateText(raw.inbound_rate ?? raw.inboundRate) },
-      { header: 'Capacity', value: (raw) => utilisationText(raw) },
-      { header: 'Queue', value: (raw) => text(raw.queued_count ?? raw.queuedCount, '0') },
       {
-        header: 'Lifecycle',
-        value: (raw) => text(raw.lifecycle_state ?? raw.lifecycleState),
-        badge: (raw) => badgeTone(raw.lifecycle_state ?? raw.lifecycleState),
+        header: 'Throughput',
+        lines: (raw) => [
+          { label: 'TPS out', value: rateText(raw.outbound_rate ?? raw.outboundRate) },
+          { label: 'TPS in', value: rateText(raw.inbound_rate ?? raw.inboundRate) },
+          { label: 'of ceiling', value: utilisationText(raw) },
+          { label: 'queued', value: text(raw.queued_count ?? raw.queuedCount, '0') },
+        ],
       },
+      // What last happened, and what last went wrong. The error is prose, so
+      // this cell wraps and clamps rather than setting the table's width.
       {
         header: 'Last event',
         value: (raw) => text(raw.last_event ?? raw.lastEvent, 'no transitions recorded'),
         mono: true,
+        hint: (raw) => truncate(raw.last_error ?? raw.lastError, 48),
+        wrap: true,
       },
-      { header: 'Last error', value: (raw) => truncate(raw.last_error ?? raw.lastError, 48) },
     ],
   },
   routing: {
