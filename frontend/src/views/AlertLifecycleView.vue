@@ -6,6 +6,7 @@ import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
 import DetailDrawer from '../components/DetailDrawer.vue';
 import EventTimeline from '../components/EventTimeline.vue';
+import TablePager from '../components/TablePager.vue';
 import {
   alertAcknowledgement,
   alertCategory,
@@ -125,16 +126,34 @@ const statusFilter = ref('');
 const severityFilter = ref('');
 const searchQuery = ref('');
 const listLimit = ref(50);
+/**
+ * The offset was hard-coded to 0, so the screen fetched the newest 50 alerts
+ * and there was no way to reach the 51st. `GET /alerts` reports a `total` and
+ * accepts an offset — both were already read and sent, one of them frozen.
+ */
+const listOffset = ref(0);
 
 const STATUS_CHOICES = ['open', 'acknowledged', 'suppressed', 'resolved', 'closed'];
 const SEVERITY_CHOICES = ['info', 'warning', 'critical'];
+
+/** Any filter change restarts paging: page 3 of the previous filter is meaningless. */
+function applyAlertFilters() {
+  listOffset.value = 0;
+  void loadAlerts();
+}
+function turnAlertPage(direction: number) {
+  const next = listOffset.value + direction * listLimit.value;
+  if (next < 0 || next >= listTotal.value) return;
+  listOffset.value = next;
+  void loadAlerts();
+}
 
 async function loadAlerts() {
   listState.value = listState.value === 'ok' ? 'ok' : 'loading';
   listMissing.value = false;
   const params = new URLSearchParams();
   params.set('limit', String(listLimit.value));
-  params.set('offset', '0');
+  params.set('offset', String(listOffset.value));
   params.set('sort', '-openedAt');
   if (statusFilter.value) params.set('filter.status', statusFilter.value);
   if (severityFilter.value) params.set('filter.severity', severityFilter.value);
@@ -548,7 +567,11 @@ onMounted(() => {
     <section class="toolbar panel grid-toolbar" aria-label="Alert index filters">
       <label class="filter-select">
         <span>Status</span>
-        <select v-model="statusFilter" data-testid="lifecycle-status-filter" @change="loadAlerts">
+        <select
+          v-model="statusFilter"
+          data-testid="lifecycle-status-filter"
+          @change="applyAlertFilters"
+        >
           <option value="">Any status</option>
           <option v-for="choice in STATUS_CHOICES" :key="choice" :value="choice">
             {{ choice }}
@@ -560,7 +583,7 @@ onMounted(() => {
         <select
           v-model="severityFilter"
           data-testid="lifecycle-severity-filter"
-          @change="loadAlerts"
+          @change="applyAlertFilters"
         >
           <option value="">Any severity</option>
           <option v-for="choice in SEVERITY_CHOICES" :key="choice" :value="choice">
@@ -575,7 +598,7 @@ onMounted(() => {
           data-testid="lifecycle-search"
           type="search"
           placeholder="Summary, details, or rule name"
-          @keyup.enter="loadAlerts"
+          @keyup.enter="applyAlertFilters"
         />
       </label>
       <label class="filter-select">
@@ -727,6 +750,16 @@ onMounted(() => {
           </tbody>
         </table>
       </div>
+      <TablePager
+        :shown="alerts.length"
+        :total="listTotal"
+        :offset="listOffset"
+        :page-size="listLimit"
+        :busy="listState === 'loading'"
+        noun="alert"
+        testid="alert-pager"
+        @turn="turnAlertPage"
+      />
       <p class="source-note">
         A suppressed alert is still listed here and still counts in the correlation summary — only
         its escalation is paused, and it returns to open when the window lapses.

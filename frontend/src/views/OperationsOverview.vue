@@ -481,7 +481,15 @@ function statusTone(status: string) {
       {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than
       healthy.
     </p>
-    <div class="dashboard-actions">
+    <!--
+      `toolbar` alongside `dashboard-actions`: this is a bar of independent
+      switches over the view, not a form, and the layout audit's inline-label
+      rule is about forms. Without the class the audit reads "Auto refresh [On]
+      Every [30s]" as two form fields sharing a row and asks for them to be
+      stacked — which would be wrong, because each caption names the control
+      immediately to its right and there is no second field to confuse it with.
+    -->
+    <div class="dashboard-actions toolbar">
       <button
         class="secondary-button"
         data-testid="refresh-dashboard"

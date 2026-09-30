@@ -44,6 +44,15 @@ function isSystemRole(role: RecordValue): boolean {
   return role.isSystem === true || role.is_system === true;
 }
 
+/**
+ * How many permission chips a role row shows before it says "+N more".
+ *
+ * Four, because the register's job is to let you compare roles at a glance and
+ * the Capability matrix on the same screen already shows every grant for every
+ * role. Listing all of them here made one row 1,097px tall.
+ */
+const PERMISSION_CHIPS = 4;
+
 const canManageUsers = computed(() => canAccess(session.value, 'users.manage'));
 const myPermissions = computed(() => [...(session.value?.permissions ?? new Set<string>())].sort());
 const myRoles = computed(() => [...(session.value?.roles ?? [])]);
@@ -657,11 +666,33 @@ onMounted(() => {
                 <small class="row-id mono">{{ text(role.id) }}</small>
               </td>
               <td>{{ text(role.description) }}</td>
+              <!--
+                A SAMPLE, NOT THE WHOLE GRANT SET.
+
+                This listed every code a role holds. Super Administrator holds
+                22, each chip on its own line, which made the row 1,097px tall
+                and the page seven screens — for a list that is already shown
+                in full, and comparably across roles, by the Capability matrix
+                below. Nothing is lost by sampling here.
+              -->
               <td>
                 <span class="status-badge">{{ stringsOf(role.permissions).length }} granted</span>
                 <div class="chip-list">
-                  <span v-for="code in stringsOf(role.permissions)" :key="code" class="chip mono">
+                  <span
+                    v-for="code in stringsOf(role.permissions).slice(0, PERMISSION_CHIPS)"
+                    :key="code"
+                    class="chip mono"
+                  >
                     {{ code }}
+                  </span>
+                  <span
+                    v-if="stringsOf(role.permissions).length > PERMISSION_CHIPS"
+                    class="chip muted"
+                    :data-testid="`role-more-${text(role.id)}`"
+                    :title="stringsOf(role.permissions).join(', ')"
+                  >
+                    +{{ stringsOf(role.permissions).length - PERMISSION_CHIPS }} more · see the
+                    matrix below
                   </span>
                   <span v-if="!stringsOf(role.permissions).length" class="chip muted">
                     no permissions granted
@@ -775,7 +806,14 @@ onMounted(() => {
         >. They were granted outside the role catalogue, or the catalogue is incomplete.
       </p>
       <div class="table-wrap">
-        <table>
+        <!--
+          No pager, deliberately. This is the permission CATALOGUE crossed with
+          the tenant's roles: it is as long as the product's permission set is,
+          it does not grow with usage, and it is read by scanning for one code
+          across roles rather than by paging. The filter above narrows it. A
+          pager here would be a control that never helps anybody.
+        -->
+        <table data-bounded="the permission catalogue is fixed-size and filtered, not paged">
           <thead>
             <tr>
               <th scope="col">Permission</th>

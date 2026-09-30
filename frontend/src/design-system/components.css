@@ -333,6 +333,59 @@ td {
   border-top: 1px solid var(--border);
   vertical-align: middle;
 }
+/* ---------------------------------------------------------------------------
+   A LONG VALUE MUST NOT BUILD A TOWER
+
+   `/alerts` rendered 31 rows at an average of 243px each — 7,579px of table on
+   a screen an operator opens during an incident. Nothing was broken: the grid
+   has 14 columns, `table { width: 100% }` shared 1,300px between them, and a
+   126-character condition landed in a 93px cell and wrapped to fourteen lines.
+   Every other "tall rows" finding has the same shape.
+
+   So cells keep to one line and a column keeps a usable width, and the table
+   scrolls sideways in `.table-wrap` — which already has `overflow: auto` — when
+   the columns need more room than the panel has. Sideways is the right
+   direction for wide data; downwards makes the page unusable.
+
+   NOT `display: -webkit-box` with `-webkit-line-clamp`, which is the obvious
+   way to clamp to two lines and would REMOVE the cell from the table layout.
+   That is exactly the bug that made every Operational events row 169px tall
+   (`td.row-actions` with `display: flex`), and it is not worth repeating for
+   one extra line of text.
+
+   A cell that genuinely needs to wrap opts in with `.cell-wrap`.
+   --------------------------------------------------------------------------- */
+tbody td {
+  white-space: nowrap;
+  /* Stops fourteen columns crushing each other into unreadable slivers. */
+  min-width: 96px;
+}
+
+/* NOTHING IS CLIPPED, AND THAT IS THE POINT.
+ *
+ * The first attempt added `overflow: hidden; text-overflow: ellipsis;
+ * max-width: 420px`, which fixed the towers and then FAILED the overflow audit
+ * 84 times — because an ellipsis on a cell whose row does not open a detail
+ * view does not shorten the value, it hides it. The operator could no longer
+ * read the condition that the alert is about.
+ *
+ * So a cell keeps its natural width and the table grows past the panel, where
+ * `.table-wrap`'s `overflow: auto` lets it scroll. Sideways scrolling on a wide
+ * operational grid is ordinary; losing the text is not, and neither is a
+ * 7,579px table. */
+
+/* Prose that is the point of the row — a message body, a reason — may wrap,
+   bounded so it still cannot run away into a tower. */
+tbody td.cell-wrap {
+  white-space: normal;
+  max-width: 440px;
+}
+/* A cell holding controls is sized by them, not by text. */
+tbody td.row-actions {
+  white-space: nowrap;
+  overflow: visible;
+  max-width: none;
+}
 thead + tbody tr:first-child td {
   border-top: 0;
 }

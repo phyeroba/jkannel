@@ -1103,7 +1103,15 @@ const msgDirection = ref('');
 const msgSmscId = ref('');
 const msgFrom = ref('');
 const msgTo = ref('');
-const msgLimit = ref(100);
+/**
+ * 50, not 100.
+ *
+ * A hundred rows made Messages 8,767px — nearly nine screens — and it is a
+ * paged grid, so the only thing the extra fifty bought was scrolling. Fifty
+ * matches the other long registers on this console (spool, sessions, log
+ * explorer) and halves the tallest real screen in the product.
+ */
+const msgLimit = ref(50);
 const MESSAGE_STATUS_CHOICES = [
   { value: '', label: 'Any delivery status' },
   { value: 'resendable', label: 'Resendable failures (failed + rejected)' },
@@ -4204,124 +4212,134 @@ onUnmounted(() => {
       >
         {{ loading ? 'Working…' : workspace.action }}
       </button>
-      <button
-        v-if="key === 'reports' && canGenerateReports"
-        class="secondary-button"
-        data-testid="generate-reports"
-        :disabled="loading"
-        @click="generateReports"
-      >
-        Generate now
-      </button>
-      <button
-        v-if="key === 'messages'"
-        class="secondary-button"
-        data-testid="open-send-message"
-        :disabled="loading"
-        @click="openSendForm"
-      >
-        Send message
-      </button>
-      <button
-        v-if="key === 'configuration'"
-        class="secondary-button"
-        data-testid="load-baseline"
-        :disabled="loading"
-        @click="loadBaseline"
-      >
-        Load baseline
-      </button>
-      <button
-        v-if="key === 'plugins'"
-        class="secondary-button"
-        data-testid="download-sample-plugin"
-        :disabled="loading"
-        @click="downloadSamplePlugin"
-      >
-        Download sample plugin
-      </button>
-      <template v-if="grid?.exportBase">
+      <!--
+        The secondary actions are ONE group and wrap as one.
+
+        Loose in the toolbar they were flex siblings of the filters, so on
+        Messages the row broke between "Send message" and "Export CSV" — three
+        related actions reading as two unrelated clusters. Grouping them means
+        the cluster moves to the next line intact instead of splitting.
+      -->
+      <div class="button-row">
         <button
+          v-if="key === 'reports' && canGenerateReports"
           class="secondary-button"
-          data-testid="export-csv"
+          data-testid="generate-reports"
           :disabled="loading"
-          @click="exportGrid('csv')"
+          @click="generateReports"
         >
-          Export CSV
+          Generate now
         </button>
         <button
+          v-if="key === 'messages'"
           class="secondary-button"
-          data-testid="export-pdf"
+          data-testid="open-send-message"
           :disabled="loading"
-          @click="exportGrid('pdf')"
+          @click="openSendForm"
         >
-          Export PDF
-        </button>
-      </template>
-      <template v-if="key === 'messages'">
-        <button
-          class="secondary-button"
-          data-testid="export-messages"
-          :disabled="loading"
-          @click="exportMessages('csv')"
-        >
-          Export CSV
+          Send message
         </button>
         <button
+          v-if="key === 'configuration'"
           class="secondary-button"
-          data-testid="export-messages-pdf"
+          data-testid="load-baseline"
           :disabled="loading"
-          @click="exportMessages('pdf')"
+          @click="loadBaseline"
         >
-          Export PDF
+          Load baseline
         </button>
-      </template>
-      <button
-        v-if="key === 'users' && canManageUsers"
-        class="secondary-button"
-        data-testid="create-user"
-        :disabled="loading"
-        @click="openCreateUser"
-      >
-        Create user
-      </button>
-      <template v-if="key === 'backup'">
         <button
+          v-if="key === 'plugins'"
           class="secondary-button"
-          data-testid="export-backup-csv"
+          data-testid="download-sample-plugin"
           :disabled="loading"
-          @click="exportSimple('/backup-dr/export', 'csv')"
+          @click="downloadSamplePlugin"
         >
-          Export CSV
+          Download sample plugin
         </button>
-        <!--
+        <template v-if="grid?.exportBase">
+          <button
+            class="secondary-button"
+            data-testid="export-csv"
+            :disabled="loading"
+            @click="exportGrid('csv')"
+          >
+            Export CSV
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="export-pdf"
+            :disabled="loading"
+            @click="exportGrid('pdf')"
+          >
+            Export PDF
+          </button>
+        </template>
+        <template v-if="key === 'messages'">
+          <button
+            class="secondary-button"
+            data-testid="export-messages"
+            :disabled="loading"
+            @click="exportMessages('csv')"
+          >
+            Export CSV
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="export-messages-pdf"
+            :disabled="loading"
+            @click="exportMessages('pdf')"
+          >
+            Export PDF
+          </button>
+        </template>
+        <button
+          v-if="key === 'users' && canManageUsers"
+          class="secondary-button"
+          data-testid="create-user"
+          :disabled="loading"
+          @click="openCreateUser"
+        >
+          Create user
+        </button>
+        <template v-if="key === 'backup'">
+          <button
+            class="secondary-button"
+            data-testid="export-backup-csv"
+            :disabled="loading"
+            @click="exportSimple('/backup-dr/export', 'csv')"
+          >
+            Export CSV
+          </button>
+          <!--
           No PDF button: `/backup-dr/export.pdf` does not exist — the controller
           defines `export.csv` only. (`/backups/export.pdf` on the legacy catalog
           controller is a different resource this console never reads.) Stating
           the gap the way the Reports page does beats a button that 404s.
         -->
-        <small class="source-note" data-testid="export-backup-csv-only"
-          >CSV only — the API has no PDF route for the backup catalog.</small
-        >
-      </template>
-      <template v-if="key === 'api-gateway'">
-        <button
-          class="secondary-button"
-          data-testid="export-api-csv"
-          :disabled="loading"
-          @click="exportSimple('/api-gateway/clients/export', 'csv')"
-        >
-          Export CSV
-        </button>
-        <button
-          class="secondary-button"
-          data-testid="export-api-pdf"
-          :disabled="loading"
-          @click="exportSimple('/api-gateway/clients/export', 'pdf')"
-        >
-          Export PDF
-        </button>
-      </template>
+          <small class="source-note" data-testid="export-backup-csv-only"
+            >CSV only — the API has no PDF route for the backup catalog.</small
+          >
+        </template>
+        <template v-if="key === 'api-gateway'">
+          <button
+            class="secondary-button"
+            data-testid="export-api-csv"
+            :disabled="loading"
+            @click="exportSimple('/api-gateway/clients/export', 'csv')"
+          >
+            Export CSV
+          </button>
+          <button
+            class="secondary-button"
+            data-testid="export-api-pdf"
+            :disabled="loading"
+            @click="exportSimple('/api-gateway/clients/export', 'pdf')"
+          >
+            Export PDF
+          </button>
+        </template>
+      </div>
       <div v-if="grid?.filters.length" class="grid-filters">
         <label v-for="field in grid.filters" :key="field.field" class="filter-select">
           <span>{{ field.label }}</span>
@@ -6367,13 +6385,19 @@ onUnmounted(() => {
         Validate generated output, approve the immutable version, then deploy. Rollback creates a
         new approved rollback version before deployment.
       </p>
-      <div class="split-fields">
-        <label>
-          Compare from version ID
+      <!--
+        `split-fields` had no styles anywhere in the codebase, so these were two
+        bare labels with a loose text node: the caption sat INLINE before its
+        input, and the two fields read as one continuous band. The design
+        system's field grid puts each caption above its own control.
+      -->
+      <div class="dialog-grid">
+        <label class="field">
+          <span>Compare from version ID</span>
           <input v-model="configDiffFrom" data-testid="config-diff-from" placeholder="UUID" />
         </label>
-        <label>
-          Compare to version ID
+        <label class="field">
+          <span>Compare to version ID</span>
           <input v-model="configDiffTo" data-testid="config-diff-to" placeholder="UUID" />
         </label>
       </div>

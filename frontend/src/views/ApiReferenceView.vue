@@ -320,14 +320,36 @@ const groups = computed(() => {
     .sort((a, b) => a.tag.localeCompare(b.tag));
 });
 
-const collapsed = ref<Set<string>>(new Set());
+/*
+ * GROUPS START CLOSED, AND A SEARCH OPENS THEM.
+ *
+ * Every tag was expanded on arrival, which rendered the whole API at once:
+ * 30,623px — thirty screens — of tables before the reader had asked for
+ * anything. A reference is not read top to bottom; you arrive knowing roughly
+ * what you want, so the useful first view is a short index of tags with counts.
+ *
+ * State is tracked as what is OPEN rather than what is closed, because the
+ * default is closed and a set of "everything except" would have to be rebuilt
+ * every time the tag list changed.
+ *
+ * While a filter is active the groups are forced open: a search that matched
+ * six operations and showed six closed headings would look like it had found
+ * nothing.
+ */
+const expanded = ref<Set<string>>(new Set());
 function toggleGroup(tag: string) {
-  const next = new Set(collapsed.value);
+  const next = new Set(expanded.value);
   if (next.has(tag)) next.delete(tag);
   else next.add(tag);
-  collapsed.value = next;
+  expanded.value = next;
 }
-const isCollapsed = (tag: string) => collapsed.value.has(tag);
+const isCollapsed = (tag: string) => !filtersActive.value && !expanded.value.has(tag);
+const allExpanded = computed(
+  () => groups.value.length > 0 && groups.value.every((group) => expanded.value.has(group.tag)),
+);
+function toggleAllGroups() {
+  expanded.value = allExpanded.value ? new Set() : new Set(groups.value.map((group) => group.tag));
+}
 
 const filtersActive = computed(
   () =>
@@ -708,8 +730,19 @@ onMounted(() => {
           <p aria-live="polite" data-testid="api-reference-result-count">
             {{ filtered.length }} of {{ endpoints.length }} operations
             {{ filtersActive ? 'match these filters' : 'in this API' }}
+            <template v-if="!filtersActive">
+              · {{ groups.length }} groups, closed until you open one
+            </template>
           </p>
         </div>
+        <button
+          v-if="!filtersActive && groups.length"
+          class="secondary-button"
+          data-testid="api-reference-expand-all"
+          @click="toggleAllGroups"
+        >
+          {{ allExpanded ? 'Collapse all' : 'Expand all' }}
+        </button>
       </header>
 
       <div class="grid-toolbar">
@@ -788,7 +821,16 @@ onMounted(() => {
           </button>
         </h3>
         <div v-show="!isCollapsed(group.tag)" class="table-wrap">
-          <table>
+          <!--
+            No pager, deliberately. These are the operations of one tag, in a
+            reference that is already navigated two better ways: the groups
+            collapse, and the filters above narrow the whole set. Paging a
+            reference means the reader cannot use the browser's own find, which
+            is how people actually look up an endpoint.
+          -->
+          <table
+            data-bounded="reference grouped by tag, collapsible and filtered rather than paged"
+          >
             <thead>
               <tr>
                 <th scope="col">Method</th>

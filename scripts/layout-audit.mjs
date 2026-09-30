@@ -25,6 +25,7 @@
  *   node scripts/layout-audit.mjs
  *   ROUTES=/live-queue,/events node scripts/layout-audit.mjs
  */
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 /*
@@ -47,14 +48,44 @@ const BASE = process.env.BASE ?? 'http://127.0.0.1:15173';
  * now a little over two lines — enough to leave honest wrapping alone and to
  * catch the Operational events row, which was 169px for one line in every
  * cell.
+ *
+ * RAISED 92 -> 104 on 2026-09-30. The house identity cell is a name with its
+ * id beneath it (`<strong>` over `small.row-id`, which is `display: block`),
+ * and that is two lines plus 28px of padding — about 98px. At 92 the audit was
+ * asking a deliberate, consistent pattern to be flattened, which is the
+ * failure mode this file's own header warns about: a tool that talks the next
+ * person out of a layout that was already right. Every genuine finding this
+ * sweep produced was 109px or more (configuration 109, mo-routing 128, smsc
+ * 129, backup 163, alerts 243, roles 336), so 104 still catches all of them.
  */
-const MAX_ROW_HEIGHT = Number(process.env.MAX_ROW ?? 92);
+const MAX_ROW_HEIGHT = Number(process.env.MAX_ROW ?? 104);
 /** Below this many rows a register does not yet need a pager. */
 const PAGER_NEEDED_FROM = Number(process.env.PAGER_FROM ?? 25);
 
-const ROUTES = (
-  process.env.ROUTES ?? '/live-queue,/live-traffic,/events,/log-explorer,/test-tools,/performance'
-).split(',');
+/*
+ * EVERY SCREEN, NOT THE SIX THAT WERE COMPLAINED ABOUT.
+ *
+ * This defaulted to the six routes from the original report, so the rules below
+ * were correct and simply never looked anywhere else. `/alerts` was rendering
+ * 31 rows at an average of 243px each — 7,579px of table, on a screen an
+ * operator opens during an incident — and this script had no opinion about it,
+ * because `/alerts` was not in the list.
+ *
+ * Read from `navigation.ts` the way `route-smoke.mjs` already does, so a screen
+ * added later is swept automatically rather than missed because nobody updated
+ * a list here. `ROUTES=` still narrows it while working on one screen.
+ */
+const NAV = new URL('../frontend/src/navigation.ts', import.meta.url);
+const ROUTES = process.env.ROUTES
+  ? process.env.ROUTES.split(',')
+  : [
+      ...new Set([
+        '/dashboard/operations',
+        ...[...fs.readFileSync(NAV, 'utf8').matchAll(/to:\s*'([^']+)'/g)]
+          .map((match) => match[1])
+          .filter((to) => !to.includes(':')),
+      ]),
+    ];
 
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
@@ -72,6 +103,8 @@ const measure = () =>
   page.evaluate(
     ({ MAX_ROW_HEIGHT, PAGER_NEEDED_FROM }) => {
       const problems = [];
+      /** Deliberate exemptions, reported separately so they stay visible. */
+      const notes = [];
       const seen = (el) => {
         const box = el.getBoundingClientRect();
         return box.width > 0 && box.height > 0;
@@ -175,10 +208,25 @@ const measure = () =>
       }
 
       // --- a button cluster that wraps --------------------------------------
-      for (const group of document.querySelectorAll(
-        '.row-actions, .panel-actions, .actions, .toolbar, .button-row, .dialog-footer, .filters',
-      )) {
-        const buttons = [...group.querySelectorAll('button, a.button, .btn')].filter(seen);
+      const CLUSTERS =
+        '.row-actions, .panel-actions, .actions, .toolbar, .button-row, .dialog-footer, .filters';
+      for (const group of document.querySelectorAll(CLUSTERS)) {
+        /*
+         * A DECLARED SUB-GROUP IS ITS OWN CLUSTER.
+         *
+         * The rule is "buttons that mean one thing belong on one line", and
+         * `.button-row` is how a screen declares which buttons those are. A
+         * toolbar holding a primary action AND a `.button-row` of secondary
+         * ones is two clusters, not one badly-wrapped cluster — measuring it
+         * flat reported nine workspace screens the moment the group was given
+         * room to wrap as a unit, which is the behaviour the rule wants.
+         *
+         * So a container measures only the buttons it owns directly; the ones
+         * inside a nested cluster are measured with that cluster instead.
+         */
+        const buttons = [...group.querySelectorAll('button, a.button, .btn')]
+          .filter(seen)
+          .filter((button) => button.closest(CLUSTERS) === group);
         if (buttons.length < 2) continue;
         const tops = new Set(buttons.map((b) => Math.round(b.getBoundingClientRect().top / 8)));
         if (tops.size > 1)
@@ -214,7 +262,24 @@ const measure = () =>
           const pager = [...scope.querySelectorAll('button, select, [class*=pag]')].some((el) =>
             /next|previous|prev\b|per page|page size|rows per/i.test(el.textContent ?? ''),
           );
-          if (!pager)
+          /*
+           * A BOUNDED TABLE MAY DECLINE, IN WRITING.
+           *
+           * "Fine at 20 rows, a different screen at 20,000" assumes the list
+           * grows. A permission catalogue and the API's own endpoint list do
+           * not: they are as long as the product is, they are read by scanning
+           * rather than by paging, and both already have a search box. A pager
+           * there is a control that never helps anybody.
+           *
+           * So a table may opt out with `data-bounded="why"` — and the reason
+           * is REPORTED rather than swallowed, so an exemption stays visible
+           * and can be argued with. An empty or missing reason is not an
+           * exemption.
+           */
+          const bounded = (table.getAttribute('data-bounded') ?? '').trim();
+          if (!pager && bounded)
+            notes.push({ kind: 'bounded, no pager by design', where: caption, detail: bounded });
+          else if (!pager)
             problems.push({
               kind: 'no pager',
               where: caption,
@@ -222,7 +287,9 @@ const measure = () =>
             });
         }
       }
-      return problems;
+      // Exemptions ride along tagged, so the reporter can list them apart from
+      // the findings rather than either hiding them or crying wolf.
+      return [...problems, ...notes.map((note) => ({ ...note, exempt: true }))];
     },
     { MAX_ROW_HEIGHT, PAGER_NEEDED_FROM },
   );
@@ -257,9 +324,29 @@ await browser.close();
 
 const bar = '='.repeat(94);
 console.log(`\n${bar}\nLAYOUT AUDIT — ${ROUTES.length} route(s)\n${bar}`);
-if (!findings.length) console.log('\n  Nothing measurable is wrong on these screens.\n');
+
+/*
+ * Exemptions are printed, not swallowed. A table that declared itself bounded
+ * is a decision somebody made and should be able to argue with later; an
+ * exemption nobody can see is indistinguishable from a rule that stopped
+ * working.
+ */
+const exempt = findings.filter((f) => f.exempt);
+const problems = findings.filter((f) => !f.exempt);
+if (exempt.length) {
+  console.log('\nDECLARED EXEMPT — reported so they stay arguable:\n');
+  const seen = new Set();
+  for (const f of exempt) {
+    const id = `${f.route} ${f.where} ${f.detail}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    console.log(`  ${f.route} — ${f.where}\n      ${f.detail}`);
+  }
+}
+
+if (!problems.length) console.log('\n  Nothing measurable is wrong on these screens.\n');
 const byRoute = new Map();
-for (const f of findings) {
+for (const f of problems) {
   const key = f.tab ? `${f.route}  [${f.tab}]` : f.route;
   if (!byRoute.has(key)) byRoute.set(key, []);
   byRoute.get(key).push(f);
@@ -278,5 +365,8 @@ for (const [key, list] of byRoute) {
     console.log(`      ${detail}`);
   }
 }
-console.log(`\n${bar}\n${findings.length} finding(s).`);
-process.exitCode = findings.length ? 1 : 0;
+console.log(
+  `\n${bar}\n${problems.length} finding(s)` +
+    (exempt.length ? `, plus ${exempt.length} declared exempt.` : '.'),
+);
+process.exitCode = problems.length ? 1 : 0;

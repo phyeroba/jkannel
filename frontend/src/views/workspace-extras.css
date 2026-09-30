@@ -97,6 +97,13 @@ tr.clickable-row:hover td {
   flex-wrap: wrap;
   gap: 6px;
 }
+/* Inside a table cell a wrapping chip list is a tower: the Roles register put
+   a role's permission chips in a 191px column, one per line, and the row came
+   to 1,097px. In a cell the chips stay on one line and the table scrolls,
+   which is the same bargain every other cell makes. */
+tbody td .chip-list {
+  flex-wrap: nowrap;
+}
 .chip {
   display: inline-block;
   padding: 3px 9px;
@@ -129,6 +136,110 @@ tr.clickable-row:hover td {
   color: var(--muted);
   margin-left: auto;
 }
+/* ---------------------------------------------------------------------------
+   THE SHARED TABLE PAGER
+
+   Geometry borrowed from `.pager` in design-authority.css, which is the kit's
+   treatment, so a pager looks the same wherever it appears. A smaller top
+   margin than `.pager`'s 34px, because this one sits directly under a table
+   rather than at the end of a whole workspace.
+   --------------------------------------------------------------------------- */
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.table-pager-buttons {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+/* ---------------------------------------------------------------------------
+   .field-grid — A CLASS ELEVEN PLACES USED AND NOBODY DEFINED
+
+   Five views lay their forms out with `class="field-grid"`. It was declared in
+   exactly one place: a `<style scoped>` block inside DataIntegrityView. Scoped
+   styles do not leak, so on Delivery Retries, Jobs, Scheduled Sends, Customer
+   Detail and Recipient Policy the class did nothing at all — the labels fell
+   back to inline flow, the caption sat beside its control instead of above it,
+   and a row of fields read as one continuous band. That is three of the
+   layout audit's findings with one cause.
+
+   Defined here globally, with the values the scoped copy already used, so the
+   eleven call sites get what they always thought they had.
+   --------------------------------------------------------------------------- */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-4);
+  align-items: end;
+  margin-top: var(--sp-4);
+}
+/* A grid cell already supplies the rhythm; a field's own bottom margin would
+   add to the row gap, which is the same trap `.dialog-grid` documents. */
+.field-grid > label,
+.field-grid > .field {
+  margin-bottom: 0;
+}
+/* A FORM FIELD STACKS, EVEN WHEN IT IS WEARING A FILTER'S CLASS.
+ *
+ * These forms label their inputs with `.filter-select`, which is
+ * `grid-template-columns: auto 1fr` — caption BESIDE control. That is right in
+ * a filter bar, where each control is an independent switch, and wrong in a
+ * form, where the eye pairs a caption with the control to its right and gets
+ * the next field's. Rather than reclassify dozens of labels across five views,
+ * a field inside a field grid stacks. */
+.field-grid > .filter-select {
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 4px;
+}
+
+/* Buttons that mean one thing, kept together.
+   `layout-audit` has always looked for `.button-row` among the containers whose
+   buttons must not split across rows — the class simply had no styles, so
+   actions sat loose among the filters in a wrapping toolbar and broke wherever
+   the row happened to run out. Grouping them makes the cluster wrap as a unit
+   instead of splitting mid-group. */
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  /* NOWRAP AND NO SHRINKING, which is the whole point.
+     The first version used `flex-wrap: wrap`, and inside `.grid-toolbar` —
+     itself a wrapping flex row — the group was squeezed and stacked its three
+     buttons vertically, turning a two-row split into a three-row one. A group
+     that wraps internally is not a group. */
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+/* It may take a whole line when it needs one, and it must never be squeezed
+ * past its contents — but it is NOT pinned to its own row. Pinning it with
+ * `flex: 0 0 100%` put the primary action and the group on different lines on
+ * every workspace screen, which the audit then reported (correctly, by its own
+ * rule) as a cluster split across two rows. `min-width: max-content` keeps the
+ * group whole and lets the parent's wrapping decide where it lands. */
+.grid-toolbar > .button-row {
+  min-width: max-content;
+  max-width: 100%;
+}
+/* `.toolbar` WITHOUT `.grid-toolbar` is not a flex row at all — it is
+ * `display: grid` with `minmax(220px, 1fr) 180px auto`. A group dropped into
+ * its `auto` column with `min-width: max-content` grew the column past the
+ * container and pushed the page 140px sideways on Messages. In a grid the
+ * group takes a whole row instead, which is the same intent expressed in the
+ * layout the container actually uses. */
+.toolbar:not(.grid-toolbar) > .button-row {
+  grid-column: 1 / -1;
+}
+
 /* ---------------------------------------------------------------------------
    THE BIND LIST
 

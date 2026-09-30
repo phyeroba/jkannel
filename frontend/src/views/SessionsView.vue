@@ -194,30 +194,39 @@ onMounted(() => void load());
           <option value="asc">Ascending</option>
         </select>
       </label>
-      <button
-        class="primary-button"
-        data-testid="sessions-refresh"
-        :disabled="loading"
-        @click="load()"
-      >
-        {{ loading ? 'Working…' : 'Refresh' }}
-      </button>
-      <button
-        class="secondary-button"
-        data-testid="sessions-export-csv"
-        :disabled="exporting"
-        @click="exportSessions('csv')"
-      >
-        Export CSV
-      </button>
-      <button
-        class="secondary-button"
-        data-testid="sessions-export-pdf"
-        :disabled="exporting"
-        @click="exportSessions('pdf')"
-      >
-        Export PDF
-      </button>
+      <!--
+        The three actions are one group, so they wrap as one.
+
+        Loose in the toolbar they were flex siblings of the four filters, and
+        at 1600px the row broke between "Refresh" and "Export CSV" — three
+        buttons that do related things reading as two unrelated clusters.
+      -->
+      <div class="button-row">
+        <button
+          class="primary-button"
+          data-testid="sessions-refresh"
+          :disabled="loading"
+          @click="load()"
+        >
+          {{ loading ? 'Working…' : 'Refresh' }}
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="sessions-export-csv"
+          :disabled="exporting"
+          @click="exportSessions('csv')"
+        >
+          Export CSV
+        </button>
+        <button
+          class="secondary-button"
+          data-testid="sessions-export-pdf"
+          :disabled="exporting"
+          @click="exportSessions('pdf')"
+        >
+          Export PDF
+        </button>
+      </div>
     </section>
 
     <p v-if="notice" class="notice" role="status" data-testid="sessions-notice">{{ notice }}</p>

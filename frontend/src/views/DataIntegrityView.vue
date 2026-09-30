@@ -535,13 +535,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.field-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  align-items: end;
-  margin-top: 12px;
-}
+/* `.field-grid` used to be declared here and nowhere else, while five other
+   views used the class — and scoped styles do not leak, so for them it did
+   nothing. It now lives in `workspace-extras.css` with these same values. */
 .notice.broken {
   border-left: 3px solid var(--bad);
   color: var(--bad);
