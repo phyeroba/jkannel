@@ -346,3 +346,4 @@ onMounted(() => void load());
     </section>
   </section>
 </template>
+<style src="./workspace-extras.css"></style>

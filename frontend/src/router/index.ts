@@ -51,7 +51,6 @@ const modules = [
     'configuration.view',
   ],
   ['/monitoring', 'Monitoring', 'Inspect platform metrics and service health.', 'monitoring.view'],
-  ['/alerts', 'Alerts', 'Triage active operational conditions.', 'alerts.view'],
   [
     '/notifications',
     'Notifications',
@@ -151,6 +150,27 @@ const routes: RouteRecordRaw[] = [
     component: ModuleWorkspace,
     meta: { title, description, breadcrumb: [title], permission },
   })),
+  /*
+   * Alerts has its own view, not the shared workspace.
+   *
+   * The workspace is a good register — search, filters, a sorted table, a
+   * pager, all driven from a column list. Alerts is a queue being worked, and
+   * the design asks it for a summary strip, tabs carrying counts, a live line,
+   * bulk acknowledge and a side panel. None of those are columns, and adding
+   * each to the shared workspace would make twenty-five other screens carry
+   * the weight of this one's job.
+   */
+  {
+    path: '/alerts',
+    name: 'alerts',
+    component: () => import('../views/AlertsView.vue'),
+    meta: {
+      title: 'Alerts',
+      description: 'Triage active operational conditions.',
+      breadcrumb: ['Alerts'],
+      permission: 'alerts.view',
+    },
+  },
   {
     path: '/copilot',
     name: 'copilot',

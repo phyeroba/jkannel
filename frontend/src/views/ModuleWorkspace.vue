@@ -577,23 +577,35 @@ const definitions: Record<string, Workspace> = {
       },
       // `unknown`, not 0 — a bind the poller has never sampled has no rate, and
       // printing 0.0 would report an idle carrier as a measured silence.
+      // THREE lines, not four. Out and in are the same measurement in two
+      // directions and read as a pair, and a fourth line took the row to
+      // 112px — past the height the layout audit allows.
       {
         header: 'Throughput',
         lines: (raw) => [
-          { label: 'TPS out', value: rateText(raw.outbound_rate ?? raw.outboundRate) },
-          { label: 'TPS in', value: rateText(raw.inbound_rate ?? raw.inboundRate) },
+          {
+            label: 'TPS out / in',
+            value: `${rateText(raw.outbound_rate ?? raw.outboundRate)} / ${rateText(
+              raw.inbound_rate ?? raw.inboundRate,
+            )}`,
+          },
           { label: 'of ceiling', value: utilisationText(raw) },
           { label: 'queued', value: text(raw.queued_count ?? raw.queuedCount, '0') },
         ],
       },
-      // What last happened, and what last went wrong. The error is prose, so
-      // this cell wraps and clamps rather than setting the table's width.
+      // What last happened, and what last went wrong.
+      //
+      // CLIPPED, not wrapped. Wrapping let the transition line take two lines
+      // and the error two more, and four text lines took the row to 131px
+      // against the audit's 104. Neither value is read end to end — one is a
+      // state and a timestamp, the other a socket error — so both are capped
+      // on one line with the full text on hover.
       {
         header: 'Last event',
         value: (raw) => text(raw.last_event ?? raw.lastEvent, 'no transitions recorded'),
         mono: true,
         hint: (raw) => truncate(raw.last_error ?? raw.lastError, 48),
-        wrap: true,
+        clip: true,
       },
     ],
   },

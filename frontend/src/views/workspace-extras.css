@@ -1282,3 +1282,81 @@ tbody td.cell-clip .row-id {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* SUMMARY STRIP — FOUR MEASURED FIGURES ---------------------------------
+   The question an operator arrives with, answered before any row is read.
+   Label above, figure large, caption below; four across, and on a narrow
+   screen a 2x2 grid rather than a column, so one card is never left alone on
+   a row of its own.
+
+   Every figure here is a whole-table measurement. Deriving them from the
+   loaded page is one line of code and gives the size of the page. */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 12px);
+  background: var(--border);
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  .stat-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 460px) {
+  .stat-strip {
+    grid-template-columns: 1fr;
+  }
+}
+.stat-strip article {
+  background: var(--surface);
+  padding: 14px 18px;
+  min-width: 0;
+}
+.stat-label {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.stat-figure {
+  display: block;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.stat-caption {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* Critical is the one word in the caption that should stop the eye. */
+.stat-caption .is-critical {
+  color: var(--bad, #b42318);
+}
+
+/* A CLAMP ON A `.row-id` HAS TO WIN.
+   `.row-id` sets `display: block` and the clamps set `display: -webkit-box`;
+   both are single-class selectors, so which one applied came down to
+   stylesheet order — and it was `block`, which silently turned every clamp on
+   a secondary identifier into no clamp at all. The inbound-rules row stayed
+   185px tall while the markup said `clamp-1`. Two classes beat one. */
+.row-id.clamp-1,
+.row-id.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.row-id.clamp-1 {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+.row-id.clamp-2 {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}

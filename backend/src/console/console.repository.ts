@@ -1061,9 +1061,83 @@ export class ConsoleRepository {
         // with no severity recorded anywhere still exists and still counts.
         return Object.fromEntries(rows.map((row) => [row.key ?? 'unknown', row.n]));
       };
-      const [byStatus, bySeverity] = await Promise.all([tally('status'), tally('severity')]);
+      /*
+       * The four figures the summary strip actually shows, each measured
+       * rather than derived in the browser from a page of rows.
+       *
+       *   openBySeverity   the open count, split — "3 open, 2 critical"
+       *   oldestOpenedAt   how long the oldest unacknowledged one has waited
+       *   resolved30d      closed in the last 30 days, and by whom
+       *   medianResolveMs  the middle time-to-resolve, not the mean: one
+       *                    incident left open over a weekend drags a mean
+       *                    into uselessness, and this figure exists to say
+       *                    what a typical resolution costs.
+       *
+       * PERCENTILE_CONT interpolates between the two middle rows, which is
+       * the right reading of a median over an even number of samples.
+       */
+      const openSeverity = async () => {
+        const rows = (
+          await c.query(
+            `SELECT COALESCE(a.severity, r.severity) AS key, COUNT(*)::int AS n
+               FROM alert_instances a
+               LEFT JOIN alert_rules r ON r.id = a.rule_id
+              WHERE a.status = 'open'
+              GROUP BY 1`,
+          )
+        ).rows as Array<{ key: string | null; n: number }>;
+        return Object.fromEntries(rows.map((row) => [row.key ?? 'unknown', row.n]));
+      };
+      const unacknowledged = async () => {
+        const row = (
+          await c.query(
+            `SELECT COUNT(*)::int AS n, MIN(a.opened_at) AS oldest
+               FROM alert_instances a
+              WHERE a.status = 'open'`,
+          )
+        ).rows[0] as { n: number; oldest: Date | null };
+        return { count: row?.n ?? 0, oldestOpenedAt: row?.oldest ?? null };
+      };
+      const resolvedRecently = async () => {
+        const row = (
+          await c.query(
+            `SELECT COUNT(*)::int AS n,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (
+                      ORDER BY EXTRACT(EPOCH FROM (a.resolved_at - a.opened_at))
+                    ) AS median_seconds
+               FROM alert_instances a
+              WHERE a.resolved_at IS NOT NULL
+                AND a.resolved_at >= NOW() - INTERVAL '30 days'
+                AND a.opened_at IS NOT NULL`,
+          )
+        ).rows[0] as { n: number; median_seconds: string | number | null };
+        const median = row?.median_seconds === null ? null : Number(row?.median_seconds);
+        return {
+          count: row?.n ?? 0,
+          // null, not 0, when nothing has resolved: "0m to resolve" would read
+          // as instant resolution rather than as no data.
+          medianResolveSeconds: median !== null && Number.isFinite(median) ? median : null,
+        };
+      };
+
+      const [byStatus, bySeverity, openBy, unack, resolved] = await Promise.all([
+        tally('status'),
+        tally('severity'),
+        openSeverity(),
+        unacknowledged(),
+        resolvedRecently(),
+      ]);
       const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
-      return { total, byStatus, bySeverity };
+      return {
+        total,
+        byStatus,
+        bySeverity,
+        openBySeverity: openBy,
+        unacknowledged: unack.count,
+        oldestOpenedAt: unack.oldestOpenedAt,
+        resolved30d: resolved.count,
+        medianResolveSeconds: resolved.medianResolveSeconds,
+      };
     });
   }
   async createAlertRule(actor: Actor, value: any) {

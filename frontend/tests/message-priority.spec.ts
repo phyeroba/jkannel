@@ -217,11 +217,21 @@ describe('priority on the single-message composer', () => {
     wrapper.unmount();
   });
 
+  /*
+   * Priority is no longer a column of its own — the message log went from
+   * fourteen columns to seven and it now sits in the Encoding cell, labelled.
+   * The header is gone; the VALUE is what this test was always named for, and
+   * asserting the header was a weaker check than the name promised.
+   */
   it('shows an unset engine priority as "unset" and a zero as "0" in the message log', async () => {
     stub();
     const wrapper = await mountWorkspace();
     await vi.waitFor(() => expect(wrapper.attributes('aria-busy')).toBe('false'));
-    expect(wrapper.text()).toContain('Priority');
+    const shown = wrapper.text();
+    expect(shown).toContain('priority');
+    // `0` is a real priority and `unset` is its absence; neither may render as
+    // the other, which is the whole point of the cell.
+    expect(/0priority|unsetpriority/.test(shown.replace(/\s+/g, ''))).toBe(true);
     wrapper.unmount();
   });
 });

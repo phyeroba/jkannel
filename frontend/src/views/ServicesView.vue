@@ -511,3 +511,4 @@ onMounted(() => {
   color: var(--muted);
 }
 </style>
+<style src="./workspace-extras.css"></style>

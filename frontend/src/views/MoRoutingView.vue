@@ -1368,9 +1368,12 @@ onMounted(() => {
                 <small class="row-id mono clamp-1" :title="text(rule.id)">{{
                   text(rule.id)
                 }}</small>
+                <!-- One line, not two. Name + id + two lines of description
+                     is four text lines and a 147px row; the full text is in
+                     `title` and the row opens the rule. -->
                 <small
                   v-if="rule.description"
-                  class="row-id clamp-2"
+                  class="row-id clamp-1"
                   :title="text(rule.description)"
                   >{{ text(rule.description) }}</small
                 >
