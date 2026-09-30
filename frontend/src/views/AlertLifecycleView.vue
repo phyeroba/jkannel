@@ -15,6 +15,7 @@ import {
   alertOccurrences,
   alertStarted,
 } from '../utils/alerts';
+import { shortWhen } from '../utils/when';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'idle' | 'loading' | 'ok' | 'error';
@@ -655,18 +656,22 @@ onMounted(() => {
         <table>
           <thead>
             <tr>
+              <!--
+                SIX COLUMNS, NOT THIRTEEN.
+
+                This list ran 1,135px past its panel, which put Actions — and
+                with it the Open button — off the right-hand edge. Thirteen
+                columns is how the record is stored; it is not how an alert is
+                triaged. Fields that answer one question now share a cell:
+                what it is about, who has it, how long it has been running.
+                Every value is still on the screen.
+              -->
               <th scope="col">Severity</th>
               <th scope="col">Condition</th>
-              <th scope="col">Category</th>
-              <th scope="col">Object</th>
+              <th scope="col">Subject</th>
               <th scope="col">Status</th>
-              <th scope="col">Started</th>
-              <th scope="col">Duration</th>
-              <th scope="col">Occurrences</th>
-              <th scope="col">Acknowledgement</th>
-              <th scope="col">Assigned to</th>
-              <th scope="col">Suppressed until</th>
-              <th scope="col">Notification</th>
+              <th scope="col">Age</th>
+              <th scope="col">Ownership</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
@@ -690,43 +695,114 @@ onMounted(() => {
                   {{ text(row.severity) }}
                 </span>
               </td>
-              <td>
-                <strong>{{ text(row.summary ?? row.rule_name) }}</strong>
+              <!--
+                Prose, so it wraps and clamps rather than setting the width of
+                the whole table from its longest sentence.
+
+                ONE line, not two. This cell already carries a second line —
+                the alert id — and three text lines took the row to 112px,
+                past the height the layout audit allows. The full summary is
+                in `title`, the row opens the alert, and nothing is dropped:
+                the choice is between a second line of summary here and the
+                register staying dense enough to scan.
+              -->
+              <td class="cell-wrap">
+                <strong class="clamp-1" :title="text(row.summary ?? row.rule_name)">{{
+                  text(row.summary ?? row.rule_name)
+                }}</strong>
                 <small class="row-id mono">{{ rowId(row) }}</small>
               </td>
-              <td :data-testid="`lifecycle-category-${rowId(row)}`">{{ alertCategory(row) }}</td>
-              <td class="mono" :data-testid="`lifecycle-object-${rowId(row)}`">
-                {{ alertObject(row) }}
-              </td>
               <td>
-                <span class="status-badge" :class="statusTone(row.status)">
-                  {{ text(row.status) }}
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v" :data-testid="`lifecycle-category-${rowId(row)}`">{{
+                      alertCategory(row)
+                    }}</span
+                    ><span class="k">category</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`lifecycle-object-${rowId(row)}`">{{
+                      alertObject(row)
+                    }}</span
+                    ><span class="k">object</span></span
+                  >
                 </span>
               </td>
-              <td class="mono" :data-testid="`lifecycle-started-${rowId(row)}`">
-                {{ text(alertStarted(row)) }}
+              <td>
+                <span class="chip-list">
+                  <span class="status-badge" :class="statusTone(row.status)">
+                    {{ text(row.status) }}
+                  </span>
+                  <span
+                    class="status-badge"
+                    :class="notificationTone(rowNotificationState(row))"
+                    :data-testid="`lifecycle-notification-${rowId(row)}`"
+                  >
+                    {{ rowNotificationState(row) }}
+                  </span>
+                </span>
               </td>
               <!--
-                Measured to now while the alert is open, so the column ages with
-                the incident; measured to resolution once it closes, so a settled
-                incident stops growing.
+                Duration is measured to now while the alert is open, so it ages
+                with the incident, and to resolution once it closes, so a
+                settled incident stops growing. It leads the cell because it is
+                the number that decides what to look at first; the start time
+                and the occurrence count qualify it.
               -->
-              <td class="mono" :data-testid="`lifecycle-duration-${rowId(row)}`">
-                {{ alertDuration(row) }}
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`lifecycle-duration-${rowId(row)}`">{{
+                      alertDuration(row)
+                    }}</span
+                    ><span class="k">running</span></span
+                  >
+                  <span class="metric-line"
+                    ><span
+                      class="v mono"
+                      :data-testid="`lifecycle-started-${rowId(row)}`"
+                      :title="text(alertStarted(row))"
+                      >{{ shortWhen(alertStarted(row)) }}</span
+                    ><span class="k">started</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`lifecycle-occurrences-${rowId(row)}`">{{
+                      alertOccurrences(row)
+                    }}</span
+                    ><span class="k">occurrences</span></span
+                  >
+                </span>
               </td>
-              <td class="figures" :data-testid="`lifecycle-occurrences-${rowId(row)}`">
-                {{ alertOccurrences(row) }}
-              </td>
-              <td :data-testid="`lifecycle-ack-${rowId(row)}`">{{ alertAcknowledgement(row) }}</td>
-              <td class="mono" :data-testid="`lifecycle-assignee-${rowId(row)}`">
-                {{ rowAssignee(row) || 'unassigned' }}
-              </td>
-              <td :data-testid="`lifecycle-suppressed-${rowId(row)}`">
-                {{ rowSuppressedUntil(row) || '—' }}
-              </td>
-              <td :data-testid="`lifecycle-notification-${rowId(row)}`">
-                <span class="status-badge" :class="notificationTone(rowNotificationState(row))">
-                  {{ rowNotificationState(row) }}
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`lifecycle-assignee-${rowId(row)}`">{{
+                      rowAssignee(row) || 'unassigned'
+                    }}</span
+                    ><span class="k">assigned</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v" :data-testid="`lifecycle-ack-${rowId(row)}`">{{
+                      alertAcknowledgement(row)
+                    }}</span
+                    ><span class="k">acknowledged</span></span
+                  >
+                  <!--
+                    Only when there IS a suppression. Rendered unconditionally
+                    this line read "— suppressed until" on every row that was
+                    not suppressed, which is most of them — a third line of
+                    nothing that took the rows to 112px and the register past
+                    the height the layout audit allows. A stack should be as
+                    tall as the row has to say.
+                  -->
+                  <span v-if="rowSuppressedUntil(row)" class="metric-line"
+                    ><span
+                      class="v mono"
+                      :data-testid="`lifecycle-suppressed-${rowId(row)}`"
+                      :title="rowSuppressedUntil(row) || ''"
+                      >{{ shortWhen(rowSuppressedUntil(row)) }}</span
+                    ><span class="k">suppressed until</span></span
+                  >
                 </span>
               </td>
               <td class="row-actions">
@@ -740,12 +816,12 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="listState === 'ok' && !alerts.length">
-              <td colspan="13" class="empty-cell" data-testid="lifecycle-empty">
+              <td colspan="7" class="empty-cell" data-testid="lifecycle-empty">
                 No alerts match this filter.
               </td>
             </tr>
             <tr v-if="listState === 'loading'">
-              <td colspan="13" class="empty-cell">Loading alerts…</td>
+              <td colspan="7" class="empty-cell">Loading alerts…</td>
             </tr>
           </tbody>
         </table>

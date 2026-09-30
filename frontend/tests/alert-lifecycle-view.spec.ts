@@ -123,10 +123,38 @@ describe('Alert lifecycle view', () => {
       expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
     );
     expect(overlay(wrapper, '[data-testid="lifecycle-assignee-a1"]').text()).toBe('joel');
-    expect(overlay(wrapper, '[data-testid="lifecycle-suppressed-a1"]').text()).toBe('—');
     expect(overlay(wrapper, '[data-testid="lifecycle-notification-a1"]').text()).toContain(
       'undeliverable',
     );
+    // `suppressed_until` is null on this row, so the line is ABSENT rather
+    // than rendered as an em dash. It used to be drawn unconditionally, which
+    // on a register where most alerts are not suppressed meant a third line
+    // of nothing on every row — enough to push the rows past the height the
+    // layout audit allows. A stack is as tall as the row has to say.
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-suppressed-a1"]')).toBe(false);
+    wrapper.unmount();
+  });
+
+  // The other direction: when there IS a suppression, it must still show.
+  // Dropping the em-dash line would be a regression if it dropped the real
+  // value with it.
+  it('shows the suppression deadline when the alert is actually suppressed', async () => {
+    stubApi((url) =>
+      url.includes('/alerts?')
+        ? apiResponse({
+            items: [{ ...ALERT_ROW, suppressed_until: '2026-08-05T09:00:00Z' }],
+            total: 1,
+          })
+        : undefined,
+    );
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-suppressed-a1"]')).toBe(true),
+    );
+    // Rendered short ("5 Aug, 12:00"), with the exact instant kept in `title`.
+    const cell = overlay(wrapper, '[data-testid="lifecycle-suppressed-a1"]');
+    expect(cell.text()).toContain('Aug');
+    expect(cell.attributes('title')).toBe('2026-08-05T09:00:00Z');
     wrapper.unmount();
   });
 

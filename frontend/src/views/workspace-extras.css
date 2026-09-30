@@ -1210,3 +1210,12 @@ tbody td .chip-list {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* One line, then an ellipsis. Same contract as `.clamp-2`: always on an inner
+   element, never on the cell, and the full text lives in `title`. */
+.clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

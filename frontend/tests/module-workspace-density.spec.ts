@@ -127,26 +127,34 @@ describe('module workspace operational density', () => {
     );
     const wrapper = await mountWorkspace('/alerts', 'Alerts');
     await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="record-al-1"]')).toBe(true));
+    // The register groups fields that answer one question into one column —
+    // fourteen columns ran 1,137px past the panel and pushed Actions off the
+    // screen. The headers changed; what the row SAYS must not have.
     const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining([
         'Severity',
         'Condition',
         'Status',
-        'Source',
-        'Rule',
-        'Occurrences',
-        'Correlation',
-        'Opened',
-        'Acknowledged',
-        'Resolved',
+        'Ownership',
+        'Origin',
+        'Timeline',
       ]),
     );
+    // No column may reappear: the whole point was to stop the table growing.
+    expect(headers.length).toBeLessThanOrEqual(8);
+
+    // Every value that had its own column before is still rendered, now
+    // inside a grouped cell. This is the assertion that makes the regrouping
+    // safe to repeat on other registers.
     const row = overlay(wrapper, '[data-testid="record-al-1"]').text();
     expect(row).toContain('critical');
     expect(row).toContain('Outbound queue depth 4200');
     expect(row).toContain('smsc:local-fake');
     expect(row).toContain('7');
+    for (const label of ['source', 'rule', 'occurrences', 'opened', 'assigned']) {
+      expect(row).toContain(label);
+    }
     wrapper.unmount();
   });
 

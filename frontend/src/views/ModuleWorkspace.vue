@@ -11,6 +11,7 @@ import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import ScopePicker from '../components/ScopePicker.vue';
+import { shortWhen } from '../utils/when';
 
 /**
  * Which operational object owns each engine directive.
@@ -116,7 +117,13 @@ interface GridConfig {
 
 interface ColumnDefinition {
   header: string;
-  value: (raw: RecordValue) => string;
+  /**
+   * Optional, because a {@link lines} column has no single value to give.
+   * Every other column must still supply one; the renderer and the CSV
+   * exporter both fall back to an empty string rather than throwing, so a
+   * column that supplies neither shows blank instead of breaking the page.
+   */
+  value?: (raw: RecordValue) => string;
   mono?: boolean;
   /** Render the value as a status badge; the string is also used as the tone class. */
   badge?: (raw: RecordValue) => string;
@@ -124,6 +131,33 @@ interface ColumnDefinition {
   dot?: (raw: RecordValue) => string;
   /** Small muted line under the value (health samples, secondary identifiers). */
   hint?: (raw: RecordValue) => string;
+  /**
+   * Several labelled values in ONE cell, rendered as a metric stack.
+   *
+   * The alerts register had fourteen columns and ran 1,137px past its panel;
+   * alert lifecycle had thirteen. Both were built one column per FIELD, which
+   * is the natural way to write a register and the wrong way to read one:
+   * "acknowledged by" and "acknowledged at" are not two facts, they are one
+   * fact with a timestamp, and giving each its own column costs the width
+   * that pushed the Actions column off the screen.
+   *
+   * A column that returns `lines` renders them stacked, value first and
+   * label second, so the operator scans values down the column and reads the
+   * label only when they need to know which one they are looking at. Rows
+   * with nothing to say for a line simply omit it — an empty line is worse
+   * than a shorter stack.
+   */
+  lines?: (raw: RecordValue) => Array<{ label: string; value: string }>;
+  /**
+   * This cell holds PROSE, so it may wrap, and its hint is clamped to two
+   * lines rather than run out sideways as one.
+   *
+   * `tbody td` is nowrap by default, which is right for a register of codes,
+   * counts and states and wrong for the one column that carries a sentence.
+   * The notifications list put a full message body in a nowrap cell and ran
+   * 327px past the panel.
+   */
+  wrap?: boolean;
 }
 
 interface Workspace {
@@ -703,6 +737,16 @@ const definitions: Record<string, Workspace> = {
       ],
       exportBase: '/alerts/export',
     },
+    // SIX COLUMNS, NOT FOURTEEN.
+    //
+    // This register was built one column per field, which is the natural way
+    // to write one and the wrong way to read one: 1,137px past the edge of
+    // its own panel, with the Actions column — the reason an operator is on
+    // this screen at all — off the right-hand side.
+    //
+    // Nothing is dropped. Fields that answer the same question now share a
+    // cell: who acknowledged it and when; where it came from and under which
+    // rule; how long it has been suppressed and why.
     columns: [
       {
         header: 'Severity',
@@ -713,47 +757,66 @@ const definitions: Record<string, Workspace> = {
         header: 'Condition',
         value: (raw) => text(raw.summary ?? raw.rule_name),
         hint: (raw) => text(raw.id, ''),
+        // 616px of nowrap prose was the widest column on the register. It is
+        // the one cell here that holds a sentence, and a sentence wraps.
+        wrap: true,
       },
       {
         header: 'Status',
         value: (raw) => text(raw.status),
         badge: (raw) => badgeTone(raw.status),
+        hint: (raw) =>
+          text(raw.notification_state ?? raw.notificationState, '') &&
+          `notification ${text(raw.notification_state ?? raw.notificationState, 'unknown')}`,
       },
       // The alerts index selects a.*, so the lifecycle columns arrive in their
       // snake_case database form. camelCase is read too because
       // GET /alerts/:id/lifecycle publishes the same fields that way.
       {
-        header: 'Assigned to',
-        value: (raw) =>
-          text(raw.assigned_to_username ?? raw.assignedToUsername ?? raw.assigned_to, 'unassigned'),
-        mono: true,
-        hint: (raw) => text(raw.assigned_at ?? raw.assignedAt, ''),
+        header: 'Ownership',
+        lines: (raw) => {
+          const rows: Array<{ label: string; value: string }> = [
+            {
+              label: 'assigned',
+              value: text(
+                raw.assigned_to_username ?? raw.assignedToUsername ?? raw.assigned_to,
+                'unassigned',
+              ),
+            },
+          ];
+          const ackBy = text(raw.acknowledged_by ?? raw.acknowledgedBy, '');
+          if (ackBy) rows.push({ label: 'acknowledged by', value: ackBy });
+          const until = shortWhen(raw.suppressed_until ?? raw.suppressedUntil);
+          if (until) rows.push({ label: 'suppressed until', value: until });
+          return rows;
+        },
       },
       {
-        header: 'Suppressed until',
-        value: (raw) => text(raw.suppressed_until ?? raw.suppressedUntil),
-        hint: (raw) => text(raw.suppressed_reason ?? raw.suppressedReason, ''),
+        header: 'Origin',
+        lines: (raw) => {
+          const rows: Array<{ label: string; value: string }> = [
+            { label: 'source', value: text(raw.source) },
+            { label: 'rule', value: text(raw.rule_name ?? raw.ruleName) },
+            { label: 'occurrences', value: text(raw.dedup_count ?? raw.dedupCount, '1') },
+          ];
+          const group = text(raw.correlation_group ?? raw.correlationGroup, '');
+          if (group) rows.push({ label: 'correlation', value: group });
+          return rows;
+        },
       },
       {
-        header: 'Notification',
-        value: (raw) => text(raw.notification_state ?? raw.notificationState, 'unknown'),
-        badge: (raw) => notificationTone(raw.notification_state ?? raw.notificationState),
+        header: 'Timeline',
+        lines: (raw) => {
+          const rows: Array<{ label: string; value: string }> = [
+            { label: 'opened', value: shortWhen(raw.opened_at ?? raw.openedAt) },
+          ];
+          const ackAt = shortWhen(raw.acknowledged_at ?? raw.acknowledgedAt);
+          if (ackAt) rows.push({ label: 'acknowledged', value: ackAt });
+          const resolved = shortWhen(raw.resolved_at ?? raw.resolvedAt);
+          if (resolved) rows.push({ label: 'resolved', value: resolved });
+          return rows;
+        },
       },
-      { header: 'Source', value: (raw) => text(raw.source) },
-      { header: 'Rule', value: (raw) => text(raw.rule_name ?? raw.ruleName) },
-      { header: 'Occurrences', value: (raw) => text(raw.dedup_count ?? raw.dedupCount, '1') },
-      {
-        header: 'Correlation',
-        value: (raw) => text(raw.correlation_group ?? raw.correlationGroup),
-        mono: true,
-      },
-      { header: 'Opened', value: (raw) => text(raw.opened_at ?? raw.openedAt) },
-      {
-        header: 'Acknowledged',
-        value: (raw) => text(raw.acknowledged_by ?? raw.acknowledgedBy),
-        hint: (raw) => text(raw.acknowledged_at ?? raw.acknowledgedAt, ''),
-      },
-      { header: 'Resolved', value: (raw) => text(raw.resolved_at ?? raw.resolvedAt) },
     ],
   },
   reports: {
@@ -802,12 +865,28 @@ const definitions: Record<string, Workspace> = {
         { field: 'unread', label: 'Unread', options: BOOLEAN_OPTIONS },
       ],
     },
+    // AN INBOX ROW, NOT FIVE COLUMNS.
+    //
+    // Received / Category / Title / Body / Status is how the record is
+    // stored, not how a notification is read. Nobody scans a column of
+    // message bodies; they read a subject line, glance at the preview, and
+    // check whether it is new. The body was also in a nowrap cell, which is
+    // what put this list 327px past its panel — one message with a long
+    // sentence widened the table for every row.
     columns: [
-      { header: 'Received', value: (raw) => text(raw.created_at) },
-      { header: 'Category', value: (raw) => text(raw.category) },
-      { header: 'Title', value: (raw) => text(raw.title) },
-      { header: 'Body', value: (raw) => text(raw.body) },
-      { header: 'Status', value: (raw) => (raw.read_at ? 'read' : 'unread') },
+      {
+        header: 'Notification',
+        value: (raw) => text(raw.title),
+        hint: (raw) => text(raw.body, ''),
+        wrap: true,
+      },
+      { header: 'Category', value: (raw) => text(raw.category), badge: () => '' },
+      {
+        header: 'Received',
+        value: (raw) => (raw.read_at ? 'read' : 'unread'),
+        badge: (raw) => (raw.read_at ? '' : 'warn'),
+        hint: (raw) => shortWhen(raw.created_at),
+      },
     ],
   },
   customers: {
@@ -3282,7 +3361,7 @@ function downloadClientCsv(
   const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
   const lines = [headers.map((column) => escape(column.label)).join(',')];
   for (const record of records)
-    lines.push(headers.map((column) => escape(column.value(record))).join(','));
+    lines.push(headers.map((column) => escape(column.value?.(record) ?? '')).join(','));
   saveDownloadedFile(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), filename);
 }
 function exportQueueCsv() {
@@ -6932,22 +7011,45 @@ onUnmounted(() => {
               @keydown.space.prevent="clickableRow && onRowClick(row)"
             >
               <template v-if="columns">
-                <td v-for="column in columns" :key="column.header" :class="{ mono: column.mono }">
-                  <div class="cell-status">
+                <td
+                  v-for="column in columns"
+                  :key="column.header"
+                  :class="{ mono: column.mono, 'cell-wrap': column.wrap }"
+                >
+                  <!-- A grouped cell: several labelled values that answer one
+                       question, stacked, instead of one column each. -->
+                  <span v-if="column.lines" class="metric-stack">
                     <span
-                      v-if="column.dot"
-                      class="dot"
-                      :class="column.dot(row.raw)"
-                      :data-testid="key === 'smsc' ? `smsc-dot-${row.id}` : undefined"
-                    ></span>
-                    <span v-if="column.badge" class="status-badge" :class="column.badge(row.raw)">
-                      {{ column.value(row.raw) }}
+                      v-for="line in column.lines(row.raw)"
+                      :key="line.label"
+                      class="metric-line"
+                    >
+                      <span class="v mono">{{ line.value }}</span>
+                      <span class="k">{{ line.label }}</span>
                     </span>
-                    <span v-else>{{ column.value(row.raw) }}</span>
-                  </div>
-                  <small v-if="column.hint && column.hint(row.raw)" class="row-id">
-                    {{ column.hint(row.raw) }}
-                  </small>
+                  </span>
+                  <template v-else>
+                    <div class="cell-status">
+                      <span
+                        v-if="column.dot"
+                        class="dot"
+                        :class="column.dot(row.raw)"
+                        :data-testid="key === 'smsc' ? `smsc-dot-${row.id}` : undefined"
+                      ></span>
+                      <span v-if="column.badge" class="status-badge" :class="column.badge(row.raw)">
+                        {{ column.value?.(row.raw) }}
+                      </span>
+                      <span v-else>{{ column.value?.(row.raw) }}</span>
+                    </div>
+                    <small
+                      v-if="column.hint && column.hint(row.raw)"
+                      class="row-id"
+                      :class="{ 'clamp-2': column.wrap }"
+                      :title="column.wrap ? column.hint(row.raw) : undefined"
+                    >
+                      {{ column.hint(row.raw) }}
+                    </small>
+                  </template>
                 </td>
               </template>
               <template v-else>
@@ -7444,10 +7546,10 @@ onUnmounted(() => {
                 <span
                   v-if="column.badge"
                   class="status-badge"
-                  :class="badgeTone(column.value(item))"
-                  >{{ column.value(item) || '—' }}</span
+                  :class="badgeTone(column.value?.(item) ?? '')"
+                  >{{ column.value?.(item) || '—' }}</span
                 >
-                <template v-else>{{ column.value(item) || '—' }}</template>
+                <template v-else>{{ column.value?.(item) || '—' }}</template>
                 <small v-if="column.hint && column.hint(item)" class="row-id">{{
                   column.hint(item)
                 }}</small>
