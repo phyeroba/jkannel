@@ -52,12 +52,6 @@ const modules = [
   ],
   ['/monitoring', 'Monitoring', 'Inspect platform metrics and service health.', 'monitoring.view'],
   [
-    '/notifications',
-    'Notifications',
-    'Review report deliveries and platform notices for your account.',
-    '',
-  ],
-  [
     '/customers',
     'Customers',
     'Manage customer accounts, status, limits, and traffic.',
@@ -160,6 +154,21 @@ const routes: RouteRecordRaw[] = [
    * each to the shared workspace would make twenty-five other screens carry
    * the weight of this one's job.
    */
+  /*
+   * Notifications has its own view for the same reason Alerts does: it is an
+   * inbox, and the shared workspace renders registers. A list grouped by
+   * recency beside a reading pane is not a table with columns.
+   */
+  {
+    path: '/notifications',
+    name: 'notifications',
+    component: () => import('../views/NotificationsView.vue'),
+    meta: {
+      title: 'Notifications',
+      description: 'Review report deliveries and platform notices for your account.',
+      breadcrumb: ['Notifications'],
+    },
+  },
   {
     path: '/alerts',
     name: 'alerts',
