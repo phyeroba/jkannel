@@ -104,3 +104,4 @@ frontend/.*.mjs
 # The requirement they carry is written up in
 # docs/REDESIGN-ALERTS-ESCALATION-NOTIFICATIONS.md, which IS committed.
 design/redesign-2026-09/*.png
+design/redesign-2026-09/kamex-pages/
