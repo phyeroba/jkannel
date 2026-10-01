@@ -27,7 +27,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import { canAccess, session } from '../stores/session';
 import DetailDrawer from '../components/DetailDrawer.vue';
-import EventTimeline from '../components/EventTimeline.vue';
 import TablePager from '../components/TablePager.vue';
 import DataState from '../components/DataState.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -395,18 +394,26 @@ function openPanel(row: RecordValue) {
 const panelTimeline = computed(() => {
   const row = openAlert.value;
   if (!row) return [];
-  const steps: Array<{ label: string; at: string; detail?: string }> = [];
-  const push = (label: string, at: string, detail?: string) => {
-    if (at) steps.push({ label, at, detail });
+  const steps: Array<{ label: string; at: string; detail?: string; tone: string }> = [];
+  // Only events that actually happened. A greyed-out "Resolved —" entry would
+  // show a step the alert has not reached as part of its history.
+  const push = (label: string, at: string, tone: string, detail?: string) => {
+    if (at) steps.push({ label, at, detail, tone });
   };
-  push('Opened', openedAt(row));
+  push('Opened', openedAt(row), 'bad');
   push(
     'Notified',
     String(row.notified_at ?? row.notifiedAt ?? ''),
+    'info',
     text(row.notification_state ?? row.notificationState, ''),
   );
-  push('Acknowledged', acknowledgedAt(row), text(row.acknowledged_by ?? row.acknowledgedBy, ''));
-  push('Resolved', resolvedAt(row));
+  push(
+    'Acknowledged',
+    acknowledgedAt(row),
+    'warn',
+    text(row.acknowledged_by ?? row.acknowledgedBy, ''),
+  );
+  push('Resolved', resolvedAt(row), 'good');
   return steps;
 });
 
@@ -819,17 +826,68 @@ onBeforeUnmount(() => {
       </footer>
     </section>
 
-    <!-- SIDE PANEL -------------------------------------------------------- -->
+    <!-- SIDE PANEL -------------------------------------------------------
+      The actions sit at the TOP, not in a footer.
+
+      This panel is opened to DO something — acknowledge, resend, go to the
+      lifecycle — and a footer puts those controls below a field grid and a
+      timeline, so on a long record they are off the bottom of the sheet.
+      The fields are reference; the buttons are the reason you opened it.
+    -->
     <DetailDrawer
       :open="Boolean(openAlert)"
+      :eyebrow="openAlert ? severityOf(openAlert) : ''"
       :title="text(openAlert?.summary ?? openAlert?.rule_name, 'Alert')"
-      testid="alert-panel"
       @close="openAlert = null"
     >
       <template v-if="openAlert">
-        <dl class="detail-grid">
+        <div class="panel-actions">
+          <button
+            v-if="statusOf(openAlert) === 'open' && canAcknowledge"
+            class="primary-button"
+            type="button"
+            :disabled="busyId === id(openAlert)"
+            data-testid="alert-panel-ack"
+            @click="acknowledge(openAlert)"
+          >
+            Acknowledge
+          </button>
+          <button
+            v-if="statusOf(openAlert) === 'open' && canAcknowledge"
+            class="secondary-button"
+            type="button"
+            :disabled="busyId === id(openAlert)"
+            data-testid="alert-panel-notify"
+            @click="reNotify(openAlert)"
+          >
+            Re-notify
+          </button>
+          <RouterLink
+            class="secondary-button"
+            :to="`/alert-lifecycle?alert=${id(openAlert)}`"
+            data-testid="alert-panel-lifecycle"
+          >
+            Open lifecycle
+          </RouterLink>
+        </div>
+
+        <!--
+          A 130px label column against a flexible value column: the labels
+          align down the left so the eye can find a field without reading
+          every one of them.
+        -->
+        <dl class="panel-fields">
           <dt>Severity</dt>
-          <dd>{{ severityOf(openAlert) }}</dd>
+          <dd>
+            <span class="sev-mark"
+              ><span
+                class="sev-dot"
+                :class="toneOf(severityOf(openAlert))"
+                aria-hidden="true"
+              ></span
+              >{{ severityOf(openAlert) }}</span
+            >
+          </dd>
           <dt>Status</dt>
           <dd>{{ statusOf(openAlert) }}</dd>
           <dt>Rule</dt>
@@ -837,7 +895,7 @@ onBeforeUnmount(() => {
           <dt>Source</dt>
           <dd>{{ text(openAlert.source) }}</dd>
           <dt>Occurrences</dt>
-          <dd>{{ text(openAlert.dedup_count ?? openAlert.dedupCount, '1') }}</dd>
+          <dd class="mono">{{ text(openAlert.dedup_count ?? openAlert.dedupCount, '1') }}</dd>
           <dt>Correlation</dt>
           <dd class="mono">
             {{ text(openAlert.correlation_group ?? openAlert.correlationGroup) }}
@@ -854,37 +912,30 @@ onBeforeUnmount(() => {
           <dd class="mono">{{ id(openAlert) }}</dd>
         </dl>
 
-        <h3>Timeline</h3>
-        <EventTimeline
-          :items="
-            panelTimeline.map((step) => ({
-              label: step.label,
-              at: shortWhen(step.at),
-              detail: step.detail,
-            }))
-          "
-        />
-      </template>
-      <template #footer>
-        <div class="button-row">
-          <button
-            v-if="openAlert && statusOf(openAlert) === 'open' && canAcknowledge"
-            class="primary-button"
-            type="button"
-            data-testid="alert-panel-ack"
-            @click="acknowledge(openAlert)"
-          >
-            Acknowledge
-          </button>
-          <RouterLink
-            v-if="openAlert"
-            class="secondary-button"
-            :to="`/alert-lifecycle?alert=${id(openAlert)}`"
-            data-testid="alert-panel-lifecycle"
-          >
-            Open lifecycle
-          </RouterLink>
-        </div>
+        <!--
+          The rail stops at the last event rather than running on past it:
+          a connector below the final dot promises a step that has not
+          happened, which on a resolved alert is simply wrong.
+        -->
+        <section class="panel-timeline">
+          <h3>Timeline</h3>
+          <ol>
+            <li v-for="(step, index) in panelTimeline" :key="step.label">
+              <span class="tl-rail" aria-hidden="true">
+                <span class="tl-dot" :class="step.tone"></span>
+                <span v-if="index < panelTimeline.length - 1" class="tl-line"></span>
+              </span>
+              <span class="tl-body">
+                <strong>{{ step.label }}</strong>
+                <span class="tl-at mono">{{ shortWhen(step.at) }}</span>
+                <span v-if="step.detail" class="tl-detail">{{ step.detail }}</span>
+              </span>
+            </li>
+            <li v-if="!panelTimeline.length" class="tl-none">
+              Nothing has been recorded against this alert yet.
+            </li>
+          </ol>
+        </section>
       </template>
     </DetailDrawer>
   </div>
@@ -1139,6 +1190,106 @@ onBeforeUnmount(() => {
 
 .chevron-button:hover {
   color: var(--text-strong);
+}
+
+/* SIDE PANEL -------------------------------------------------------------
+   Actions first, then reference, then history. */
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-fields {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  row-gap: 10px;
+  column-gap: 12px;
+  margin: 0 0 22px;
+  font-size: 13px;
+}
+.panel-fields dt {
+  color: var(--muted);
+}
+.panel-fields dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+.panel-timeline h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.panel-timeline ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.panel-timeline li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 12px;
+}
+.tl-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.tl-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.tl-dot.bad {
+  background: var(--bad, #b42318);
+}
+.tl-dot.warn {
+  background: var(--warn, #9a6700);
+}
+.tl-dot.good {
+  background: var(--ok, #1a7f37);
+}
+.tl-dot.info {
+  background: var(--brand);
+}
+.tl-line {
+  flex: 1;
+  width: 1px;
+  background: var(--border);
+}
+.tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 16px;
+  min-width: 0;
+}
+.tl-body strong {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.tl-at {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tl-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tl-none {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .table-foot {
