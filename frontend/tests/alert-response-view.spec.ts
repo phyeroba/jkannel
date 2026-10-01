@@ -129,10 +129,19 @@ describe('Escalation & maintenance view', () => {
     await vi.waitFor(() =>
       expect(overlayHas(wrapper, '[data-testid="policy-row-pol-1"]')).toBe(true),
     );
+    // The chain renders as a RAIL, not as "+5m → email noc@example.com" in a
+    // cell: an offset, a node, and a card per step. The steps and their
+    // timings are still all here — that is what this test is for — but the
+    // arrow-joined sentence is gone on purpose.
     const row = overlay(wrapper, '[data-testid="policy-row-pol-1"]').text();
     expect(row).toContain('On-call tier 1');
-    expect(row).toContain('+5m → email noc@example.com');
-    expect(row).toContain('+30m → sms +256700000001');
+    expect(row).toContain('+5m');
+    expect(row).toContain('noc@example.com');
+    expect(row).toContain('+30m');
+    expect(row).toContain('+256700000001');
+    // And a step whose channel cannot deliver now says so, which the sentence
+    // never did.
+    expect(row).toContain('this step is skipped');
     expect(overlay(wrapper, '[data-testid="maintenance-active-banner"]').text()).toContain(
       'Carrier SMPP upgrade',
     );
@@ -274,10 +283,12 @@ describe('Escalation & maintenance view', () => {
       expect(overlayHas(wrapper, '[data-testid="readiness-channel-ch-2"]')).toBe(true),
     );
     expect(overlay(wrapper, '[data-testid="readiness-channel-ch-1"]').text()).toContain(
-      'deliverable',
+      'Deliverable',
     );
     const email = overlay(wrapper, '[data-testid="readiness-channel-ch-2"]').text();
-    expect(email).toContain('cannot deliver');
+    expect(email).toContain('Not deliverable');
+    // The reason sits under the channel it belongs to now, rather than in a
+    // "Why not" column at the far right of a five-column table.
     expect(email).toContain('SMTP_URL is not configured');
     expect(overlay(wrapper, '[data-testid="readiness-deliverable"]').text()).toBe('1');
     expect(overlay(wrapper, '[data-testid="readiness-undeliverable"]').text()).toBe('2');
@@ -285,15 +296,24 @@ describe('Escalation & maintenance view', () => {
     expect(overlay(wrapper, '[data-testid="readiness-warning"]').text()).toContain(
       'could not be delivered',
     );
-    expect(overlayHas(wrapper, '[data-testid="readiness-ok"]')).toBe(false);
+    // The verdict moved into the banner, which states it in words and in
+    // colour rather than as a separate green notice below the heading.
+    expect(overlay(wrapper, '[data-testid="readiness-banner"]').text()).toContain('reaches nobody');
     wrapper.unmount();
   });
 
   it('confirms readiness when a channel can deliver and a policy is enabled', async () => {
     stubApi({ readiness: { ...readiness, undeliverableAlerts: 0, warning: null } });
     const wrapper = mount(AlertResponseView);
-    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="readiness-ok"]')).toBe(true));
-    expect(overlay(wrapper, '[data-testid="readiness-ok"]').text()).toContain('reaches somebody');
+    // Wait for the DATA, not for the banner: the banner renders immediately
+    // with "Checking whether an alert reaches anybody…", so waiting for the
+    // element resolves before readiness has loaded and the verdict is read
+    // off a screen that has not decided one yet.
+    await vi.waitFor(() =>
+      expect(overlay(wrapper, '[data-testid="readiness-banner"]').text()).toContain(
+        'reaches somebody',
+      ),
+    );
     expect(overlayHas(wrapper, '[data-testid="readiness-warning"]')).toBe(false);
     wrapper.unmount();
   });

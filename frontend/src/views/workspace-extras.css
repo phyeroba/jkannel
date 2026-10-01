@@ -319,6 +319,26 @@ tbody td .chip-list {
   align-items: start;
   gap: 4px;
 }
+/* A PLAIN LABEL IN A FIELD GRID STACKS TOO.
+ * `<label><span>Destination</span><input></label>` leaves the caption inline
+ * with its control, because a span is inline and an input is inline-block —
+ * so two fields side by side put four things on one line and the eye pairs
+ * the second caption with the first field's input. The rule above only
+ * covered labels wearing `.filter-select`. */
+.field-grid > label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.field-grid > label > span {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.field-grid > label > input,
+.field-grid > label > select {
+  width: 100%;
+}
 
 /* Buttons that mean one thing, kept together.
    `layout-audit` has always looked for `.button-row` among the containers whose

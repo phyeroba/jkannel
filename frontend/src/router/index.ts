@@ -9,7 +9,6 @@ import LiveQueueView from '../views/LiveQueueView.vue';
 import AlertResponseView from '../views/AlertResponseView.vue';
 import AlertLifecycleView from '../views/AlertLifecycleView.vue';
 import LogExplorerView from '../views/LogExplorerView.vue';
-import RoutingDepthView from '../views/RoutingDepthView.vue';
 import ContentRulesView from '../views/ContentRulesView.vue';
 import MoRoutingView from '../views/MoRoutingView.vue';
 import RolesView from '../views/RolesView.vue';
@@ -43,7 +42,6 @@ const modules = [
     'messages.view',
   ],
   ['/smsc', 'SMSC Manager', 'Manage connections, health, and provider capacity.', 'smsc.view'],
-  ['/routing', 'Routing', 'Understand and validate message routing decisions.', 'routes.view'],
   [
     '/configuration',
     'Configuration',
@@ -169,6 +167,27 @@ const routes: RouteRecordRaw[] = [
       breadcrumb: ['Notifications'],
     },
   },
+  /*
+   * Routing and Advanced Routing are ONE component.
+   *
+   * They showed the same routes from the same table with two column sets,
+   * and keeping them as two files is how they drifted apart: a fix to one
+   * table was a fix to one of them. The component reads `advanced` off the
+   * path — Routing shows load and hides operator/rotation behind a link,
+   * Advanced shows weighted targets, the window and the cost.
+   */
+  {
+    path: '/routing',
+    name: 'routing',
+    component: () => import('../views/RoutingView.vue'),
+    meta: {
+      title: 'Routing',
+      description:
+        'Which SMSC carries each message, what happens when it fails, and a safe place to test before you deploy.',
+      breadcrumb: ['Routing'],
+      permission: 'routes.view',
+    },
+  },
   {
     path: '/alerts',
     name: 'alerts',
@@ -264,9 +283,9 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/routing-advanced',
     name: 'routing-advanced',
-    component: RoutingDepthView,
+    component: () => import('../views/RoutingView.vue'),
     meta: {
-      title: 'Advanced Routing',
+      title: 'Advanced routing',
       description:
         'Prefix, country, operator and weighted routes, selection strategies, version history, and a resolve preview.',
       breadcrumb: ['Routing', 'Advanced'],

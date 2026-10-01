@@ -138,9 +138,16 @@ function stepUsing(channel: ChannelReadiness): string {
  * no enabled policy never gets told to fire, and an enabled policy with
  * nothing deliverable fires into nothing.
  */
-const reachesSomebody = computed(
-  () => deliverableCount.value > 0 && Number(readiness.value?.escalationPolicies ?? 0) > 0,
-);
+const reachesSomebody = computed(() => {
+  // The API's own warning outranks the two counts.
+  //
+  // `deliverableChannels > 0` and `enabledPolicies > 0` are statements about
+  // CAPABILITY. The warning is a statement about what actually happened —
+  // "N alerts could not be delivered" — and a green banner over that would
+  // be the screen contradicting its own evidence. Capability is not delivery.
+  if (readiness.value?.warning) return false;
+  return deliverableCount.value > 0 && Number(readiness.value?.escalationPolicies ?? 0) > 0;
+});
 
 function describeSteps(policy: RecordValue): string {
   const steps = stepsOf(policy);
