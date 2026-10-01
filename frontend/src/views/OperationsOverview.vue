@@ -227,6 +227,63 @@ const HEALTH_ORDER: Record<string, number> = {
   unknown: 2,
   healthy: 3,
 };
+/**
+ * ONE LINE THAT SAYS WHAT IS WRONG, BY NAME.
+ *
+ * The screen opened with an orange banner reading "Telemetry for 2 carriers
+ * is not being observed" — true, and almost useless: it never said WHICH
+ * carriers, never said what was actually degraded, and sat above a dashboard
+ * the operator then had to read anyway to find out.
+ *
+ * This is the same information as a sentence an operator can act on: the
+ * carrier that is genuinely degraded, named, with its bind count; the ones
+ * that are merely silent, named, and explicitly called unknown rather than
+ * healthy; and whether anything else is wrong. The button goes straight to
+ * the worst one.
+ */
+const degradedCarriers = computed(() =>
+  carriers.value.filter(
+    (carrier) => carrier.bindsTotal > 0 && carrier.bindsHealthy < carrier.bindsTotal,
+  ),
+);
+const silentCarriers = computed(() =>
+  carriers.value.filter((carrier) => String(carrier.health).toLowerCase() === 'unknown'),
+);
+/** The one to open from the status line: worst first, then by name. */
+const worstCarrier = computed(() => degradedCarriers.value[0] ?? carriersByHealth.value[0] ?? null);
+
+type OverallTone = 'checking' | 'bad' | 'warn' | 'good';
+const overallTone = computed<OverallTone>(() => {
+  if (carriersState.value === 'checking') return 'checking';
+  if (degradedCarriers.value.length) return 'bad';
+  if (silentCarriers.value.length) return 'warn';
+  return 'good';
+});
+const OVERALL_WORD: Record<OverallTone, string> = {
+  checking: 'Checking',
+  bad: 'Degraded',
+  warn: 'Partly unobserved',
+  good: 'Healthy',
+};
+const overallWord = computed(() => OVERALL_WORD[overallTone.value]);
+
+/** Names joined the way a person writes them: "A and B", "A, B and C". */
+function nameList(items: Array<{ name: string }>): string {
+  const names = items.map((item) => item.name);
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** Incidents still open. Drives the panel's heading, which used to claim
+ *  every row was active regardless of its status. */
+const openIncidents = computed(
+  () =>
+    recentAlerts.value.filter((alert) => {
+      const status = String(alert.status ?? '').toLowerCase();
+      return status !== 'resolved' && status !== 'closed';
+    }).length,
+);
+
 const carriersByHealth = computed(() =>
   [...carriers.value].sort(
     (a, b) =>
@@ -510,17 +567,43 @@ function statusTone(status: string) {
   -->
   <div data-testid="operations-view">
     <!--
-      Stale telemetry is announced ABOVE the content, never in place of it. An
-      operator has to be able to read everything on the screen while being told
-      which part of it is not current — replacing the dashboard with a warning
-      hides exactly the numbers they came to look at.
+      THE VERDICT, IN ONE LINE, WITH NAMES IN IT.
+
+      This replaces an orange banner that said "Telemetry for 2 carriers is
+      not being observed" — true, and nearly useless: it named no carrier,
+      described nothing that was actually wrong, and sat above a dashboard
+      the operator had to read anyway to find out. The state is still
+      announced above the content rather than in place of it, which was the
+      one thing the banner got right.
     -->
-    <p v-if="unobservedCarriers" class="stale-banner" data-testid="dashboard-stale-banner">
-      Telemetry for {{ unobservedCarriers }}
-      {{ unobservedCarriers === 1 ? 'carrier is' : 'carriers are' }} not being observed, so
-      {{ unobservedCarriers === 1 ? 'its' : 'their' }} health is reported unknown rather than
-      healthy.
-    </p>
+    <section class="status-line" :class="`is-${overallTone}`" data-testid="dashboard-status">
+      <span class="status-chip">
+        <span class="status-dot" aria-hidden="true"></span>{{ overallWord }}
+      </span>
+      <p>
+        <template v-if="degradedCarriers.length">
+          <strong>{{ nameList(degradedCarriers) }}</strong>
+          {{ degradedCarriers.length === 1 ? 'has' : 'have' }}
+          {{ degradedCarriers[0].bindsHealthy }} of {{ degradedCarriers[0].bindsTotal }} binds up.
+        </template>
+        <template v-if="silentCarriers.length">
+          <strong>{{ nameList(silentCarriers) }}</strong>
+          {{ silentCarriers.length === 1 ? 'sends' : 'send' }} no telemetry, so
+          {{ silentCarriers.length === 1 ? 'its' : 'their' }} health is unknown rather than healthy.
+        </template>
+        <template v-if="!degradedCarriers.length && !silentCarriers.length">
+          Every carrier is reporting and every bind is up.
+        </template>
+      </p>
+      <RouterLink
+        v-if="worstCarrier"
+        class="secondary-button is-compact"
+        :to="`/carriers/${worstCarrier.id}`"
+        data-testid="dashboard-inspect"
+      >
+        Inspect {{ worstCarrier.name }}
+      </RouterLink>
+    </section>
     <!--
       `toolbar` alongside `dashboard-actions`: this is a bar of independent
       switches over the view, not a form, and the layout audit's inline-label
@@ -625,6 +708,175 @@ function statusTone(status: string) {
     absence is why the console did not look like the package even after every
     token and component class matched.
   -->
+    <!--
+      CARRIERS COME SECOND, NOT LAST.
+
+      This panel answers the question the dashboard exists for — can we send,
+      and through whom — and it sat below the traffic chart, the service list
+      and the incident table, four screens down. The metric row above says how
+      much; this says through what, and everything below it is detail.
+    -->
+    <!--
+    Carrier connectivity — the design system's DashboardScreen centrepiece, and
+    the panel §3 asks for so a shift can be assessed in ten seconds: every
+    network this gateway binds to, worst first, each row opening its carrier.
+
+    Every column here is a field `GET /carriers` already returns. Throughput and
+    utilisation are derived from engine telemetry that is often absent, so they
+    read `unknown` rather than 0 — the design specifies that treatment, and a
+    zero we never measured is the one thing this console must never print.
+  -->
+    <article class="panel" data-testid="carrier-connectivity">
+      <header class="panel-header">
+        <div>
+          <h2>Carrier connectivity</h2>
+          <p>Every network this gateway binds to, worst first</p>
+        </div>
+        <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <!--
+              SIX COLUMNS, NOT ELEVEN. Same treatment as the Carriers
+              register, and for the same reason: eleven narrow columns of
+              figures is a spreadsheet, and the panel's own promise is that a
+              shift can be assessed in ten seconds. Metrics read together now
+              share a cell — nothing is dropped.
+            -->
+            <tr>
+              <th scope="col">Carrier</th>
+              <th scope="col">Health</th>
+              <th scope="col">Connections</th>
+              <th scope="col">Traffic</th>
+              <th scope="col">Delivery</th>
+              <th scope="col">Alerts</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="carrier in carriersByHealth"
+              :key="carrier.id"
+              class="selectable"
+              :data-testid="`dashboard-carrier-${carrier.id}`"
+              tabindex="0"
+              @click="$router.push(`/carriers/${carrier.id}`)"
+              @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
+            >
+              <td>
+                <strong>{{ carrier.name }}</strong>
+                <span class="row-id">{{
+                  [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
+                  'no network code'
+                }}</span>
+              </td>
+              <td>
+                <span class="status-badge" :class="healthTone(carrier.health)">{{
+                  carrier.health
+                }}</span>
+              </td>
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.smscCount }}</span
+                    ><span class="k">SMSCs</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono"
+                      >{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</span
+                    ><span class="k">binds up</span></span
+                  >
+                </span>
+              </td>
+              <!--
+                ONE "NO TELEMETRY", NOT THREE "UNKNOWN"s.
+
+                A carrier the poller has never sampled had every figure in
+                this cell reading `unknown`, which fills the row with noise
+                and still does not say why. Said once, as a state, it reads
+                as what it is: we are not measuring this carrier, so there is
+                nothing here to be alarmed by OR reassured by.
+              -->
+              <td>
+                <span v-if="carrier.observedTps === null" class="no-telemetry">
+                  No telemetry
+                  <small class="row-id">{{ carrier.queuedMessages.toLocaleString() }} queued</small>
+                </span>
+                <span v-else class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.observedTps }}</span
+                    ><span class="k">MT TPS</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ utilisationLabel(carrier) }}</span
+                    ><span class="k">of ceiling</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.queuedMessages.toLocaleString() }}</span
+                    ><span class="k">queued</span></span
+                  >
+                </span>
+              </td>
+              <!--
+              Delivery quality over the last 24 hours, from the DLR report. It
+              is a second request and may be refused on its own — reports.view
+              is not smsc.view — so these two cells say "not permitted" rather
+              than an em dash an operator would read as "no receipts".
+            -->
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`dashboard-p95-${carrier.id}`">{{
+                      deliveryDenied
+                        ? 'not permitted'
+                        : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                    }}</span
+                    ><span class="k">P95 DLR</span></span
+                  >
+                  <span class="metric-line"
+                    ><span class="v mono" :data-testid="`dashboard-reject-${carrier.id}`">{{
+                      deliveryDenied ? 'not permitted' : rejectShare(carrier.id)
+                    }}</span
+                    ><span class="k">reject</span></span
+                  >
+                </span>
+              </td>
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line"
+                    ><span class="v mono">{{ carrier.openAlerts }}</span
+                    ><span class="k">open</span></span
+                  >
+                  <!--
+              The newest bind transition across the carrier's connections. "no
+              transitions recorded" is meaningful on history that is never
+              pruned: nothing has been observed to change, rather than older
+              entries having aged out.
+            -->
+                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
+                    carrier.lastEvent || 'no transitions recorded'
+                  }}</small>
+                </span>
+              </td>
+            </tr>
+            <tr v-if="carriersState === 'ok' && !carriers.length">
+              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
+                No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
+                network.
+              </td>
+            </tr>
+            <tr v-if="carriersState === 'checking'">
+              <td colspan="6" class="empty-cell">Loading carriers…</td>
+            </tr>
+            <tr v-if="carriersState === 'unavailable'">
+              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+                Carrier connectivity is unavailable — the register could not be read.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
     <section class="split-grid wide-left" data-testid="dashboard-traffic-row">
       <article class="panel">
         <header class="panel-header">
@@ -709,8 +961,15 @@ function statusTone(status: string) {
       <article class="panel wide">
         <header class="panel-header">
           <div>
-            <h2>Active incidents</h2>
-            <p>Longest running first</p>
+            <h2>Incidents</h2>
+            <!--
+              The subtitle told the truth about the ORDER and nothing about
+              the state. On a week where everything has been resolved the
+              panel read "Active incidents · Longest running first" above
+              five closed rows, which says there are five active incidents.
+            -->
+            <p v-if="openIncidents">{{ openIncidents }} open · longest running first</p>
+            <p v-else>No open incidents. Recently resolved:</p>
           </div>
           <RouterLink class="text-link" to="/alerts">View all alerts</RouterLink>
         </header>
@@ -792,161 +1051,76 @@ function statusTone(status: string) {
         </div>
       </article>
     </section>
-
-    <!--
-    Carrier connectivity — the design system's DashboardScreen centrepiece, and
-    the panel §3 asks for so a shift can be assessed in ten seconds: every
-    network this gateway binds to, worst first, each row opening its carrier.
-
-    Every column here is a field `GET /carriers` already returns. Throughput and
-    utilisation are derived from engine telemetry that is often absent, so they
-    read `unknown` rather than 0 — the design specifies that treatment, and a
-    zero we never measured is the one thing this console must never print.
-  -->
-    <article class="panel" data-testid="carrier-connectivity">
-      <header class="panel-header">
-        <div>
-          <h2>Carrier connectivity</h2>
-          <p>Every network this gateway binds to, worst first</p>
-        </div>
-        <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <!--
-              SIX COLUMNS, NOT ELEVEN. Same treatment as the Carriers
-              register, and for the same reason: eleven narrow columns of
-              figures is a spreadsheet, and the panel's own promise is that a
-              shift can be assessed in ten seconds. Metrics read together now
-              share a cell — nothing is dropped.
-            -->
-            <tr>
-              <th scope="col">Carrier</th>
-              <th scope="col">Health</th>
-              <th scope="col">Connections</th>
-              <th scope="col">Traffic</th>
-              <th scope="col">Delivery</th>
-              <th scope="col">Alerts</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="carrier in carriersByHealth"
-              :key="carrier.id"
-              class="selectable"
-              :data-testid="`dashboard-carrier-${carrier.id}`"
-              tabindex="0"
-              @click="$router.push(`/carriers/${carrier.id}`)"
-              @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
-            >
-              <td>
-                <strong>{{ carrier.name }}</strong>
-                <span class="row-id">{{
-                  [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
-                  'no network code'
-                }}</span>
-              </td>
-              <td>
-                <span class="status-badge" :class="healthTone(carrier.health)">{{
-                  carrier.health
-                }}</span>
-              </td>
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.smscCount }}</span
-                    ><span class="k">SMSCs</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono"
-                      >{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</span
-                    ><span class="k">binds up</span></span
-                  >
-                </span>
-              </td>
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{
-                      carrier.observedTps === null ? 'unknown' : carrier.observedTps
-                    }}</span
-                    ><span class="k">MT TPS</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono">{{ utilisationLabel(carrier) }}</span
-                    ><span class="k">of ceiling</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.queuedMessages.toLocaleString() }}</span
-                    ><span class="k">queued</span></span
-                  >
-                </span>
-              </td>
-              <!--
-              Delivery quality over the last 24 hours, from the DLR report. It
-              is a second request and may be refused on its own — reports.view
-              is not smsc.view — so these two cells say "not permitted" rather
-              than an em dash an operator would read as "no receipts".
-            -->
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono" :data-testid="`dashboard-p95-${carrier.id}`">{{
-                      deliveryDenied
-                        ? 'not permitted'
-                        : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
-                    }}</span
-                    ><span class="k">P95 DLR</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono" :data-testid="`dashboard-reject-${carrier.id}`">{{
-                      deliveryDenied ? 'not permitted' : rejectShare(carrier.id)
-                    }}</span
-                    ><span class="k">reject</span></span
-                  >
-                </span>
-              </td>
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.openAlerts }}</span
-                    ><span class="k">open</span></span
-                  >
-                  <!--
-              The newest bind transition across the carrier's connections. "no
-              transitions recorded" is meaningful on history that is never
-              pruned: nothing has been observed to change, rather than older
-              entries having aged out.
-            -->
-                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
-                    carrier.lastEvent || 'no transitions recorded'
-                  }}</small>
-                </span>
-              </td>
-            </tr>
-            <tr v-if="carriersState === 'ok' && !carriers.length">
-              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
-                No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
-                network.
-              </td>
-            </tr>
-            <tr v-if="carriersState === 'checking'">
-              <td colspan="6" class="empty-cell">Loading carriers…</td>
-            </tr>
-            <tr v-if="carriersState === 'unavailable'">
-              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
-                Carrier connectivity is unavailable — the register could not be read.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
   </div>
 </template>
 
 <style scoped>
+/* THE STATUS LINE ---------------------------------------------------------
+   A severity chip, a sentence naming the carriers, and a way into the worst
+   of them. Colour repeats the word; it never carries the meaning alone. */
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface);
+}
+.status-line p {
+  flex: 1 1 340px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+.status-line.is-good {
+  border-color: var(--ok, #1a7f37);
+}
+.status-line.is-good .status-chip {
+  background: var(--ok-soft, #e6f4ea);
+  color: var(--ok-strong, var(--ok, #1a7f37));
+}
+.status-line.is-warn {
+  border-color: var(--warn, #9a6700);
+}
+.status-line.is-warn .status-chip {
+  background: var(--warn-soft, #fbf0d8);
+  color: var(--warn-strong, var(--warn, #9a6700));
+}
+.status-line.is-bad {
+  border-color: var(--bad, #b42318);
+}
+.status-line.is-bad .status-chip {
+  background: var(--bad-soft, #fbe6e2);
+  color: var(--bad-strong, var(--bad, #b42318));
+}
+
+/* A carrier we are not measuring says so once. */
+.no-telemetry {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 /* Queue pressure rows. The track and fill themselves come from the design
    system's components.css (`breakdown-track` / `breakdown-fill`); only the row
    rhythm around them is local. */

@@ -34,20 +34,18 @@ done" is otherwise only answerable by clicking through production.
 | Item | Notes |
 |---|---|
 | Route editor | Four-step side panel replacing the centre dialog. Save names what is missing, priority warns when taken, no-fallback warns, days are toggle buttons, a live sentence says what the route will do. Fifth step (change reason) on edit |
+| Dashboard, first pass | Status line naming the degraded and the silent carriers with a way into the worst one, replacing the orange telemetry banner; carriers lifted from last to second; "No telemetry" once per silent carrier instead of three `unknown`s; "Active incidents" → "Incidents" with "No open incidents" when none are open |
 
 ## Not started
 
 In the order they will be done.
 
-1. **Operations dashboard** — the design arrived 2026-10-01 and nothing has
-   been built. One status line replacing the orange telemetry banner; refresh
-   controls in one small bar with a countdown; Copilot as a question box with
-   three suggestions; four top figures; carriers moved near the top, worst
-   first, 6 columns with bind bars and "No telemetry" instead of a row of
-   `unknown`; services and queues sharing one panel; the traffic chart running
-   oldest → newest as paired bars with a hover popup; "Active incidents"
-   becoming "Incidents" with "No open incidents" above a resolved list.
-   Source: `Kamex Dashboard.dc.html`.
+1. **Operations dashboard, second pass** — the first pass is above. Still to
+   do from `Kamex Dashboard.dc.html`: a countdown to the next refresh in the
+   refresh bar; Copilot as a question box with three suggested questions
+   rather than a link; bind bars in the carrier rows; services and queues
+   sharing one panel; the traffic chart running oldest → newest as paired
+   bars with totals above and a hover popup (it currently runs newest first).
 2. **`/sessions-smpp`** — the bind timeline pane is far too long. Paginate it
    or cap it to a scroll region with a count, as the drawer histories were.
    Also still 588px of horizontal overflow, 13 columns.
