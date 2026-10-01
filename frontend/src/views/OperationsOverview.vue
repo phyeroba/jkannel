@@ -255,15 +255,23 @@ const silentCarriers = computed(() =>
 /** The one to open from the status line: worst first, then by name. */
 const worstCarrier = computed(() => degradedCarriers.value[0] ?? carriersByHealth.value[0] ?? null);
 
-type OverallTone = 'checking' | 'bad' | 'warn' | 'good';
+type OverallTone = 'checking' | 'unknown' | 'bad' | 'warn' | 'good';
 const overallTone = computed<OverallTone>(() => {
   if (carriersState.value === 'checking') return 'checking';
+  // NEVER GREEN OVER NO DATA.
+  //
+  // With the carrier register unreadable there are no degraded carriers and
+  // no silent ones, so every condition below falls through to "Healthy" —
+  // the screen reporting that everything is fine because it cannot see
+  // anything at all. That is the single worst thing this banner could say.
+  if (carriersState.value === 'unavailable') return 'unknown';
   if (degradedCarriers.value.length) return 'bad';
   if (silentCarriers.value.length) return 'warn';
   return 'good';
 });
 const OVERALL_WORD: Record<OverallTone, string> = {
   checking: 'Checking',
+  unknown: 'Unknown',
   bad: 'Degraded',
   warn: 'Partly unobserved',
   good: 'Healthy',
@@ -419,6 +427,16 @@ const trafficDaysRaw = computed(() =>
 );
 
 const trafficTotals = computed(() => {
+  // `0 messages` is a measurement. An unreadable source has not made one, and
+  // printing zero there says the gateway sent nothing — which is exactly the
+  // claim the chart below refuses to make.
+  if (volumeState.value === 'unavailable') {
+    return [
+      { k: 'Messages', v: 'unavailable' },
+      { k: 'Delivery receipts', v: 'unavailable' },
+      { k: 'Busiest day', v: 'unavailable' },
+    ];
+  }
   const rows = volumeSnapshots.value;
   const messages = rows.reduce((sum, row) => sum + (Number(row.message_count) || 0), 0);
   const dlrs = rows.reduce((sum, row) => sum + (Number(row.dlr_count ?? row.dlrCount) || 0), 0);
@@ -824,17 +842,24 @@ function statusTone(status: string) {
         <span class="status-dot" aria-hidden="true"></span>{{ overallWord }}
       </span>
       <p>
-        <template v-if="degradedCarriers.length">
+        <template v-if="carriersState !== 'unavailable' && degradedCarriers.length">
           <strong>{{ nameList(degradedCarriers) }}</strong>
           {{ degradedCarriers.length === 1 ? 'has' : 'have' }}
           {{ degradedCarriers[0].bindsHealthy }} of {{ degradedCarriers[0].bindsTotal }} binds up.
         </template>
-        <template v-if="silentCarriers.length">
+        <template v-if="carriersState !== 'unavailable' && silentCarriers.length">
           <strong>{{ nameList(silentCarriers) }}</strong>
           {{ silentCarriers.length === 1 ? 'sends' : 'send' }} no telemetry, so
           {{ silentCarriers.length === 1 ? 'its' : 'their' }} health is unknown rather than healthy.
         </template>
-        <template v-if="!degradedCarriers.length && !silentCarriers.length">
+        <template v-if="carriersState === 'unavailable'">
+          The carrier register could not be read, so the state of every carrier is unknown.
+        </template>
+        <template
+          v-else-if="
+            carriersState !== 'checking' && !degradedCarriers.length && !silentCarriers.length
+          "
+        >
           Every carrier is reporting and every bind is up.
         </template>
       </p>
@@ -1109,6 +1134,20 @@ function statusTone(status: string) {
             </div>
           </div>
         </div>
+        <!--
+          "Nothing has been written" and "we cannot read what was written"
+          are different claims, and the rebuild collapsed them into the
+          first. An unreadable source reported as an empty one tells the
+          operator their gateway sent nothing.
+        -->
+        <p
+          v-else-if="volumeState === 'unavailable'"
+          class="chart-empty"
+          data-testid="dashboard-traffic-unavailable"
+        >
+          Volume report data is unavailable. The daily series cannot be plotted — this is an outage,
+          not an absence of traffic.
+        </p>
         <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
           No report snapshot has been written yet, so there is no daily series to plot.
         </p>
@@ -1770,6 +1809,13 @@ function statusTone(status: string) {
 }
 .status-line.is-bad {
   border-color: var(--bad, #b42318);
+}
+.status-line.is-unknown {
+  border-color: var(--warn, #9a6700);
+}
+.status-line.is-unknown .status-chip {
+  background: var(--surface-2);
+  color: var(--muted);
 }
 .status-line.is-bad .status-chip {
   background: var(--bad-soft, #fbe6e2);
