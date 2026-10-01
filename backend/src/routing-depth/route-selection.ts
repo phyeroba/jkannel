@@ -126,6 +126,15 @@ export interface SelectionContext {
   rotation?: number;
 }
 
+export interface RouteVerdict {
+  routeId: string;
+  name: string;
+  priority: number;
+  /** `selected` wins; `outranked` matched but lost; `no-match` never applied. */
+  verdict: 'selected' | 'outranked' | 'no-match';
+  reason: string;
+}
+
 export interface SelectionResult {
   /** The chosen SMSC id, or null when nothing matched / nothing was available. */
   smscId: string | null;
@@ -139,6 +148,16 @@ export interface SelectionResult {
   reason: string;
   /** Ordered trace of the decision steps, for the preview endpoint. */
   trace: string[];
+  /**
+   * Every route that was considered, in priority order, with its verdict.
+   *
+   * The console lists these beside the result so an operator can see not just
+   * which route won but why each of the others did not — "destination does
+   * not start with +25677", "sender must be KAMEX". Produced here because
+   * recomputing the match rules in the browser would be a second
+   * implementation that can drift from this one.
+   */
+  candidates: RouteVerdict[];
   /**
    * What the controlling rule DOES once it has matched (migration 052): drop,
    * or rewrite the sender / recipient / body.
@@ -187,6 +206,51 @@ export function isWithinWindow(window: TimeWindow | null | undefined, now: Date)
  * Returns null when the route does not match at all, otherwise a specificity
  * score (higher = more specific, so longest-prefix / operator beats a catch-all).
  */
+/**
+ * WHY a route did not take this message, in the operator's words.
+ *
+ * The console shows every route in priority order with a verdict beside it,
+ * and the reason has to come from HERE rather than being recomputed in the
+ * browser. A second implementation of the matching rules is a second
+ * implementation that can disagree with the engine, and the one place that
+ * must never lie is the screen an operator uses to predict where a message
+ * will go.
+ *
+ * Returns '' when the route DID match — the caller distinguishes selected
+ * from outranked, which is not something this function can know.
+ */
+function whyNotMatched(route: CandidateRoute, ctx: SelectionContext, now: Date): string {
+  if (!route.enabled) return 'Route is disabled';
+  if (route.window && !isWithinWindow(route.window, now)) return 'Outside its time window';
+  if (route.sender && !matchesWildcard(ctx.sender ?? '', route.sender)) {
+    return `Sender must be ${route.sender}`;
+  }
+  if (matchSpecificity(route, ctx) !== null) return '';
+  const digits = normalizeMsisdn(ctx.msisdn);
+  switch (route.routeType) {
+    case 'wildcard': {
+      const pattern = route.matchPrefix ?? route.destinationPrefix ?? '';
+      return pattern.trim()
+        ? `Destination ${digits} does not match ${pattern}`
+        : 'Route has no pattern to match on';
+    }
+    case 'country': {
+      const code = normalizeMsisdn(route.countryCode ?? '');
+      return code ? `Destination does not start with +${code}` : 'Route has no country code set';
+    }
+    case 'operator': {
+      const op = (route.operator ?? '').trim();
+      return op ? `Operator must be ${op}` : 'Route has no operator set';
+    }
+    default: {
+      const prefix = normalizeMsisdn(route.matchPrefix ?? route.destinationPrefix ?? '');
+      return prefix
+        ? `Destination does not start with +${prefix}`
+        : 'Route has no destination prefix set';
+    }
+  }
+}
+
 function matchSpecificity(route: CandidateRoute, ctx: SelectionContext): number | null {
   const digits = normalizeMsisdn(ctx.msisdn);
   // A sender constraint, when present, must match regardless of route type.
@@ -314,7 +378,11 @@ function weightedPick(candidates: SmscCandidate[], rotation: number): SmscCandid
   return candidates[candidates.length - 1];
 }
 
-function noMatch(trace: string[], reason: string): SelectionResult {
+function noMatch(
+  trace: string[],
+  reason: string,
+  candidates: RouteVerdict[] = [],
+): SelectionResult {
   return {
     smscId: null,
     routeId: null,
@@ -323,6 +391,7 @@ function noMatch(trace: string[], reason: string): SelectionResult {
     fallbackUsed: false,
     reason,
     trace: [...trace, reason],
+    candidates,
   };
 }
 
@@ -350,7 +419,20 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
     })
     .map((route) => ({ route, specificity: matchSpecificity(route, ctx) as number }));
 
-  if (!matched.length) return noMatch(trace, 'no route matched the destination');
+  // One verdict per route the caller gave us, in priority order, built from
+  // the same predicate above rather than from a copy of it.
+  const matchedIds = new Set(matched.map((entry) => entry.route.id));
+  const verdicts: RouteVerdict[] = [...routes]
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
+    .map((route) => ({
+      routeId: route.id,
+      name: route.name,
+      priority: route.priority,
+      verdict: matchedIds.has(route.id) ? ('outranked' as const) : ('no-match' as const),
+      reason: matchedIds.has(route.id) ? 'Matches' : whyNotMatched(route, ctx, now),
+    }));
+
+  if (!matched.length) return noMatch(trace, 'no route matched the destination', verdicts);
   trace.push(`${matched.length} route(s) matched`);
 
   // 2. CONTROLLING ROUTE: most specific wins; ties broken by lowest priority
@@ -362,6 +444,14 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
       a.route.name.localeCompare(b.route.name),
   );
   const controlling = matched[0].route;
+  // The winner is marked only once it IS the winner: before this point
+  // "matched" means eligible, and calling an eligible route selected would be
+  // true of every one of them.
+  const winner = verdicts.find((entry) => entry.routeId === controlling.id);
+  if (winner) {
+    winner.verdict = 'selected';
+    winner.reason = 'Matches and has the highest specificity';
+  }
   trace.push(
     `controlling route "${controlling.name}" (${controlling.routeType}, priority ${controlling.priority}, strategy ${controlling.strategy})`,
   );
@@ -384,6 +474,7 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
         fallbackUsed: false,
         reason: explained,
         trace,
+        candidates: verdicts,
         effect: effectOf(controllingRoute),
       };
     }
@@ -396,6 +487,7 @@ export function selectRoute(routes: CandidateRoute[], ctx: SelectionContext): Se
       fallbackUsed: !chosen.primary,
       reason,
       trace,
+      candidates: verdicts,
       effect: effectOf(controllingRoute),
     };
   };

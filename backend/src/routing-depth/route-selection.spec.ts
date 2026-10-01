@@ -360,3 +360,74 @@ describe('selectRoute — trace/preview output', () => {
     expect(result.strategy).toBe('priority');
   });
 });
+
+/**
+ * THE REASONS THE CONSOLE SHOWS BESIDE EACH ROUTE.
+ *
+ * The routing screen lists every route in priority order with a verdict —
+ * selected, outranked, or no match and why. Those reasons have to be produced
+ * HERE, by the code that actually does the matching. Recomputing the rules in
+ * the browser would be a second implementation, and the screen an operator
+ * uses to predict where a message will go is the last place that should be
+ * able to disagree with the engine.
+ */
+describe('selectRoute — per-route verdicts', () => {
+  const smscUp = { availability: { 'smsc-primary': true, 'smsc-other': true } };
+
+  it('marks exactly one route selected and explains each of the others', () => {
+    const routes = [
+      route({ id: 'r-mtn', name: 'MTN', priority: 100, routeType: 'prefix', matchPrefix: '25677' }),
+      route({
+        id: 'r-cpaas',
+        name: 'CPAAS',
+        priority: 200,
+        routeType: 'prefix',
+        matchPrefix: '25670',
+      }),
+      route({ id: 'r-kamex', name: 'KAMEX', priority: 210, sender: 'KAMEX' }),
+    ];
+    const result = selectRoute(routes, ctx({ msisdn: '+256700000000', sender: '8888', ...smscUp }));
+
+    const selected = result.candidates.filter((c) => c.verdict === 'selected');
+    expect(selected).toHaveLength(1);
+    expect(selected[0].name).toBe('CPAAS');
+
+    const byName = Object.fromEntries(result.candidates.map((c) => [c.name, c]));
+    expect(byName.MTN.verdict).toBe('no-match');
+    expect(byName.MTN.reason).toBe('Destination does not start with +25677');
+    // A sender constraint is reported as a sender problem, not as a prefix one.
+    expect(byName.KAMEX.reason).toBe('Sender must be KAMEX');
+  });
+
+  it('lists the verdicts in priority order, so the screen can render them as-is', () => {
+    const routes = [
+      route({ id: 'c', name: 'C', priority: 30, routeType: 'prefix', matchPrefix: '999' }),
+      route({ id: 'a', name: 'A', priority: 10, routeType: 'prefix', matchPrefix: '999' }),
+      route({ id: 'b', name: 'B', priority: 20, routeType: 'prefix', matchPrefix: '999' }),
+    ];
+    const result = selectRoute(routes, ctx({ msisdn: '+256700000000', ...smscUp }));
+    expect(result.candidates.map((c) => c.name)).toEqual(['A', 'B', 'C']);
+  });
+
+  // Every route the caller passed gets a verdict, including the ones that
+  // never even reached the matcher — a disabled route is absent from the
+  // result otherwise, and "it is not in the list" is not an explanation.
+  it('explains a disabled route rather than omitting it', () => {
+    const routes = [
+      route({ id: 'on', name: 'On', priority: 10 }),
+      route({ id: 'off', name: 'Off', priority: 20, enabled: false }),
+    ];
+    const result = selectRoute(routes, ctx({ msisdn: '+256700000000', ...smscUp }));
+    const off = result.candidates.find((c) => c.name === 'Off');
+    expect(off?.verdict).toBe('no-match');
+    expect(off?.reason).toBe('Route is disabled');
+  });
+
+  it('still explains every route when nothing matched at all', () => {
+    const routes = [route({ routeType: 'prefix', matchPrefix: '999', name: 'Nope' })];
+    const result = selectRoute(routes, ctx({ msisdn: '+256700000000' }));
+    expect(result.smscId).toBeNull();
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].reason).toBe('Destination does not start with +999');
+  });
+});
