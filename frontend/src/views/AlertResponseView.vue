@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
+import { agoWhen } from '../utils/when';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'loading' | 'ok' | 'error';
@@ -93,6 +94,54 @@ function stepsOf(policy: RecordValue): Step[] {
         entry.severity === undefined || entry.severity === null ? '' : String(entry.severity),
     }));
 }
+/**
+ * When readiness was last evaluated, for the banner's "Checked 51s ago".
+ *
+ * The banner makes a claim about NOW — "an alert firing now reaches
+ * somebody" — and a claim about now is only worth anything with its age
+ * beside it. A green banner from twenty minutes ago is not evidence.
+ */
+const readinessCheckedAt = ref<Date | null>(null);
+const readinessAge = ref(0);
+setInterval(() => {
+  if (readinessCheckedAt.value) {
+    readinessAge.value = Math.floor((Date.now() - readinessCheckedAt.value.getTime()) / 1000);
+  }
+}, 1000);
+
+/**
+ * Can this step's channel actually deliver?
+ *
+ * Read off the readiness evaluation rather than off the policy, because the
+ * policy only records an intent. A step pointing at email is still a step
+ * when SMTP_URL is unset — it just will not do anything, and that is exactly
+ * what the rail has to show.
+ */
+function channelCanDeliver(channelType: string): boolean {
+  const channel = readinessChannels.value.find((entry) => String(entry.type ?? '') === channelType);
+  return Boolean(channel?.deliverable);
+}
+
+/** Which policy step, if any, depends on a channel — shown on the channel. */
+function stepUsing(channel: ChannelReadiness): string {
+  const type = String(channel.type ?? '');
+  for (const policy of policies.value) {
+    const steps = stepsOf(policy);
+    const index = steps.findIndex((step) => step.channelType === type);
+    if (index >= 0) return `Used by step ${index + 1} of ${text(policy.name)}.`;
+  }
+  return '';
+}
+
+/**
+ * The banner's verdict. Both halves have to hold: a deliverable channel with
+ * no enabled policy never gets told to fire, and an enabled policy with
+ * nothing deliverable fires into nothing.
+ */
+const reachesSomebody = computed(
+  () => deliverableCount.value > 0 && Number(readiness.value?.escalationPolicies ?? 0) > 0,
+);
+
 function describeSteps(policy: RecordValue): string {
   const steps = stepsOf(policy);
   if (!steps.length) return 'no steps';
@@ -444,6 +493,10 @@ async function loadReadiness() {
     readiness.value = await apiRequest<TenantReadiness>('/monitoring/notifications/readiness');
     readinessError.value = '';
     readinessState.value = 'ok';
+    // Stamped only on success. A failed re-check must not refresh the age on
+    // a verdict that is now older than it looks.
+    readinessCheckedAt.value = new Date();
+    readinessAge.value = 0;
   } catch (reason) {
     readiness.value = null;
     readinessMissing.value = isMissing(reason);
@@ -523,25 +576,54 @@ onMounted(() => {
     </p>
 
     <!-- Notification readiness -------------------------------------------------- -->
-    <section class="panel" data-testid="readiness-panel" aria-label="Notification readiness">
-      <header class="panel-header">
-        <div>
-          <h2>Notification readiness</h2>
-          <p aria-live="polite">
-            {{
-              readinessState === 'loading'
-                ? 'Evaluating whether an alert would reach anybody…'
-                : `${deliverableCount} of ${readinessChannels.length} channel(s) can actually deliver right now`
-            }}
+    <!--
+      THE VERDICT FIRST, THEN THE EVIDENCE.
+
+      This screen answers one question — would an alert firing right now
+      reach a human — and the answer was buried: a panel heading, a
+      paragraph, a green notice, then a bare row of five numbers above a
+      one-row table. The banner states the verdict, in colour and in words,
+      with its own age beside it, because a claim about "now" is worth
+      nothing without saying how old it is.
+    -->
+    <section
+      class="panel readiness-panel"
+      data-testid="readiness-panel"
+      aria-label="Notification readiness"
+    >
+      <div
+        class="status-banner"
+        :class="reachesSomebody ? 'is-ok' : 'is-bad'"
+        role="status"
+        data-testid="readiness-banner"
+      >
+        <span class="banner-dot" aria-hidden="true"></span>
+        <div class="banner-text">
+          <h2 v-if="readinessState === 'loading'">Checking whether an alert reaches anybody…</h2>
+          <h2 v-else-if="reachesSomebody">An alert firing now reaches somebody</h2>
+          <h2 v-else>An alert firing now reaches nobody</h2>
+          <p>
+            {{ deliverableCount }} of {{ readinessChannels.length }}
+            {{ readinessChannels.length === 1 ? 'channel' : 'channels' }} can deliver and
+            {{ Number(readiness?.escalationPolicies ?? 0) }} escalation
+            {{ Number(readiness?.escalationPolicies ?? 0) === 1 ? 'policy is' : 'policies are' }}
+            enabled.
           </p>
         </div>
-        <div class="detail-actions">
-          <button class="secondary-button" data-testid="readiness-refresh" @click="loadReadiness">
+        <div class="banner-actions">
+          <span v-if="readinessCheckedAt" class="banner-age" data-testid="readiness-checked"
+            >Checked {{ readinessAge }}s ago</span
+          >
+          <button
+            class="secondary-button is-compact"
+            data-testid="readiness-refresh"
+            @click="loadReadiness"
+          >
             Re-check
           </button>
           <button
             v-if="canManage"
-            class="secondary-button"
+            class="secondary-button is-compact"
             data-testid="readiness-repair"
             :disabled="readinessBusy"
             @click="repairReadiness"
@@ -549,12 +631,7 @@ onMounted(() => {
             {{ readinessBusy ? 'Seeding…' : 'Re-seed defaults' }}
           </button>
         </div>
-      </header>
-      <p class="source-note">
-        A channel is only called deliverable when its transport is genuinely usable — SMTP_URL set
-        for email, an http(s) URL for a webhook, an MSISDN for SMS. This reports capability, not a
-        delivery that happened.
-      </p>
+      </div>
 
       <p v-if="readinessNotice" class="notice" role="status" data-testid="readiness-notice">
         {{ readinessNotice }}
@@ -580,314 +657,348 @@ onMounted(() => {
         >
           {{ readiness.warning }}
         </p>
-        <p
-          v-else-if="readinessState === 'ok'"
-          class="notice"
-          role="status"
-          data-testid="readiness-ok"
-        >
-          At least one channel can deliver and an escalation policy is enabled — an alert firing now
-          reaches somebody.
-        </p>
 
-        <div class="summary-strip">
-          <div class="metric">
-            <strong data-testid="readiness-deliverable">{{ deliverableCount }}</strong>
-            <small>Deliverable channels</small>
+        <!-- The five figures behind the verdict, in one divided row. -->
+        <div class="figure-row" data-testid="readiness-figures">
+          <div>
+            <b data-testid="readiness-deliverable">{{ deliverableCount }}</b>
+            <span>Deliverable channels</span>
           </div>
-          <div class="metric">
-            <strong data-testid="readiness-open-alerts">
-              {{ Number(readiness?.openAlerts ?? 0) }}
-            </strong>
-            <small>Open alerts</small>
+          <div>
+            <b data-testid="readiness-open-alerts">{{ Number(readiness?.openAlerts ?? 0) }}</b>
+            <span>Open alerts</span>
           </div>
-          <div class="metric">
-            <strong data-testid="readiness-undeliverable">
-              {{ Number(readiness?.undeliverableAlerts ?? 0) }}
-            </strong>
-            <small>Reached nobody</small>
+          <div>
+            <b data-testid="readiness-undeliverable">{{
+              Number(readiness?.undeliverableAlerts ?? 0)
+            }}</b>
+            <span>Reached nobody</span>
           </div>
-          <div class="metric">
-            <strong data-testid="readiness-unnotified">
-              {{ Number(readiness?.unnotifiedAlerts ?? 0) }}
-            </strong>
-            <small>Not yet attempted</small>
+          <div>
+            <b data-testid="readiness-unnotified">{{ Number(readiness?.unnotifiedAlerts ?? 0) }}</b>
+            <span>Not yet attempted</span>
           </div>
-          <div class="metric">
-            <strong>{{ Number(readiness?.escalationPolicies ?? 0) }}</strong>
-            <small>Enabled policies</small>
+          <div>
+            <b>{{ Number(readiness?.escalationPolicies ?? 0) }}</b>
+            <span>Enabled policies</span>
           </div>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Channel</th>
-                <th scope="col">Transport</th>
-                <th scope="col">Enabled</th>
-                <th scope="col">Deliverable</th>
-                <th scope="col">Why not</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="channel in readinessChannels"
-                :key="text(channel.id)"
-                :data-testid="`readiness-channel-${text(channel.id)}`"
-              >
-                <td>
-                  <strong>{{ text(channel.name) }}</strong>
-                </td>
-                <td class="mono">{{ text(channel.type) }}</td>
-                <td>{{ channel.enabled === false ? 'no' : 'yes' }}</td>
-                <td>
-                  <span class="status-badge" :class="channel.deliverable ? 'good' : 'bad'">
-                    {{ channel.deliverable ? 'deliverable' : 'cannot deliver' }}
-                  </span>
-                </td>
-                <td>{{ text(channel.reason, '') }}</td>
-              </tr>
-              <tr v-if="readinessState === 'ok' && !readinessChannels.length">
-                <td colspan="5" class="empty-cell" data-testid="readiness-empty">
-                  No notification channels exist at all, so every alert reaches nobody.
-                  {{
-                    canManage
-                      ? 'Re-seed defaults to create the always-deliverable dashboard channel.'
-                      : 'Seeding the defaults requires the system.manage permission.'
-                  }}
-                </td>
-              </tr>
-              <tr v-if="readinessState === 'loading'">
-                <td colspan="5" class="empty-cell">Evaluating channels…</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
       </template>
     </section>
 
-    <!-- Escalation policies --------------------------------------------------- -->
-    <section class="panel" data-testid="escalation-panel" aria-label="Escalation policies">
-      <header class="panel-header">
-        <div>
-          <h2>Escalation policies</h2>
-          <p aria-live="polite">
-            {{
-              policyState === 'loading'
-                ? 'Loading escalation policies…'
-                : `${policies.length} policy(ies) defined`
-            }}
-          </p>
-        </div>
-        <button
-          v-if="canManage"
-          class="primary-button"
-          data-testid="policy-create"
-          :disabled="policyBusy"
-          @click="openPolicyForm()"
-        >
-          New policy
-        </button>
-      </header>
-      <p class="source-note">
-        A policy fires its steps in order once an alert has stayed open (unacknowledged) for the
-        step's “after” interval. Acknowledging an alert stops its escalation.
-      </p>
+    <!--
+      Channels and policies side by side, because they are two halves of one
+      answer: a deliverable channel nothing calls is as useless as a policy
+      whose channels cannot deliver.
+    -->
+    <div class="response-grid">
+      <section class="panel" data-testid="channels-panel" aria-label="Notification channels">
+        <header class="panel-header">
+          <div>
+            <h2>Notification channels</h2>
+            <p aria-live="polite">
+              {{ deliverableCount }} of {{ readinessChannels.length }} can deliver right now
+            </p>
+          </div>
+        </header>
 
-      <p v-if="policyNotice" class="notice" role="status" data-testid="policy-notice">
-        {{ policyNotice }}
-      </p>
-
-      <!-- A Dialog, per the design system: a form that makes a record is an
-           overlay, not a block that unfolds above the register it adds to. -->
-      <ModalDialog
-        :open="showPolicyForm"
-        :title="editingPolicyId ? 'Edit escalation policy' : 'New escalation policy'"
-        testid="policy-form"
-        wide
-        @close="closePolicyForm"
-      >
-        <label class="filter-select">
-          <span>Name</span>
-          <input
-            v-model="policyName"
-            data-testid="policy-name"
-            type="text"
-            placeholder="On-call tier 1"
-          />
-        </label>
-        <label class="filter-select">
-          <span>Enabled</span>
-          <select v-model="policyEnabled" data-testid="policy-enabled">
-            <option :value="true">Yes</option>
-            <option :value="false">No</option>
-          </select>
-        </label>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">After (minutes)</th>
-                <th scope="col">Channel</th>
-                <th scope="col">Target</th>
-                <th scope="col">Minimum severity</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(step, index) in policySteps"
-                :key="index"
-                :data-testid="`policy-step-${index}`"
-              >
-                <td>
-                  <input
-                    v-model.number="step.afterMinutes"
-                    :data-testid="`policy-step-after-${index}`"
-                    type="number"
-                    min="0"
-                  />
-                </td>
-                <td>
-                  <select v-model="step.channelType" :data-testid="`policy-step-channel-${index}`">
-                    <option v-for="channel in CHANNEL_TYPES" :key="channel" :value="channel">
-                      {{ channel }}
-                    </option>
-                  </select>
-                </td>
-                <td>
-                  <input
-                    v-model="step.target"
-                    :data-testid="`policy-step-target-${index}`"
-                    type="text"
-                    placeholder="noc@example.com / https://hooks…"
-                  />
-                </td>
-                <td>
-                  <select v-model="step.severity" :data-testid="`policy-step-severity-${index}`">
-                    <option value="">any</option>
-                    <option v-for="severity in SEVERITIES" :key="severity" :value="severity">
-                      {{ severity }}
-                    </option>
-                  </select>
-                </td>
-                <td class="row-actions">
-                  <button
-                    class="secondary-button danger-button"
-                    :data-testid="`policy-step-remove-${index}`"
-                    :disabled="policySteps.length <= 1"
-                    @click="removeStep(index)"
-                  >
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <label v-if="editingPolicyId" class="filter-select filter-search">
-          <span>Change reason (audited)</span>
-          <input v-model="policyReason" data-testid="policy-reason" type="text" />
-        </label>
-
-        <p v-if="policyFormError" class="form-error" role="alert" data-testid="policy-form-error">
-          {{ policyFormError }}
-        </p>
-        <!-- "Add step" edits the form; it does not submit it, so it stays in
-             the body rather than joining the two footer verbs. -->
-        <div class="detail-actions">
-          <button class="secondary-button" data-testid="policy-add-step" @click="addStep">
-            Add step
-          </button>
-        </div>
-        <template #footer>
-          <button class="secondary-button" data-testid="policy-cancel" @click="closePolicyForm">
-            Cancel
-          </button>
-          <button
-            class="primary-button"
-            data-testid="policy-save"
-            :disabled="policyBusy"
-            @click="savePolicy"
+        <!--
+          A card per channel, not a five-column table.
+          The table's "Why not" column was the only one carrying anything an
+          operator could act on, and it was last. Here the reason sits under
+          the channel it belongs to, with the step that depends on it.
+        -->
+        <ul class="channel-list">
+          <li
+            v-for="channel in readinessChannels"
+            :key="text(channel.id)"
+            :data-testid="`readiness-channel-${text(channel.id)}`"
           >
-            {{ policyBusy ? 'Saving…' : 'Save policy' }}
-          </button>
-        </template>
-      </ModalDialog>
+            <div class="channel-head">
+              <strong>{{ text(channel.name) }}</strong>
+              <span class="status-badge" :class="channel.deliverable ? 'good' : 'bad'">
+                {{ channel.deliverable ? 'Deliverable' : 'Not deliverable' }}
+              </span>
+            </div>
+            <p class="channel-transport mono">
+              {{ text(channel.type)
+              }}<template v-if="channel.enabled === false"> · disabled</template>
+              <template v-if="text(channel.reason, '')"> · {{ text(channel.reason, '') }}</template>
+            </p>
+            <p v-if="stepUsing(channel)" class="channel-use">{{ stepUsing(channel) }}</p>
+          </li>
+          <li v-if="readinessState === 'ok' && !readinessChannels.length" class="channel-empty">
+            <strong>No notification channels exist at all</strong>
+            <p>
+              Every alert reaches nobody.
+              {{
+                canManage
+                  ? 'Re-seed defaults to create the always-deliverable dashboard channel.'
+                  : 'Seeding the defaults requires the system.manage permission.'
+              }}
+            </p>
+          </li>
+          <li v-if="readinessState === 'loading'" class="channel-empty">Evaluating channels…</li>
+        </ul>
+        <p class="source-note">
+          Deliverable means the transport is usable: SMTP_URL for email, an http(s) URL for a
+          webhook, an MSISDN for SMS. It reports capability, not a delivery that happened.
+        </p>
+      </section>
 
-      <p v-if="policyState === 'error'" class="chart-empty" role="alert" data-testid="policy-error">
-        {{
-          policyMissing
-            ? 'The escalation policy API is not available in this deployment.'
-            : policyError
-        }}
-      </p>
-      <div v-else class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Policy</th>
-              <th scope="col">Steps</th>
-              <th scope="col">Chain</th>
-              <th scope="col">Enabled</th>
-              <th scope="col">Created by</th>
-              <th scope="col">Updated</th>
-              <th v-if="canManage" scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
+      <!-- Escalation policies --------------------------------------------------- -->
+      <section class="panel" data-testid="escalation-panel" aria-label="Escalation policies">
+        <header class="panel-header">
+          <div>
+            <h2>Escalation policies</h2>
+            <p aria-live="polite">
+              {{
+                policyState === 'loading'
+                  ? 'Loading escalation policies…'
+                  : `${policies.length} policy(ies) defined`
+              }}
+            </p>
+          </div>
+          <button
+            v-if="canManage"
+            class="primary-button"
+            data-testid="policy-create"
+            :disabled="policyBusy"
+            @click="openPolicyForm()"
+          >
+            New policy
+          </button>
+        </header>
+        <p class="source-note">
+          A policy fires its steps in order once an alert has stayed open (unacknowledged) for the
+          step's “after” interval. Acknowledging an alert stops its escalation.
+        </p>
+
+        <p v-if="policyNotice" class="notice" role="status" data-testid="policy-notice">
+          {{ policyNotice }}
+        </p>
+
+        <!-- A Dialog, per the design system: a form that makes a record is an
+           overlay, not a block that unfolds above the register it adds to. -->
+        <ModalDialog
+          :open="showPolicyForm"
+          :title="editingPolicyId ? 'Edit escalation policy' : 'New escalation policy'"
+          testid="policy-form"
+          wide
+          @close="closePolicyForm"
+        >
+          <label class="filter-select">
+            <span>Name</span>
+            <input
+              v-model="policyName"
+              data-testid="policy-name"
+              type="text"
+              placeholder="On-call tier 1"
+            />
+          </label>
+          <label class="filter-select">
+            <span>Enabled</span>
+            <select v-model="policyEnabled" data-testid="policy-enabled">
+              <option :value="true">Yes</option>
+              <option :value="false">No</option>
+            </select>
+          </label>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">After (minutes)</th>
+                  <th scope="col">Channel</th>
+                  <th scope="col">Target</th>
+                  <th scope="col">Minimum severity</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(step, index) in policySteps"
+                  :key="index"
+                  :data-testid="`policy-step-${index}`"
+                >
+                  <td>
+                    <input
+                      v-model.number="step.afterMinutes"
+                      :data-testid="`policy-step-after-${index}`"
+                      type="number"
+                      min="0"
+                    />
+                  </td>
+                  <td>
+                    <select
+                      v-model="step.channelType"
+                      :data-testid="`policy-step-channel-${index}`"
+                    >
+                      <option v-for="channel in CHANNEL_TYPES" :key="channel" :value="channel">
+                        {{ channel }}
+                      </option>
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      v-model="step.target"
+                      :data-testid="`policy-step-target-${index}`"
+                      type="text"
+                      placeholder="noc@example.com / https://hooks…"
+                    />
+                  </td>
+                  <td>
+                    <select v-model="step.severity" :data-testid="`policy-step-severity-${index}`">
+                      <option value="">any</option>
+                      <option v-for="severity in SEVERITIES" :key="severity" :value="severity">
+                        {{ severity }}
+                      </option>
+                    </select>
+                  </td>
+                  <td class="row-actions">
+                    <button
+                      class="secondary-button danger-button"
+                      :data-testid="`policy-step-remove-${index}`"
+                      :disabled="policySteps.length <= 1"
+                      @click="removeStep(index)"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <label v-if="editingPolicyId" class="filter-select filter-search">
+            <span>Change reason (audited)</span>
+            <input v-model="policyReason" data-testid="policy-reason" type="text" />
+          </label>
+
+          <p v-if="policyFormError" class="form-error" role="alert" data-testid="policy-form-error">
+            {{ policyFormError }}
+          </p>
+          <!-- "Add step" edits the form; it does not submit it, so it stays in
+             the body rather than joining the two footer verbs. -->
+          <div class="detail-actions">
+            <button class="secondary-button" data-testid="policy-add-step" @click="addStep">
+              Add step
+            </button>
+          </div>
+          <template #footer>
+            <button class="secondary-button" data-testid="policy-cancel" @click="closePolicyForm">
+              Cancel
+            </button>
+            <button
+              class="primary-button"
+              data-testid="policy-save"
+              :disabled="policyBusy"
+              @click="savePolicy"
+            >
+              {{ policyBusy ? 'Saving…' : 'Save policy' }}
+            </button>
+          </template>
+        </ModalDialog>
+
+        <p
+          v-if="policyState === 'error'"
+          class="chart-empty"
+          role="alert"
+          data-testid="policy-error"
+        >
+          {{
+            policyMissing
+              ? 'The escalation policy API is not available in this deployment.'
+              : policyError
+          }}
+        </p>
+        <div v-else class="table-wrap">
+          <!--
+          A TIMELINE, NOT A SENTENCE IN A CELL.
+
+          The chain was one line of text — "+0m → dashboard Default dashboard
+          · +5m → email · +15m → webhook" — which is a policy described
+          rather than a policy shown. Read as a rail, the shape of the
+          escalation is the thing you see first: how long before it moves on,
+          and which of those steps will do nothing because its channel
+          cannot deliver.
+        -->
+          <ul class="policy-list">
+            <li
               v-for="policy in policies"
               :key="text(policy.id)"
               :data-testid="`policy-row-${text(policy.id)}`"
             >
-              <td>
-                <strong>{{ text(policy.name) }}</strong>
-                <small class="row-id mono">{{ text(policy.id) }}</small>
-              </td>
-              <td>{{ stepsOf(policy).length }}</td>
-              <td>{{ describeSteps(policy) }}</td>
-              <td>
-                <span class="status-badge" :class="policy.enabled === false ? '' : 'good'">
-                  {{ policy.enabled === false ? 'disabled' : 'enabled' }}
-                </span>
-              </td>
-              <td class="mono">{{ text(policy.created_by ?? policy.createdBy) }}</td>
-              <td>{{ text(policy.updated_at ?? policy.updatedAt) }}</td>
-              <td v-if="canManage" class="row-actions">
-                <button
-                  class="secondary-button"
-                  :data-testid="`policy-edit-${text(policy.id)}`"
-                  @click="openPolicyForm(policy)"
+              <div class="policy-head">
+                <div>
+                  <strong>{{ text(policy.name) }}</strong>
+                  <small class="row-id mono"
+                    >{{ text(policy.id).split('-')[0] }} · created by
+                    {{ text(policy.created_by ?? policy.createdBy) }} · updated
+                    {{ agoWhen(policy.updated_at ?? policy.updatedAt) }}</small
+                  >
+                </div>
+                <div class="policy-actions">
+                  <span class="status-badge" :class="policy.enabled === false ? '' : 'good'">
+                    {{ policy.enabled === false ? 'Disabled' : 'Enabled' }}
+                  </span>
+                  <template v-if="canManage">
+                    <button
+                      class="secondary-button is-compact"
+                      :data-testid="`policy-edit-${text(policy.id)}`"
+                      @click="openPolicyForm(policy)"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      class="secondary-button danger-button is-compact"
+                      :data-testid="`policy-delete-${text(policy.id)}`"
+                      :disabled="policyBusy"
+                      @click="deletePolicy(policy)"
+                    >
+                      Delete
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <ol class="step-rail">
+                <li
+                  v-for="(step, index) in stepsOf(policy)"
+                  :key="index"
+                  :class="{ 'is-skipped': !channelCanDeliver(step.channelType) }"
                 >
-                  Edit
-                </button>
-                <button
-                  class="secondary-button danger-button"
-                  :data-testid="`policy-delete-${text(policy.id)}`"
-                  :disabled="policyBusy"
-                  @click="deletePolicy(policy)"
-                >
-                  Delete
-                </button>
-              </td>
-            </tr>
-            <tr v-if="policyState === 'ok' && !policies.length">
-              <td :colspan="canManage ? 7 : 6" class="empty-cell" data-testid="policy-empty">
-                No escalation policies are defined — an alert that nobody acknowledges will never be
-                escalated to anyone.
-              </td>
-            </tr>
-            <tr v-if="policyState === 'loading'">
-              <td :colspan="canManage ? 7 : 6" class="empty-cell">Loading escalation policies…</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+                  <span class="step-at mono">+{{ step.afterMinutes }}m</span>
+                  <span class="step-node" aria-hidden="true"></span>
+                  <span class="step-card">
+                    <strong>{{ step.target || step.channelType }}</strong>
+                    <span v-if="channelCanDeliver(step.channelType)" class="step-ok"
+                      >Deliverable</span
+                    >
+                    <span v-else class="step-skip">Not deliverable, this step is skipped</span>
+                  </span>
+                </li>
+                <li v-if="!stepsOf(policy).length" class="step-none">
+                  This policy has no steps, so it escalates to nobody.
+                </li>
+              </ol>
+            </li>
+
+            <li
+              v-if="policyState === 'ok' && !policies.length"
+              class="policy-empty"
+              data-testid="policy-empty"
+            >
+              <strong>No escalation policies</strong>
+              <p>An alert that nobody acknowledges will never be escalated to anyone.</p>
+            </li>
+            <li v-if="policyState === 'loading'" class="policy-empty">
+              Loading escalation policies…
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
 
     <!-- Maintenance windows ---------------------------------------------------- -->
     <section class="panel" data-testid="maintenance-panel" aria-label="Maintenance windows">
@@ -1161,4 +1272,246 @@ onMounted(() => {
   </div>
 </template>
 
+<style scoped>
+/* THE VERDICT BANNER ------------------------------------------------------
+   Green or red, the sentence spelled out, and the age of the check beside
+   it. Colour repeats the words; it never carries the meaning alone. */
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  margin-bottom: 14px;
+}
+.status-banner.is-ok {
+  border-color: var(--ok, #1a7f37);
+  background: var(--ok-soft, #e6f4ea);
+}
+.status-banner.is-bad {
+  border-color: var(--bad, #b42318);
+  background: var(--bad-soft, #fbe6e2);
+}
+.banner-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-banner.is-ok .banner-dot {
+  background: var(--ok, #1a7f37);
+}
+.status-banner.is-bad .banner-dot {
+  background: var(--bad, #b42318);
+}
+.banner-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.banner-text h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.banner-text p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.banner-age {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Five figures, divided, one row. */
+.figure-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--border);
+  overflow: hidden;
+}
+@media (max-width: 880px) {
+  .figure-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.figure-row div {
+  background: var(--surface);
+  padding: 12px 16px;
+}
+.figure-row b {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.figure-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Channels and policies side by side: two halves of one answer. */
+.response-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .response-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.channel-list,
+.policy-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.channel-list > li,
+.policy-list > li {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+}
+.channel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.channel-transport {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+.channel-use {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.channel-empty,
+.policy-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+.channel-empty p,
+.policy-empty p {
+  margin: 3px 0 0;
+}
+
+/* THE ESCALATION RAIL ------------------------------------------------------
+   Offset on the left, a node on the rail, the step's card on the right. A
+   step whose channel cannot deliver is tinted and says so, because the
+   difference between "three steps" and "one step that will actually fire" is
+   the whole point of this screen. */
+.policy-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.policy-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.step-rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.step-rail > li {
+  display: grid;
+  grid-template-columns: 52px 16px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+}
+.step-at {
+  padding-top: 11px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+/* The rail is the node's ::after, so it stops at the last step instead of
+   hanging below it. */
+.step-node {
+  position: relative;
+  display: block;
+}
+.step-node::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--ok, #1a7f37);
+  border-radius: 50%;
+  background: var(--surface);
+}
+.step-rail > li:not(:last-child) .step-node::after {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 23px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--border);
+}
+.step-rail > li.is-skipped .step-node::before {
+  border-color: var(--warn, #9a6700);
+}
+.step-card {
+  display: block;
+  padding: 8px 11px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  min-width: 0;
+}
+.step-rail > li.is-skipped .step-card {
+  border-color: var(--warn, #9a6700);
+  background: var(--warn-soft, #fbf0d8);
+}
+.step-card strong {
+  display: block;
+  font-size: 13.5px;
+}
+.step-ok {
+  color: var(--ok, #1a7f37);
+  font-size: 12px;
+}
+.step-skip {
+  color: var(--warn-strong, var(--warn, #9a6700));
+  font-size: 12px;
+}
+.step-none {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+</style>
 <style src="./workspace-extras.css"></style>

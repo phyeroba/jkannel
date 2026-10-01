@@ -43,6 +43,62 @@ const icons: Record<string, string> = {
   external:
     '<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4.5h-4.5"/>',
+
+  /*
+   * ONE ICON PER NAVIGATION ENTRY.
+   *
+   * Fifty entries were drawing sixteen icons between them: `route` served
+   * Routing, Advanced Routing, Inbound Routing and Failover; `alert` served
+   * Alerts, Alert Lifecycle and SMPP Errors; `bell` served Escalation,
+   * Notifications and Events. A sidebar icon exists to let someone find a
+   * row without reading it, and four identical glyphs in one group do the
+   * opposite — they make the labels the only way to tell the rows apart,
+   * while taking the space that would have made the labels bigger.
+   *
+   * All stroke-only on the same 24x24 grid as the set above, so they sit at
+   * one weight beside the originals.
+   */
+  lifecycle:
+    '<path d="M4 12a8 8 0 0 1 13.7-5.6"/><path d="M20 12a8 8 0 0 1-13.7 5.6"/><path d="M18 3v4h-4"/><path d="M6 21v-4h4"/>',
+  escalate: '<path d="M4 20h4v-5H4z"/><path d="M10 20h4V10h-4z"/><path d="M16 20h4V5h-4z"/>',
+  activity: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
+  report:
+    '<path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><path d="M9 17v-3M12 17v-6M15 17v-4"/>',
+  gauge:
+    '<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-6"/><circle cx="12" cy="18" r="1.4"/>',
+  filter: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>',
+  inbound: '<path d="M21 12H8"/><path d="M12 7l-5 5 5 5"/><path d="M3 4v16"/>',
+  branch:
+    '<circle cx="6" cy="5" r="2.4"/><circle cx="6" cy="19" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M6 7.4v9.2"/><path d="M8.4 5h3.6a3 3 0 0 1 3 3v1.6"/>',
+  failover:
+    '<path d="M3 8h7a4 4 0 0 1 4 4v0a4 4 0 0 0 4 4h3"/><path d="M18 13l3 3-3 3"/><path d="M3 16h5" stroke-dasharray="2 2"/>',
+  bug: '<path d="M8 7a4 4 0 0 1 8 0"/><rect x="7" y="7" width="10" height="11" rx="5"/><path d="M3 11h4M17 11h4M3 17h4M17 17h4M12 7V4"/>',
+  stream:
+    '<path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="14" cy="17" r="2"/>',
+  receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  retry: '<path d="M4 12a8 8 0 1 1 2.3 5.7"/><path d="M4 20v-4.5h4.5"/><path d="M12 8v4l3 2"/>',
+  tower:
+    '<path d="M12 10v11"/><path d="M8 21h8"/><circle cx="12" cy="7" r="2"/><path d="M7.5 11A6 6 0 0 1 7.5 3"/><path d="M16.5 11a6 6 0 0 0 0-8"/>',
+  archive:
+    '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
+  plug: '<path d="M9 3v6M15 3v6"/><path d="M7 9h10v3a5 5 0 0 1-10 0z"/><path d="M12 17v4"/>',
+  nodes:
+    '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2 6.4 16.8M12 7.2l5.6 9.6M7.2 19h9.6"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7L11.5 7"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1.5-1.4"/>',
+  book: '<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v16H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v4H6.5A2.5 2.5 0 0 1 4 19.5z"/>',
+  ledger:
+    '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M12 8h5M12 12h5M12 16h3"/>',
+  flask:
+    '<path d="M10 3h4"/><path d="M11 3v6L5.5 18.5A2 2 0 0 0 7.2 21h9.6a2 2 0 0 0 1.7-2.5L13 9V3"/><path d="M8.5 15h7"/>',
+  sliders:
+    '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  bulk: '<rect x="3" y="7" width="13" height="10" rx="2"/><path d="M7 4h11a3 3 0 0 1 3 3v9"/><path d="M6 11h7M6 14h4"/>',
+  target:
+    '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  inbox:
+    '<path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5 5h14l2 8v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5z"/>',
+  id: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.2a3.6 3.6 0 0 1 6.4 0"/><path d="M15 10h4M15 14h3"/>',
+  jobs: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 1.8"/><path d="M19.5 5.5 21 4M4.5 5.5 3 4"/>',
 };
 const content = computed(() => icons[props.name] ?? icons.cog);
 </script>

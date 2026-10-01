@@ -202,7 +202,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Monitoring',
     to: '/monitoring',
-    icon: 'chart',
+    icon: 'gauge',
     permission: 'monitoring.view',
     group: 'System',
   },
@@ -210,18 +210,18 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Alert Lifecycle',
     to: '/alert-lifecycle',
-    icon: 'alert',
+    icon: 'lifecycle',
     permission: 'alerts.view',
     group: 'Overview',
   },
   {
     label: 'Escalation & Maintenance',
     to: '/alert-response',
-    icon: 'bell',
+    icon: 'escalate',
     permission: 'alerts.view',
     group: 'Overview',
   },
-  { label: 'Notifications', to: '/notifications', icon: 'bell', group: 'Overview' },
+  { label: 'Notifications', to: '/notifications', icon: 'inbox', group: 'Overview' },
   {
     label: 'Messages',
     to: '/messages',
@@ -252,14 +252,14 @@ export const navigation: NavigationItem[] = [
     // permission the API does not check would put a dead link in the sidebar.
     label: 'DLR Performance',
     to: '/dlr-performance',
-    icon: 'check',
+    icon: 'receipt',
     permission: 'reports.view',
     group: 'Traffic',
   },
   {
     label: 'Live Queue',
     to: '/live-queue',
-    icon: 'queue',
+    icon: 'activity',
     permission: 'messages.view',
     group: 'Traffic',
   },
@@ -268,7 +268,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Delivery Retries',
     to: '/delivery-retries',
-    icon: 'check',
+    icon: 'retry',
     permission: 'messages.view',
     group: 'Traffic',
   },
@@ -282,7 +282,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Bulk Send',
     to: '/bulk-send',
-    icon: 'sms',
+    icon: 'bulk',
     permission: 'messages.view',
     group: 'Messaging',
   },
@@ -299,7 +299,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Recipient Policy',
     to: '/recipient-policy',
-    icon: 'shield',
+    icon: 'filter',
     permission: 'messages.view',
     group: 'Messaging',
   },
@@ -313,7 +313,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Inbound Routing',
     to: '/mo-routing',
-    icon: 'route',
+    icon: 'inbound',
     permission: 'messages.view',
     group: 'Messaging',
   },
@@ -322,14 +322,14 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Carriers',
     to: '/carriers',
-    icon: 'db',
+    icon: 'tower',
     permission: 'smsc.view',
     group: 'Connectivity',
   },
   {
     label: 'SMSC Connections',
     to: '/smsc',
-    icon: 'server',
+    icon: 'plug',
     permission: 'smsc.view',
     group: 'Connectivity',
   },
@@ -338,7 +338,7 @@ export const navigation: NavigationItem[] = [
     // an operator must never have to guess which of the two a link means.
     label: 'SMPP Sessions',
     to: '/sessions-smpp',
-    icon: 'api',
+    icon: 'link',
     permission: 'smsc.view',
     group: 'Connectivity',
   },
@@ -352,7 +352,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Advanced Routing',
     to: '/routing-advanced',
-    icon: 'route',
+    icon: 'branch',
     permission: 'routes.view',
     group: 'Routing',
   },
@@ -365,14 +365,14 @@ export const navigation: NavigationItem[] = [
     // and the mutating controls inside the screen are gated separately.
     label: 'Failover',
     to: '/failover',
-    icon: 'route',
+    icon: 'failover',
     permission: 'routes.view',
     group: 'Routing',
   },
   {
     label: 'Route Simulator',
     to: '/route-simulator',
-    icon: 'search',
+    icon: 'flask',
     permission: 'routes.view',
     group: 'Routing',
   },
@@ -393,7 +393,7 @@ export const navigation: NavigationItem[] = [
     // under monitoring.view would put a link in the sidebar that 403s.
     label: 'SMPP Errors',
     to: '/smpp-errors',
-    icon: 'alert',
+    icon: 'bug',
     permission: 'smsc.view',
     group: 'Diagnostics',
   },
@@ -407,14 +407,14 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Analytics & Reports',
     to: '/reports',
-    icon: 'chart',
+    icon: 'report',
     permission: 'reports.view',
     group: 'Customers',
   },
   {
     label: 'Customers',
     to: '/customers',
-    icon: 'users',
+    icon: 'id',
     permission: 'system.view',
     group: 'Customers',
   },
@@ -437,7 +437,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'API Reference',
     to: '/api-reference',
-    icon: 'api',
+    icon: 'book',
     group: 'Platform',
   },
   // §14. Services is first in this group and above Runtime Containers on
@@ -454,7 +454,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Nodes',
     to: '/nodes',
-    icon: 'server',
+    icon: 'nodes',
     permission: 'system.view',
     group: 'System',
   },
@@ -465,7 +465,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Performance',
     to: '/performance',
-    icon: 'chart',
+    icon: 'stream',
     permission: 'smsc.view',
     group: 'System',
   },
@@ -479,7 +479,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Logs & Audit',
     to: '/logs-audit',
-    icon: 'terminal',
+    icon: 'ledger',
     permission: 'monitoring.view',
     group: 'System',
   },
@@ -495,7 +495,7 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Background Jobs',
     to: '/jobs',
-    icon: 'cog',
+    icon: 'jobs',
     permission: 'system.view',
     group: 'System',
   },
@@ -512,14 +512,14 @@ export const navigation: NavigationItem[] = [
     // inside the screen, so this link never leads to a page that 403s outright.
     label: 'Test Tools',
     to: '/test-tools',
-    icon: 'terminal',
+    icon: 'target',
     permission: 'routes.view',
     group: 'Diagnostics',
   },
   {
     label: 'Configuration',
     to: '/configuration',
-    icon: 'cog',
+    icon: 'sliders',
     permission: 'configuration.view',
     group: 'Diagnostics',
   },
@@ -533,28 +533,28 @@ export const navigation: NavigationItem[] = [
   {
     label: 'Backup & Restore',
     to: '/backup',
-    icon: 'db',
+    icon: 'archive',
     permission: 'system.view',
     group: 'System',
   },
   {
     label: 'Users & Roles',
     to: '/users',
-    icon: 'shield',
+    icon: 'users',
     permission: 'users.view',
     group: 'Platform',
   },
   {
     label: 'Roles & Permissions',
     to: '/roles',
-    icon: 'shield',
+    icon: 'key',
     permission: 'users.view',
     group: 'Platform',
   },
   {
     label: 'Sessions',
     to: '/sessions',
-    icon: 'key',
+    icon: 'eye',
     permission: 'users.sessions',
     group: 'Platform',
   },
