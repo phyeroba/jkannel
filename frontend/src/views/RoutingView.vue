@@ -372,6 +372,216 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => clearTimeout(resolveTimer));
 
+/* --- the route editor ---------------------------------------------------
+ *
+ * A SIDE PANEL IN FOUR STEPS, NOT A CENTRE DIALOG.
+ *
+ * The old Create route was a 620px dialog with Name, Target SMSC,
+ * Destination prefix, Sender ID and Fallback laid out in two uneven columns,
+ * and a sentence of policy text at the bottom. Edit was the same shape plus
+ * seven stacked day checkboxes. Neither said what a route would DO once
+ * saved, neither warned about a priority already in use, and the Create
+ * button sat disabled without saying what was missing.
+ *
+ * The four steps are the four decisions: what the route is, which messages it
+ * takes, where they go, and when it applies. Numbered because they genuinely
+ * are a sequence — you cannot sensibly choose a fallback before a primary.
+ */
+interface RouteDraft {
+  id: string | null;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  matchKind: 'prefix' | 'patterns';
+  destinationPrefix: string;
+  sender: string;
+  targetSmscId: string;
+  fallbackSmscId: string;
+  strategy: 'priority' | 'weighted' | 'round-robin';
+  cost: string;
+  applies: 'always' | 'window';
+  windowStart: string;
+  windowEnd: string;
+  days: number[];
+  changeReason: string;
+}
+
+const editorOpen = ref(false);
+const draft = ref<RouteDraft>(blankDraft());
+const saving = ref(false);
+
+function blankDraft(): RouteDraft {
+  return {
+    id: null,
+    name: '',
+    // One past the highest in use, so the default does not collide.
+    priority: 10,
+    enabled: true,
+    matchKind: 'prefix',
+    destinationPrefix: '',
+    sender: '',
+    targetSmscId: '',
+    fallbackSmscId: '',
+    strategy: 'priority',
+    cost: '',
+    applies: 'always',
+    windowStart: '',
+    windowEnd: '',
+    days: [],
+    changeReason: '',
+  };
+}
+
+const prioritiesInUse = computed(() =>
+  rows.value
+    .filter((row) => row.id !== draft.value.id)
+    .map((row) => row.priority)
+    .sort((a, b) => a - b),
+);
+const priorityTaken = computed(() => prioritiesInUse.value.includes(draft.value.priority));
+
+const STRATEGIES = ['priority', 'weighted', 'round-robin'] as const;
+const STRATEGY_LABEL: Record<string, string> = {
+  priority: 'Priority',
+  weighted: 'Weighted',
+  'round-robin': 'Round-robin',
+};
+/** Everything except the primary: a route cannot fall back to itself. */
+const fallbackChoices = computed(() =>
+  smscs.value.filter((entry) => entry.id !== draft.value.targetSmscId),
+);
+
+const STRATEGY_NOTE: Record<string, string> = {
+  priority: 'Always the primary; the fallback is used only on failure.',
+  weighted: 'Messages are split between targets by weight.',
+  'round-robin': 'Each message goes to the next target in turn.',
+};
+
+const DAYS = [
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+  { value: 6, label: 'Sat' },
+  { value: 0, label: 'Sun' },
+];
+function toggleDay(value: number) {
+  const next = new Set(draft.value.days);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  draft.value.days = [...next].sort();
+}
+
+/**
+ * What is still missing, named.
+ *
+ * A disabled Save with no explanation makes the operator hunt for the field
+ * they have not filled. The button says it instead.
+ */
+const missing = computed(() => {
+  const gaps: string[] = [];
+  if (!draft.value.name.trim()) gaps.push('a name');
+  if (!draft.value.targetSmscId) gaps.push('a primary SMSC');
+  if (draft.value.applies === 'window' && !draft.value.windowStart && !draft.value.windowEnd) {
+    gaps.push('a time window');
+  }
+  if (draft.value.id && !draft.value.changeReason.trim()) gaps.push('a change reason');
+  return gaps;
+});
+
+/** A sentence describing what this route will do, from the draft itself. */
+const draftSentence = computed(() => {
+  const d = draft.value;
+  const target = smscName(d.targetSmscId) || 'an SMSC you have not chosen yet';
+  const match = d.destinationPrefix.trim()
+    ? `destinations starting +${d.destinationPrefix.replace(/^\+/, '')}`
+    : 'every destination';
+  const from = d.sender.trim() ? ` from sender ${d.sender.trim()}` : '';
+  const when =
+    d.applies === 'window'
+      ? ` between ${d.windowStart || '00:00'} and ${d.windowEnd || '24:00'}`
+      : '';
+  const fallback = d.fallbackSmscId
+    ? `, falling back to ${smscName(d.fallbackSmscId)}`
+    : ', and queue on that SMSC if it fails';
+  return `Send ${match}${from}${when} via ${target}${fallback}.`;
+});
+
+function openEditor(row?: RouteRow) {
+  if (row) {
+    draft.value = {
+      id: row.id,
+      name: row.name,
+      priority: row.priority,
+      enabled: row.enabled,
+      matchKind: row.routeType === 'wildcard' ? 'patterns' : 'prefix',
+      destinationPrefix: row.matchPrefix ?? row.destinationPrefix ?? '',
+      sender: row.sender ?? '',
+      targetSmscId: row.targetSmscId ?? '',
+      fallbackSmscId: row.fallbackSmscId ?? '',
+      strategy: (row.strategy as RouteDraft['strategy']) ?? 'priority',
+      cost: row.cost === null ? '' : String(row.cost),
+      applies: row.window?.start || row.window?.end ? 'window' : 'always',
+      windowStart: row.window?.start ?? '',
+      windowEnd: row.window?.end ?? '',
+      days: Array.isArray(row.window?.days) ? [...(row.window?.days ?? [])] : [],
+      changeReason: '',
+    };
+  } else {
+    const next = blankDraft();
+    const highest = rows.value.reduce((max, row) => Math.max(max, row.priority), 0);
+    next.priority = highest + 10;
+    draft.value = next;
+  }
+  openRoute.value = null;
+  editorOpen.value = true;
+}
+
+async function saveDraft() {
+  if (missing.value.length || saving.value) return;
+  saving.value = true;
+  actionError.value = '';
+  const d = draft.value;
+  const body: RecordValue = {
+    name: d.name.trim(),
+    priority: d.priority,
+    enabled: d.enabled,
+    routeType: d.matchKind === 'patterns' ? 'wildcard' : 'prefix',
+    strategy: d.strategy,
+    matchPrefix: d.destinationPrefix.trim() || null,
+    sender: d.sender.trim() || null,
+    targetSmscId: d.targetSmscId,
+    fallbackSmscId: d.fallbackSmscId || null,
+    cost: d.cost.trim() ? Number(d.cost) : null,
+    window:
+      d.applies === 'window'
+        ? {
+            start: d.windowStart || null,
+            end: d.windowEnd || null,
+            days: d.days.length ? d.days : null,
+          }
+        : { start: null, end: null, days: null },
+  };
+  if (d.id) body.changeReason = d.changeReason.trim();
+  try {
+    if (d.id) {
+      await apiRequest(`/routing/routes/${d.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      notice.value = `${body.name} saved as a new version. Deploy it to go live.`;
+    } else {
+      await apiRequest('/routing/routes', { method: 'POST', body: JSON.stringify(body) });
+      notice.value = `${body.name} created and dry-run. Deploy it to go live.`;
+    }
+    editorOpen.value = false;
+    await load();
+    await resolveNow();
+  } catch (reason) {
+    actionError.value = reason instanceof Error ? reason.message : 'The route could not be saved.';
+  } finally {
+    saving.value = false;
+  }
+}
+
 defineExpose({ shortenPattern });
 </script>
 
@@ -395,7 +605,7 @@ defineExpose({ shortenPattern });
           class="primary-button"
           type="button"
           data-testid="routing-new"
-          @click="notice = 'The route editor opens from a row for now — use Edit on any route.'"
+          @click="openEditor()"
         >
           New route
         </button>
@@ -717,6 +927,15 @@ defineExpose({ shortenPattern });
         <div class="panel-actions">
           <button
             v-if="canManage"
+            class="primary-button"
+            type="button"
+            data-testid="route-edit"
+            @click="openEditor(openRoute)"
+          >
+            Edit
+          </button>
+          <button
+            v-if="canManage"
             class="secondary-button"
             type="button"
             :disabled="busyId === openRoute.id"
@@ -784,6 +1003,242 @@ defineExpose({ shortenPattern });
           </ol>
           <p v-else class="source-note">No earlier versions are recorded for this route.</p>
         </section>
+      </template>
+    </DetailDrawer>
+
+    <!-- ROUTE EDITOR ------------------------------------------------------
+      Four numbered steps, because they genuinely are a sequence: you cannot
+      sensibly choose a fallback before a primary.
+
+      This replaces a 620px centre dialog that laid Name, Target SMSC,
+      Destination prefix, Sender ID and Fallback across two uneven columns,
+      never said what the route would DO once saved, never warned that a
+      priority was already taken, and left Save disabled without saying why.
+    -->
+    <DetailDrawer
+      :open="editorOpen"
+      :title="draft.id ? `Edit ${draft.name}` : 'New route'"
+      :subtitle="
+        draft.id
+          ? 'Saving creates a new version and runs a dry-run. It goes live when you deploy.'
+          : 'Validated and dry-run on create. Nothing goes live until you deploy.'
+      "
+      wide
+      @close="editorOpen = false"
+    >
+      <form class="editor" @submit.prevent="saveDraft">
+        <fieldset class="step">
+          <legend>1 &middot; Route</legend>
+          <label class="stacked">
+            <span>Name</span>
+            <input v-model="draft.name" data-testid="editor-name" placeholder="MTN Uganda" />
+          </label>
+          <div class="step-row">
+            <label class="stacked">
+              <span>Priority</span>
+              <input
+                v-model.number="draft.priority"
+                type="number"
+                min="0"
+                data-testid="editor-priority"
+              />
+            </label>
+            <label class="toggle-field">
+              <span>Enabled</span>
+              <input v-model="draft.enabled" type="checkbox" data-testid="editor-enabled" />
+            </label>
+          </div>
+          <!--
+            The priorities already taken, listed. A duplicate is rejected by
+            the API, and finding that out on save is finding it out too late.
+          -->
+          <p class="step-hint" :class="{ 'is-warn-text': priorityTaken }">
+            <template v-if="priorityTaken">
+              Priority {{ draft.priority }} is already in use. Lower runs first; in use:
+              {{ prioritiesInUse.join(', ') || 'none' }}
+            </template>
+            <template v-else>
+              Lower runs first. In use: {{ prioritiesInUse.join(', ') || 'none' }}
+            </template>
+          </p>
+        </fieldset>
+
+        <fieldset class="step">
+          <legend>2 &middot; Which messages</legend>
+          <div class="segmented" role="group" aria-label="Match type">
+            <button
+              type="button"
+              :class="{ 'is-active': draft.matchKind === 'prefix' }"
+              data-testid="editor-match-prefix"
+              @click="draft.matchKind = 'prefix'"
+            >
+              Prefix
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-active': draft.matchKind === 'patterns' }"
+              data-testid="editor-match-patterns"
+              @click="draft.matchKind = 'patterns'"
+            >
+              Patterns
+            </button>
+          </div>
+          <div class="step-row">
+            <label class="stacked">
+              <span>{{ draft.matchKind === 'patterns' ? 'Pattern' : 'Destination prefix' }}</span>
+              <input
+                v-model="draft.destinationPrefix"
+                data-testid="editor-prefix"
+                :placeholder="draft.matchKind === 'patterns' ? '25677*|25678*' : '+256'"
+              />
+            </label>
+            <label class="stacked">
+              <span>Sender ID</span>
+              <input v-model="draft.sender" data-testid="editor-sender" placeholder="Any sender" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="step">
+          <legend>3 &middot; Where they go</legend>
+          <div class="step-row">
+            <label class="stacked">
+              <span>Primary SMSC</span>
+              <select v-model="draft.targetSmscId" data-testid="editor-target">
+                <option value="">Choose SMSC</option>
+                <!-- Capacity on the option, because choosing a 10/s bind for a
+                     high-volume prefix is the mistake this field invites. -->
+                <option v-for="smsc in smscs" :key="smsc.id" :value="smsc.id">
+                  {{ smsc.name }} ({{ smsc.engineId }}) &middot; {{ smsc.tps ?? '-' }}/s
+                </option>
+              </select>
+            </label>
+            <label class="stacked">
+              <span>Fallback SMSC</span>
+              <select v-model="draft.fallbackSmscId" data-testid="editor-fallback">
+                <option value="">None</option>
+                <option v-for="smsc in fallbackChoices" :key="smsc.id" :value="smsc.id">
+                  {{ smsc.name }} ({{ smsc.engineId }}) &middot; {{ smsc.tps ?? '-' }}/s
+                </option>
+              </select>
+            </label>
+          </div>
+          <p
+            v-if="!draft.fallbackSmscId"
+            class="step-hint is-warn-text"
+            data-testid="editor-no-fallback"
+          >
+            With no fallback, messages queue on the primary when it fails rather than re-routing.
+          </p>
+
+          <div class="segmented" role="group" aria-label="Selection strategy">
+            <button
+              v-for="option in STRATEGIES"
+              :key="option"
+              type="button"
+              :class="{ 'is-active': draft.strategy === option }"
+              :data-testid="`editor-strategy-${option}`"
+              @click="draft.strategy = option"
+            >
+              {{ STRATEGY_LABEL[option] }}
+            </button>
+          </div>
+          <p class="step-hint">{{ STRATEGY_NOTE[draft.strategy] }}</p>
+
+          <label class="stacked narrow">
+            <span>Cost per message</span>
+            <input
+              v-model="draft.cost"
+              data-testid="editor-cost"
+              placeholder="Optional, e.g. 0.012"
+            />
+          </label>
+        </fieldset>
+
+        <fieldset class="step">
+          <legend>4 &middot; When it applies</legend>
+          <div class="segmented" role="group" aria-label="When it applies">
+            <button
+              type="button"
+              :class="{ 'is-active': draft.applies === 'always' }"
+              data-testid="editor-applies-always"
+              @click="draft.applies = 'always'"
+            >
+              Always
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-active': draft.applies === 'window' }"
+              data-testid="editor-applies-window"
+              @click="draft.applies = 'window'"
+            >
+              Time window
+            </button>
+          </div>
+          <template v-if="draft.applies === 'window'">
+            <div class="step-row">
+              <label class="stacked">
+                <span>From</span>
+                <input v-model="draft.windowStart" type="time" data-testid="editor-window-start" />
+              </label>
+              <label class="stacked">
+                <span>Until</span>
+                <input v-model="draft.windowEnd" type="time" data-testid="editor-window-end" />
+              </label>
+            </div>
+            <!-- Days are toggle BUTTONS, not seven stacked checkboxes: it is
+                 one choice made seven times, and a column of them made the
+                 old dialog taller than the screen. -->
+            <p class="step-label">Days</p>
+            <div class="day-row" role="group" aria-label="Active days">
+              <button
+                v-for="day in DAYS"
+                :key="day.value"
+                type="button"
+                :class="{ 'is-active': draft.days.includes(day.value) }"
+                :data-testid="`editor-day-${day.value}`"
+                @click="toggleDay(day.value)"
+              >
+                {{ day.label }}
+              </button>
+            </div>
+            <p class="step-hint">No day selected means every day.</p>
+          </template>
+        </fieldset>
+
+        <fieldset v-if="draft.id" class="step">
+          <legend>5 &middot; Change reason</legend>
+          <label class="stacked">
+            <span class="sr-only">Change reason</span>
+            <input
+              v-model="draft.changeReason"
+              data-testid="editor-reason"
+              placeholder="Required. Recorded in the audit log and version history."
+            />
+          </label>
+        </fieldset>
+
+        <!-- What this route will actually do, in a sentence, from the draft. -->
+        <p class="draft-sentence" data-testid="editor-sentence">{{ draftSentence }}</p>
+      </form>
+
+      <template #footer>
+        <div class="button-row">
+          <button class="secondary-button" type="button" @click="editorOpen = false">Cancel</button>
+          <!-- The button names what is missing rather than sitting disabled
+               and leaving the operator to hunt for the empty field. -->
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="Boolean(missing.length) || saving"
+            data-testid="editor-save"
+            @click="saveDraft"
+          >
+            <template v-if="saving">Saving...</template>
+            <template v-else-if="missing.length">Needs {{ missing.join(', ') }}</template>
+            <template v-else>{{ draft.id ? 'Save route' : 'Create route' }}</template>
+          </button>
+        </div>
       </template>
     </DetailDrawer>
   </div>
