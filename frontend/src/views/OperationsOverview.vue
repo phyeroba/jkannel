@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MiniChart from '../components/MiniChart.vue';
 import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
+import DetailDrawer from '../components/DetailDrawer.vue';
+import { useRouter } from 'vue-router';
+import { RANGE_PRESETS, selectedRange, setRangePreset } from '../stores/time-range';
 import { healthTone, type CarrierSummary } from '../utils/connectivity';
 import { alertDuration } from '../utils/alerts';
 import {
@@ -284,6 +287,175 @@ const openIncidents = computed(
     }).length,
 );
 
+const router = useRouter();
+
+/**
+ * The range select, bound to the shared store the shell's own picker uses.
+ *
+ * Two range controls that disagree is worse than one, so this writes to the
+ * same place rather than keeping a second copy of the choice.
+ */
+const selectedRangeKey = computed({
+  get: () => selectedRange.value.id,
+  set: (key: string) => setRangePreset(key),
+});
+
+/** Severity colour for an incident dot. Unknown stays muted, never green. */
+function severityTone(alert: RecordValue): string {
+  const value = String(alert.severity ?? '').toLowerCase();
+  if (value === 'critical') return 'bad';
+  if (value === 'warning') return 'warn';
+  if (value === 'info') return 'good';
+  return '';
+}
+
+/**
+ * Hand the question to the Copilot screen rather than answering it here.
+ *
+ * That screen owns the advisory opt-in header, the citation rendering and
+ * the refusal path. A second implementation of any of those is a second
+ * place for an advisory answer to be presented as fact.
+ */
+function askCopilot(question: string) {
+  const text = question.trim();
+  if (!text) return;
+  void router.push({ path: '/copilot', query: { q: text } });
+}
+
+/* --- the Copilot box -----------------------------------------------------
+ *
+ * A QUESTION BOX, NOT A LINK.
+ *
+ * The dashboard had an "Ask AI Copilot" button on the action bar, which is a
+ * link to another screen wearing the clothes of a feature. The design puts
+ * the question where the data is and offers three starters, because the hard
+ * part of a free-text box is knowing what it will answer.
+ *
+ * The question is carried to the Copilot screen rather than answered here:
+ * that screen owns the opt-in header, the citation rendering and the refusal
+ * path, and a second implementation of any of those would be a second place
+ * for an advisory answer to be presented as fact.
+ */
+const copilotQuestion = ref('');
+const copilotPrompts = computed(() => [
+  degradedCarriers.value.length
+    ? `Why is ${degradedCarriers.value[0].name} degraded?`
+    : 'Which carrier is closest to its capacity?',
+  'What changed in the last hour?',
+  'Which binds have never been observed?',
+]);
+
+/* --- carrier bind segments ------------------------------------------------
+ *
+ * One block per bind: filled when it is up, hollow when it is down, and
+ * outlined when it has never been observed. Three states, because "2 of 3"
+ * hides which of the three — and an unobserved bind is not a down one.
+ */
+function bindSegments(carrier: CarrierSummary) {
+  const total = Math.max(0, Number(carrier.bindsTotal) || 0);
+  const up = Math.max(0, Number(carrier.bindsHealthy) || 0);
+  const unobserved = Math.max(0, Number(carrier.bindsUnobserved) || 0);
+  return Array.from({ length: total }, (_, index) => {
+    if (index < up) return 'up';
+    return index < up + (total - up - unobserved) ? 'down' : 'unobserved';
+  });
+}
+
+/* --- the carrier panel ----------------------------------------------------
+ *
+ * Opened from a row. The register answers "which carrier"; the panel answers
+ * "and what about it" without making the operator leave the dashboard and
+ * lose the rest of the picture.
+ */
+const panelCarrier = ref<CarrierSummary | null>(null);
+const panelSmscs = ref<RecordValue[]>([]);
+const panelState = ref<'idle' | 'loading' | 'ok' | 'error'>('idle');
+
+async function openCarrierPanel(carrier: CarrierSummary) {
+  panelCarrier.value = carrier;
+  panelSmscs.value = [];
+  panelState.value = 'loading';
+  try {
+    const payload = await apiRequest<{ items?: RecordValue[] }>(
+      `/smscs?limit=100&offset=0&filter.carrierId=${encodeURIComponent(carrier.id)}`,
+    );
+    // The filter is applied again here because a deployment whose API ignores
+    // an unknown filter key would otherwise show every SMSC under one carrier.
+    panelSmscs.value = (payload?.items ?? []).filter(
+      (row) => String(row.carrier_id ?? row.carrierId ?? '') === carrier.id,
+    );
+    panelState.value = 'ok';
+  } catch {
+    panelState.value = 'error';
+  }
+}
+
+/** The one sentence the panel opens with: what is true of this carrier now. */
+const panelSummary = computed(() => {
+  const carrier = panelCarrier.value;
+  if (!carrier) return '';
+  if (carrier.observedTps === null) {
+    return `${carrier.name} sends no telemetry, so its health is unknown rather than healthy. ${carrier.smscCount} SMSC connection(s) are configured.`;
+  }
+  if (carrier.bindsTotal && carrier.bindsHealthy < carrier.bindsTotal) {
+    return `${carrier.bindsHealthy} of ${carrier.bindsTotal} binds are up. The rest are not carrying traffic.`;
+  }
+  return `All ${carrier.bindsTotal} bind(s) are up and carrying traffic.`;
+});
+
+/* --- traffic totals -------------------------------------------------------
+ *
+ * The three figures above the chart. Summed over exactly the snapshots the
+ * chart plots, so the totals and the bars can never disagree.
+ */
+/** One entry per plotted day, oldest first. Shared by the totals and the
+ *  bars, so the two cannot end up describing different data. */
+const trafficDaysRaw = computed(() =>
+  trafficLabels.value.map((label, index) => ({
+    label,
+    messages: trafficSeries.value[0]?.values[index] ?? 0,
+    dlrs: trafficSeries.value[1]?.values[index] ?? 0,
+  })),
+);
+
+const trafficTotals = computed(() => {
+  const rows = volumeSnapshots.value;
+  const messages = rows.reduce((sum, row) => sum + (Number(row.message_count) || 0), 0);
+  const dlrs = rows.reduce((sum, row) => sum + (Number(row.dlr_count ?? row.dlrCount) || 0), 0);
+  /*
+   * NOT A "RECEIPT RATE".
+   *
+   * The obvious third figure is dlrs/messages as a percentage, and on real
+   * data it read 182%. A message can produce more than one receipt — an SMSC
+   * acknowledgement and a handset delivery are both DLRs — and a snapshot's
+   * receipts can belong to messages sent in an earlier period. A percentage
+   * over 100 is the screen saying the framing is wrong, and dividing two
+   * numbers that are not one-to-one and calling the result a rate is exactly
+   * the confident wrong answer this console is not allowed to give.
+   *
+   * The busiest day is a fact about the same snapshots, and it is what an
+   * operator actually looks for in a week of bars.
+   */
+  const busiest = [...trafficDaysRaw.value].sort((a, b) => b.messages - a.messages)[0] ?? null;
+  return [
+    { k: 'Messages', v: messages.toLocaleString() },
+    { k: 'Delivery receipts', v: dlrs.toLocaleString() },
+    {
+      k: 'Busiest day',
+      v:
+        busiest && busiest.messages
+          ? `${busiest.label} · ${busiest.messages.toLocaleString()}`
+          : 'no traffic',
+    },
+  ];
+});
+
+/* The chart's own scale, so the axis labels and the bar heights agree. */
+const trafficMax = computed(() =>
+  Math.max(1, ...trafficSeries.value.flatMap((series) => series.values)),
+);
+const trafficDays = computed(() => trafficDaysRaw.value);
+
 const carriersByHealth = computed(() =>
   [...carriers.value].sort(
     (a, b) =>
@@ -400,6 +572,22 @@ async function refresh() {
 const { autoRefresh, intervalSeconds, refreshing, refreshNow } = useLiveResource(refresh, {
   intervalSeconds: 30,
 });
+/**
+ * Seconds until the next automatic refresh.
+ *
+ * The bar used to say "Last updated 9:50:54 AM", which answers a question
+ * nobody asks. What an operator wants to know from a live screen is whether
+ * it is about to move, so it counts down instead.
+ */
+const secondsToNext = ref(0);
+setInterval(() => {
+  if (!autoRefresh.value) return;
+  secondsToNext.value = secondsToNext.value > 0 ? secondsToNext.value - 1 : intervalSeconds.value;
+}, 1000);
+watch([autoRefresh, intervalSeconds], () => {
+  secondsToNext.value = intervalSeconds.value;
+});
+
 const refreshChoices = [15, 30, 60, 300];
 
 function manualRefresh() {
@@ -557,24 +745,79 @@ function statusTone(status: string) {
 </script>
 <template>
   <!--
-    A single root, like every other view.
+    OPERATIONS — rebuilt to `Kamex Dashboard.dc.html`.
 
-    This template used to return a fragment, so its banner, action bar, metric
-    row, two grids and the carrier panel landed as direct children of <main>.
-    Every other screen wraps its content, and the console's spacing rhythm is
-    applied to that wrapper — so the dashboard, alone, had no rhythm and its
-    grids sat flush against the panel below them.
+    Reading order is the design's, and it is the order an operator asks the
+    questions in: is anything wrong (status line), ask about it (Copilot),
+    how much is moving (figures), through whom (carriers), on what
+    (platform), over time (traffic), and what broke (incidents).
   -->
   <div data-testid="operations-view">
+    <!-- CONTROLS --------------------------------------------------------- -->
+    <!--
+      Range, live state and refresh in one small bar on the right. These are
+      three settings of the VIEW, not three actions, and they used to occupy
+      a full-width band of labelled selects above the content.
+    -->
+    <!--
+      `filters`, which is what this bar is: three independent settings of the
+      view, each captioned only for a screen reader. The layout audit excludes
+      that class from its inline-label rule precisely for toolbars, and the
+      design shows these with no visible caption at all.
+    -->
+    <div class="ops-controls filters">
+      <label class="filter-select is-compact">
+        <span class="sr-only">Time range</span>
+        <select v-model="selectedRangeKey" data-testid="dashboard-range">
+          <option v-for="preset in RANGE_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
+      <div class="live-group">
+        <button
+          type="button"
+          class="live-toggle"
+          :class="{ 'is-live': autoRefresh }"
+          data-testid="dashboard-auto-toggle"
+          :title="autoRefresh ? 'Pause auto-refresh' : 'Resume auto-refresh'"
+          @click="autoRefresh = !autoRefresh"
+        >
+          <span class="live-dot" aria-hidden="true"></span>
+          {{ autoRefresh ? `Live · ${secondsToNext}s` : 'Paused' }}
+        </button>
+        <label class="filter-select is-compact">
+          <span class="sr-only">Refresh every</span>
+          <select
+            v-model.number="intervalSeconds"
+            :disabled="!autoRefresh"
+            data-testid="dashboard-interval"
+          >
+            <option v-for="choice in refreshChoices" :key="choice" :value="choice">
+              {{ choice }}s
+            </option>
+          </select>
+        </label>
+      </div>
+      <button
+        class="secondary-button is-compact"
+        type="button"
+        data-testid="refresh-dashboard"
+        :disabled="refreshing"
+        @click="manualRefresh"
+      >
+        <AppIcon name="refresh" :size="14" />{{ refreshing ? 'Refreshing…' : 'Refresh' }}
+      </button>
+    </div>
+
+    <!-- STATUS LINE ------------------------------------------------------ -->
     <!--
       THE VERDICT, IN ONE LINE, WITH NAMES IN IT.
 
-      This replaces an orange banner that said "Telemetry for 2 carriers is
-      not being observed" — true, and nearly useless: it named no carrier,
-      described nothing that was actually wrong, and sat above a dashboard
-      the operator had to read anyway to find out. The state is still
-      announced above the content rather than in place of it, which was the
-      one thing the banner got right.
+      Replaces an orange banner reading "Telemetry for 2 carriers is not
+      being observed" — true, and nearly useless: it named no carrier,
+      described nothing actually wrong, and sat above a dashboard the
+      operator had to read anyway to find out which two and what for.
     -->
     <section class="status-line" :class="`is-${overallTone}`" data-testid="dashboard-status">
       <span class="status-chip">
@@ -595,357 +838,185 @@ function statusTone(status: string) {
           Every carrier is reporting and every bind is up.
         </template>
       </p>
-      <RouterLink
+      <button
         v-if="worstCarrier"
         class="secondary-button is-compact"
-        :to="`/carriers/${worstCarrier.id}`"
+        type="button"
         data-testid="dashboard-inspect"
+        @click="openCarrierPanel(worstCarrier)"
       >
         Inspect {{ worstCarrier.name }}
-      </RouterLink>
+      </button>
     </section>
+
+    <!-- COPILOT ---------------------------------------------------------- -->
     <!--
-      `toolbar` alongside `dashboard-actions`: this is a bar of independent
-      switches over the view, not a form, and the layout audit's inline-label
-      rule is about forms. Without the class the audit reads "Auto refresh [On]
-      Every [30s]" as two form fields sharing a row and asks for them to be
-      stacked — which would be wrong, because each caption names the control
-      immediately to its right and there is no second field to confuse it with.
+      A question box where the data is, with three starters — the hard part
+      of a free-text box is knowing what it will answer. The question is
+      carried to the Copilot screen rather than answered here: that screen
+      owns the opt-in header, the citations and the refusal path.
     -->
-    <div class="dashboard-actions toolbar">
-      <!--
-        The one thing on this bar that GOES somewhere keeps full button
-        weight. Everything else here is plumbing for the view itself.
-      -->
-      <RouterLink class="secondary-button" to="/copilot" data-testid="open-copilot"
-        >Ask AI Copilot</RouterLink
-      >
-      <!--
-        THE REFRESH CLUSTER.
-
-        "Refresh dashboard" was a full-width secondary button sitting first on
-        the bar, which gave the most prominent control on the screen to the
-        least consequential action — the dashboard already refreshes itself,
-        and the button only pulls the same numbers a few seconds early. Beside
-        it, "Auto refresh [On]" and "Every [30s]" were two separate labelled
-        selects reading as two unrelated filters.
-
-        They are one idea: how this page keeps itself current. Grouped to the
-        right, compacted, and — the functional half — the interval is disabled
-        while auto refresh is off, because an interval that governs nothing is
-        a control that answers questions it is not being asked.
-      -->
-      <div class="refresh-cluster">
-        <button
-          class="secondary-button is-compact"
-          data-testid="refresh-dashboard"
-          :disabled="refreshing"
-          @click="manualRefresh"
-        >
-          <AppIcon name="refresh" :size="14" />{{ refreshing ? 'Refreshing…' : 'Refresh' }}
-        </button>
-        <label class="filter-select is-compact"
-          ><span>Auto</span
-          ><select v-model="autoRefresh" data-testid="dashboard-auto-toggle">
-            <option :value="true">On</option>
-            <option :value="false">Off</option>
-          </select></label
-        >
-        <label class="filter-select is-compact"
-          ><span>Every</span
-          ><select
-            v-model.number="intervalSeconds"
-            data-testid="dashboard-interval"
-            :disabled="!autoRefresh"
-          >
-            <option v-for="choice in refreshChoices" :key="choice" :value="choice">
-              {{ choice }}s
-            </option>
-          </select></label
-        >
-        <span class="refresh-stamp" data-testid="dashboard-last-checked"
-          >Last checked {{ refreshed }}{{ autoRefresh ? '' : ' · auto refresh off' }}</span
-        >
-      </div>
-    </div>
-    <section class="metrics-grid">
-      <!--
-      Each tile drills into the screen that owns the figure. Reading a worrying
-      number and then hunting the sidebar for where to act on it is friction the
-      tile can remove.
-    -->
-      <MetricCard
-        label="Queue depth"
-        :value="queueMetric.value"
-        :detail="queueMetric.detail"
-        :tone="queueMetric.tone"
-        icon="queue"
-        to="/queues"
-      /><MetricCard
-        label="Messages (latest daily)"
-        :value="messagesMetric.value"
-        :detail="messagesMetric.detail"
-        icon="sms"
-        to="/messages"
-      /><MetricCard
-        label="DLRs (latest daily)"
-        :value="dlrMetric.value"
-        :detail="dlrMetric.detail"
-        icon="check"
-        to="/dlr-performance"
-      /><MetricCard
-        label="Alerts"
-        :value="alertsMetric.value"
-        :detail="alertsMetric.detail"
-        :tone="alertsMetric.tone"
-        icon="alert"
-        to="/alerts"
-      />
-    </section>
-    <!--
-    Traffic and Queue pressure — the two panels the design system's
-    DashboardScreen leads with, and the two this dashboard was missing. Their
-    absence is why the console did not look like the package even after every
-    token and component class matched.
-  -->
-    <!--
-      CARRIERS COME SECOND, NOT LAST.
-
-      This panel answers the question the dashboard exists for — can we send,
-      and through whom — and it sat below the traffic chart, the service list
-      and the incident table, four screens down. The metric row above says how
-      much; this says through what, and everything below it is detail.
-    -->
-    <!--
-    Carrier connectivity — the design system's DashboardScreen centrepiece, and
-    the panel §3 asks for so a shift can be assessed in ten seconds: every
-    network this gateway binds to, worst first, each row opening its carrier.
-
-    Every column here is a field `GET /carriers` already returns. Throughput and
-    utilisation are derived from engine telemetry that is often absent, so they
-    read `unknown` rather than 0 — the design specifies that treatment, and a
-    zero we never measured is the one thing this console must never print.
-  -->
-    <article class="panel" data-testid="carrier-connectivity">
-      <header class="panel-header">
-        <div>
-          <h2>Carrier connectivity</h2>
-          <p>Every network this gateway binds to, worst first</p>
-        </div>
-        <RouterLink class="text-button" to="/carriers">Open Carriers</RouterLink>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <!--
-              SIX COLUMNS, NOT ELEVEN. Same treatment as the Carriers
-              register, and for the same reason: eleven narrow columns of
-              figures is a spreadsheet, and the panel's own promise is that a
-              shift can be assessed in ten seconds. Metrics read together now
-              share a cell — nothing is dropped.
-            -->
-            <tr>
-              <th scope="col">Carrier</th>
-              <th scope="col">Health</th>
-              <th scope="col">Connections</th>
-              <th scope="col">Traffic</th>
-              <th scope="col">Delivery</th>
-              <th scope="col">Alerts</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="carrier in carriersByHealth"
-              :key="carrier.id"
-              class="selectable"
-              :data-testid="`dashboard-carrier-${carrier.id}`"
-              tabindex="0"
-              @click="$router.push(`/carriers/${carrier.id}`)"
-              @keydown.enter="$router.push(`/carriers/${carrier.id}`)"
-            >
-              <td>
-                <strong>{{ carrier.name }}</strong>
-                <span class="row-id">{{
-                  [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
-                  'no network code'
-                }}</span>
-              </td>
-              <td>
-                <span class="status-badge" :class="healthTone(carrier.health)">{{
-                  carrier.health
-                }}</span>
-              </td>
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.smscCount }}</span
-                    ><span class="k">SMSCs</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono"
-                      >{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</span
-                    ><span class="k">binds up</span></span
-                  >
-                </span>
-              </td>
-              <!--
-                ONE "NO TELEMETRY", NOT THREE "UNKNOWN"s.
-
-                A carrier the poller has never sampled had every figure in
-                this cell reading `unknown`, which fills the row with noise
-                and still does not say why. Said once, as a state, it reads
-                as what it is: we are not measuring this carrier, so there is
-                nothing here to be alarmed by OR reassured by.
-              -->
-              <td>
-                <span v-if="carrier.observedTps === null" class="no-telemetry">
-                  No telemetry
-                  <small class="row-id">{{ carrier.queuedMessages.toLocaleString() }} queued</small>
-                </span>
-                <span v-else class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.observedTps }}</span
-                    ><span class="k">MT TPS</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono">{{ utilisationLabel(carrier) }}</span
-                    ><span class="k">of ceiling</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.queuedMessages.toLocaleString() }}</span
-                    ><span class="k">queued</span></span
-                  >
-                </span>
-              </td>
-              <!--
-              Delivery quality over the last 24 hours, from the DLR report. It
-              is a second request and may be refused on its own — reports.view
-              is not smsc.view — so these two cells say "not permitted" rather
-              than an em dash an operator would read as "no receipts".
-            -->
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono" :data-testid="`dashboard-p95-${carrier.id}`">{{
-                      deliveryDenied
-                        ? 'not permitted'
-                        : formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
-                    }}</span
-                    ><span class="k">P95 DLR</span></span
-                  >
-                  <span class="metric-line"
-                    ><span class="v mono" :data-testid="`dashboard-reject-${carrier.id}`">{{
-                      deliveryDenied ? 'not permitted' : rejectShare(carrier.id)
-                    }}</span
-                    ><span class="k">reject</span></span
-                  >
-                </span>
-              </td>
-              <td>
-                <span class="metric-stack">
-                  <span class="metric-line"
-                    ><span class="v mono">{{ carrier.openAlerts }}</span
-                    ><span class="k">open</span></span
-                  >
-                  <!--
-              The newest bind transition across the carrier's connections. "no
-              transitions recorded" is meaningful on history that is never
-              pruned: nothing has been observed to change, rather than older
-              entries having aged out.
-            -->
-                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
-                    carrier.lastEvent || 'no transitions recorded'
-                  }}</small>
-                </span>
-              </td>
-            </tr>
-            <tr v-if="carriersState === 'ok' && !carriers.length">
-              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
-                No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
-                network.
-              </td>
-            </tr>
-            <tr v-if="carriersState === 'checking'">
-              <td colspan="6" class="empty-cell">Loading carriers…</td>
-            </tr>
-            <tr v-if="carriersState === 'unavailable'">
-              <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
-                Carrier connectivity is unavailable — the register could not be read.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
-    <section class="split-grid wide-left" data-testid="dashboard-traffic-row">
-      <article class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Traffic</h2>
-            <p>Daily message and receipt volume, from the report snapshots</p>
-          </div>
-          <RouterLink class="text-button" to="/live-traffic">Open Live Traffic</RouterLink>
-        </header>
-        <MiniChart
-          v-if="hasTraffic"
-          type="line"
-          title="Daily message volume"
-          :series="trafficSeries"
-          :labels="trafficLabels"
-          :height="180"
-          grid
-          data-testid="dashboard-traffic-chart"
+    <section class="copilot" data-testid="dashboard-copilot">
+      <span class="copilot-label">Copilot</span>
+      <form class="copilot-form" @submit.prevent="askCopilot(copilotQuestion)">
+        <input
+          v-model="copilotQuestion"
+          placeholder="Ask about this gateway"
+          data-testid="copilot-input"
         />
-        <p v-else-if="volumeState === 'checking'" class="chart-empty">Loading volume snapshots…</p>
-        <p v-else-if="volumeState === 'unavailable'" class="chart-empty">
-          Volume report data is unavailable.
-        </p>
-        <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
-          No traffic has been recorded in the snapshots held so far.
-        </p>
-      </article>
-
-      <article class="panel" data-testid="dashboard-queue-pressure">
-        <header class="panel-header">
-          <div>
-            <h2>Queue pressure</h2>
-            <p>Carriers with messages waiting, deepest first</p>
-          </div>
-          <RouterLink class="text-button" to="/queues">Open Queues</RouterLink>
-        </header>
-        <div v-if="queuePressure.length" class="pressure-list">
-          <div v-for="row in queuePressure" :key="row.id" class="pressure-row">
-            <div class="pressure-head">
-              <span class="mono">{{ row.label }}</span>
-              <strong class="figures">{{ row.depth.toLocaleString() }}</strong>
-            </div>
-            <span class="breakdown-track"
-              ><span class="breakdown-fill" :style="{ width: `${row.share}%` }"></span
-            ></span>
-            <span class="pressure-note">
-              {{ row.rate === null ? 'drain rate unknown' : `draining at ${row.rate}/s` }}
-            </span>
-          </div>
-        </div>
-        <p v-else-if="carriersState === 'checking'" class="chart-empty">Loading carriers…</p>
-        <p v-else class="chart-empty" data-testid="dashboard-queue-pressure-empty">
-          Nothing is queued. Every carrier's spool is empty.
-        </p>
-      </article>
+        <button class="secondary-button is-compact" type="submit" data-testid="copilot-ask">
+          Ask
+        </button>
+      </form>
+      <div class="copilot-prompts">
+        <button
+          v-for="prompt in copilotPrompts"
+          :key="prompt"
+          type="button"
+          class="prompt-chip"
+          @click="askCopilot(prompt)"
+        >
+          {{ prompt }}
+        </button>
+      </div>
     </section>
-    <section class="dashboard-grid">
-      <article class="panel">
+
+    <!-- FIGURES ---------------------------------------------------------- -->
+    <section class="metrics-grid">
+      <MetricCard label="Queue depth" v-bind="queueMetric" />
+      <MetricCard label="Messages · latest report" v-bind="messagesMetric" />
+      <MetricCard label="Delivery receipts" v-bind="dlrMetric" />
+      <MetricCard label="Alerts recorded" v-bind="alertsMetric" />
+    </section>
+
+    <!-- CARRIERS | PLATFORM ---------------------------------------------- -->
+    <div class="ops-grid">
+      <!--
+        CARRIERS COME FIRST. This answers the question the dashboard exists
+        for — can we send, and through whom — and it used to be the last
+        panel on the page, four screens below the fold.
+      -->
+      <section class="panel" data-testid="carrier-connectivity">
         <header class="panel-header">
           <div>
-            <h2>System health</h2>
-            <p>Observed dependency state</p>
+            <h2>Carriers</h2>
+            <p>Worst first · click a row for binds and alerts</p>
           </div>
-          <!-- The services board is the fuller version of this list: every
-             component, its dependencies, and which one to fix first. -->
+          <RouterLink class="text-link" to="/carriers">All carriers</RouterLink>
+        </header>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Carrier</th>
+                <th scope="col">Health</th>
+                <th scope="col">Binds up</th>
+                <th scope="col">Throughput</th>
+                <th scope="col">Delivery</th>
+                <th scope="col">Alerts · 24h</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="carrier in carriersByHealth"
+                :key="carrier.id"
+                class="selectable"
+                :data-testid="`dashboard-carrier-${carrier.id}`"
+                tabindex="0"
+                @click="openCarrierPanel(carrier)"
+                @keydown.enter="openCarrierPanel(carrier)"
+              >
+                <td>
+                  <strong>{{ carrier.name }}</strong>
+                  <small class="row-id">{{
+                    [carrier.country_code, carrier.network_code].filter(Boolean).join(' · ') ||
+                    'no network code'
+                  }}</small>
+                </td>
+                <td>
+                  <span class="status-badge" :class="healthTone(carrier.health)">{{
+                    carrier.health
+                  }}</span>
+                </td>
+                <!--
+                  One block per bind: filled when up, hollow when down,
+                  outlined when never observed. "2 of 3" hides which of the
+                  three, and an unobserved bind is not a down one.
+                -->
+                <td>
+                  <span class="mono">{{ carrier.bindsHealthy }} / {{ carrier.bindsTotal }}</span>
+                  <span v-if="carrier.bindsTotal" class="bind-bars" aria-hidden="true">
+                    <span
+                      v-for="(segment, index) in bindSegments(carrier)"
+                      :key="index"
+                      :class="`seg-${segment}`"
+                    ></span>
+                  </span>
+                </td>
+                <!-- A carrier nobody is sampling says so ONCE, instead of
+                     filling its row with three separate `unknown`s. -->
+                <td>
+                  <span v-if="carrier.observedTps === null" class="no-telemetry">
+                    No telemetry
+                  </span>
+                  <template v-else>
+                    <span class="mono">{{ carrier.observedTps }}/s</span>
+                    <small class="row-id">{{ utilisationLabel(carrier) }} of ceiling</small>
+                  </template>
+                </td>
+                <td>
+                  <template v-if="deliveryDenied">
+                    <span class="no-telemetry">not permitted</span>
+                  </template>
+                  <template v-else>
+                    <span class="mono" :data-testid="`dashboard-p95-${carrier.id}`">{{
+                      formatLatency(qualityFor(carrier.id)?.quality.latency?.p95)
+                    }}</span>
+                    <small class="row-id" :data-testid="`dashboard-reject-${carrier.id}`"
+                      >{{ rejectShare(carrier.id) }} rejected</small
+                    >
+                  </template>
+                </td>
+                <td>
+                  <span class="mono">{{ carrier.openAlerts }}</span>
+                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
+                    carrier.lastEvent || 'no transitions'
+                  }}</small>
+                </td>
+              </tr>
+              <tr v-if="carriersState === 'ok' && !carriers.length">
+                <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
+                  No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
+                  network.
+                </td>
+              </tr>
+              <tr v-if="carriersState === 'checking'">
+                <td colspan="6" class="empty-cell">Loading carriers…</td>
+              </tr>
+              <tr v-if="carriersState === 'unavailable'">
+                <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
+                  Carrier connectivity is unavailable — the register could not be read.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!--
+        PLATFORM — services and queue pressure in ONE panel. They were two,
+        and both answer the same question: is anything underneath the
+        carriers unwell. Neither is long enough to earn a panel of its own.
+      -->
+      <section class="panel" data-testid="dashboard-platform">
+        <header class="panel-header">
+          <div><h2>Platform</h2></div>
           <RouterLink class="text-link" to="/services" data-testid="open-services"
             >All services</RouterLink
           >
         </header>
+
         <ul class="health-list" data-testid="health-list">
           <li v-for="row in healthRows" :key="row.name">
             <span class="health-icon" :class="statusTone(row.status)" aria-hidden="true"
@@ -954,25 +1025,113 @@ function statusTone(status: string) {
             <span
               ><strong>{{ row.name }}</strong
               ><small>{{ row.detail }}</small></span
-            ><span class="status-badge" :class="statusTone(row.status)">{{ row.status }}</span>
+            >
+            <span class="status-badge" :class="statusTone(row.status)">{{ row.status }}</span>
           </li>
         </ul>
-      </article>
-      <article class="panel wide">
+
+        <div class="queue-block" data-testid="dashboard-queue-pressure">
+          <div class="queue-head">
+            <span>Queue pressure</span>
+            <RouterLink class="text-link" to="/queues">Queues</RouterLink>
+          </div>
+          <ul v-if="queuePressure.length" class="queue-list">
+            <li v-for="row in queuePressure" :key="row.id">
+              <span class="queue-name">{{ row.label }}</span>
+              <span class="queue-track" aria-hidden="true">
+                <span :style="{ width: `${row.share}%` }"></span>
+              </span>
+              <span class="queue-depth mono">{{ row.depth.toLocaleString() }}</span>
+            </li>
+          </ul>
+          <!-- An empty spool is a GOOD state and is said as one, rather than
+               drawn as a list of zero-height bars. -->
+          <p v-else class="queue-empty">Every carrier spool is empty.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- TRAFFIC | INCIDENTS ---------------------------------------------- -->
+    <div class="ops-grid wide-left">
+      <section class="panel" data-testid="dashboard-traffic-row">
+        <header class="panel-header">
+          <div>
+            <h2>Traffic</h2>
+            <p>Daily messages and delivery receipts, from report snapshots</p>
+          </div>
+          <div class="legend">
+            <span><i class="key-messages"></i>Messages</span>
+            <span><i class="key-dlrs"></i>DLRs</span>
+            <RouterLink class="text-link" to="/live-traffic">Live traffic</RouterLink>
+          </div>
+        </header>
+
+        <!-- Totals summed over exactly the snapshots the chart plots, so the
+             figures and the bars cannot disagree. -->
+        <div class="traffic-totals">
+          <div v-for="total in trafficTotals" :key="total.k">
+            <b>{{ total.v }}</b>
+            <span>{{ total.k }}</span>
+          </div>
+        </div>
+
+        <!--
+          OLDEST ON THE LEFT. The old chart ran newest-first, so a rising
+          week sloped downwards — every reader of a time series expects time
+          to run left to right, and reversing it inverts the trend.
+        -->
+        <div v-if="hasTraffic" class="chart" data-testid="dashboard-traffic-chart">
+          <div class="chart-axis" aria-hidden="true">
+            <span>{{ trafficMax.toLocaleString() }}</span>
+            <span>{{ Math.round(trafficMax / 2).toLocaleString() }}</span>
+            <span>0</span>
+          </div>
+          <div class="chart-body">
+            <div class="chart-bars">
+              <div
+                v-for="day in trafficDays"
+                :key="day.label"
+                class="day"
+                :title="`${day.label} · ${day.messages.toLocaleString()} messages · ${day.dlrs.toLocaleString()} receipts`"
+              >
+                <span
+                  class="bar bar-messages"
+                  :style="{ height: `${(day.messages / trafficMax) * 100}%` }"
+                ></span>
+                <span
+                  class="bar bar-dlrs"
+                  :style="{ height: `${(day.dlrs / trafficMax) * 100}%` }"
+                ></span>
+              </div>
+            </div>
+            <div class="chart-labels">
+              <span v-for="day in trafficDays" :key="day.label">{{ day.label }}</span>
+            </div>
+          </div>
+        </div>
+        <p v-else class="chart-empty" data-testid="dashboard-traffic-empty">
+          No report snapshot has been written yet, so there is no daily series to plot.
+        </p>
+      </section>
+
+      <section class="panel" data-testid="dashboard-incidents">
         <header class="panel-header">
           <div>
             <h2>Incidents</h2>
             <!--
-              The subtitle told the truth about the ORDER and nothing about
-              the state. On a week where everything has been resolved the
-              panel read "Active incidents · Longest running first" above
-              five closed rows, which says there are five active incidents.
+              The old subtitle described the SORT ORDER and said nothing
+              about the state, so a week where everything had been resolved
+              still read "Active incidents · Longest running first" above
+              five closed rows.
             -->
-            <p v-if="openIncidents">{{ openIncidents }} open · longest running first</p>
-            <p v-else>No open incidents. Recently resolved:</p>
+            <p>
+              {{ openIncidents }} open ·
+              {{ Math.max(0, recentAlerts.length - openIncidents) }} resolved
+            </p>
           </div>
-          <RouterLink class="text-link" to="/alerts">View all alerts</RouterLink>
+          <RouterLink class="text-link" to="/alerts">All alerts</RouterLink>
         </header>
+
         <p
           v-if="alertsState === 'unavailable'"
           class="chart-empty"
@@ -980,81 +1139,583 @@ function statusTone(status: string) {
         >
           Alert data is unavailable.
         </p>
-        <div v-else class="table-wrap">
-          <table>
-            <thead>
-              <!--
-                This panel shares a row with System health, so it is the
-                narrow half of the grid, and five nowrap columns — one of
-                them a full timestamp — ran 681px past its edge. The condition
-                is prose and wraps; when it opened and how long it has been
-                open are one answer to "how bad is this".
-              -->
-              <tr>
-                <th>Severity</th>
-                <th>Condition</th>
-                <th>Status</th>
-                <th>Opened</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="alert in recentAlerts" :key="text(alert.id)">
-                <td>
-                  <span
-                    class="status-badge"
-                    :class="
-                      alert.severity === 'critical'
-                        ? 'bad'
-                        : alert.severity === 'warning'
-                          ? 'warn'
-                          : 'good'
-                    "
-                    >{{ text(alert.severity) }}</span
-                  >
-                </td>
-                <!-- Clamped on an inner SPAN, never on the cell. `-webkit-line-clamp`
-                     needs `display: -webkit-box`, and putting that on a `td`
-                     destroys its table-cell semantics — the column stops
-                     aligning with its header. The full text stays in `title`,
-                     and the row opens the alert. -->
-                <td class="cell-wrap">
-                  <span class="clamp-2" :title="text(alert.summary ?? alert.rule_name)">{{
-                    text(alert.summary ?? alert.rule_name)
-                  }}</span>
-                </td>
-                <td>{{ text(alert.status) }}</td>
-                <!--
-                "Longest running first" is this panel's own subtitle, and until
-                now nothing on it showed how long anything had been running.
-                Measured to now while open and to resolution once closed, so a
-                settled incident stops ageing on the dashboard.
-              -->
-                <td>
-                  <span class="metric-stack">
-                    <span class="v mono" :data-testid="`incident-duration-${text(alert.id)}`">{{
-                      alertDuration(alert)
-                    }}</span>
-                    <small class="row-id">{{ openedAtLabel(alert) }}</small>
-                  </span>
-                </td>
-              </tr>
-              <tr v-if="alertsState === 'ok' && !recentAlerts.length">
-                <td colspan="4" class="empty-cell" data-testid="alerts-empty">
-                  No alert instances recorded.
-                </td>
-              </tr>
-              <tr v-if="alertsState === 'checking'">
-                <td colspan="4" class="empty-cell">Loading alerts…</td>
-              </tr>
-            </tbody>
-          </table>
+        <template v-else>
+          <p v-if="!openIncidents && recentAlerts.length" class="incident-none">
+            <span class="status-dot good" aria-hidden="true"></span>No open incidents. Recently
+            resolved:
+          </p>
+          <ul class="incident-list">
+            <li
+              v-for="alert in recentAlerts"
+              :key="text(alert.id)"
+              :data-testid="`incident-${text(alert.id)}`"
+            >
+              <span class="incident-dot" :class="severityTone(alert)" aria-hidden="true"></span>
+              <span class="incident-body">
+                <strong class="clamp-1" :title="text(alert.summary ?? alert.rule_name)">{{
+                  text(alert.summary ?? alert.rule_name)
+                }}</strong>
+                <small>{{ text(alert.severity) }} · {{ text(alert.status) }}</small>
+              </span>
+              <span class="incident-dur mono" :data-testid="`incident-duration-${text(alert.id)}`">
+                {{ alertDuration(alert) }}
+                <small>{{ openedAtLabel(alert) }}</small>
+              </span>
+            </li>
+            <li v-if="alertsState === 'ok' && !recentAlerts.length" class="incident-empty">
+              No alert instance has been recorded.
+            </li>
+            <li v-if="alertsState === 'checking'" class="incident-empty">Loading alerts…</li>
+          </ul>
+        </template>
+      </section>
+    </div>
+
+    <!-- CARRIER PANEL ----------------------------------------------------- -->
+    <DetailDrawer
+      :open="Boolean(panelCarrier)"
+      :eyebrow="
+        panelCarrier
+          ? [panelCarrier.country_code, panelCarrier.network_code].filter(Boolean).join(' · ')
+          : ''
+      "
+      :title="panelCarrier?.name ?? 'Carrier'"
+      @close="panelCarrier = null"
+    >
+      <template v-if="panelCarrier">
+        <div class="panel-actions">
+          <RouterLink
+            class="primary-button"
+            :to="`/carriers/${panelCarrier.id}`"
+            data-testid="panel-open-carrier"
+          >
+            Open carrier
+          </RouterLink>
+          <RouterLink class="secondary-button" to="/alerts">View alerts</RouterLink>
         </div>
-      </article>
-    </section>
+
+        <p class="panel-summary">{{ panelSummary }}</p>
+
+        <section class="panel-block">
+          <h3>SMSC binds</h3>
+          <ul v-if="panelSmscs.length" class="bind-list-simple">
+            <li v-for="smsc in panelSmscs" :key="String(smsc.id)">
+              <span class="status-dot" :class="statusTone(String(smsc.bind_state ?? ''))"></span>
+              <span class="mono">{{ text(smsc.engine_id ?? smsc.engineId) }}</span>
+              <span>{{ text(smsc.bind_state ?? smsc.bindState, 'never observed') }}</span>
+            </li>
+          </ul>
+          <p v-else-if="panelState === 'loading'" class="source-note">Loading binds…</p>
+          <p v-else-if="panelState === 'error'" class="source-note">
+            The connections for this carrier could not be read.
+          </p>
+          <p v-else class="source-note">No SMSC is configured for this carrier.</p>
+        </section>
+
+        <dl class="panel-fields">
+          <dt>Health</dt>
+          <dd>{{ panelCarrier.health }}</dd>
+          <dt>Binds up</dt>
+          <dd class="mono">{{ panelCarrier.bindsHealthy }} / {{ panelCarrier.bindsTotal }}</dd>
+          <dt>Throughput</dt>
+          <dd class="mono">
+            {{
+              panelCarrier.observedTps === null ? 'no telemetry' : `${panelCarrier.observedTps}/s`
+            }}
+          </dd>
+          <dt>Of ceiling</dt>
+          <dd class="mono">{{ utilisationLabel(panelCarrier) }}</dd>
+          <dt>Queued</dt>
+          <dd class="mono">{{ panelCarrier.queuedMessages.toLocaleString() }}</dd>
+          <dt>Failed</dt>
+          <dd class="mono">{{ panelCarrier.failedMessages.toLocaleString() }}</dd>
+          <dt>Open alerts</dt>
+          <dd class="mono">{{ panelCarrier.openAlerts }}</dd>
+          <dt>Last event</dt>
+          <dd>{{ panelCarrier.lastEvent || 'no transitions recorded' }}</dd>
+        </dl>
+      </template>
+    </DetailDrawer>
   </div>
 </template>
 
 <style scoped>
+/* CONTROLS — three settings of the view, on one small bar on the right. */
+.ops-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  /* ONE LINE until there is genuinely no room.
+     The range select is the widest thing here ("Last 15 minutes"), and with
+     `wrap` it pushed Refresh onto a second row at full width — which reads,
+     correctly, as a broken control group. It shrinks instead, and the whole
+     bar only stacks on a narrow screen. */
+  flex-wrap: nowrap;
+  margin-bottom: 12px;
+}
+.ops-controls > .filter-select select {
+  min-width: 0;
+}
+/* ONE HEIGHT ACROSS THE BAR.
+   The refresh button rendered 42px against the live toggle's 26px, so their
+   top edges differed by 8px — visibly out of line, and read by the layout
+   audit as a cluster broken over two rows. The design pins these at 32px;
+   matching it is cheaper than chasing whichever padding rule won. */
+.ops-controls > .secondary-button,
+.ops-controls > .filter-select select,
+.live-group {
+  height: 32px;
+}
+.ops-controls > .secondary-button {
+  /* `min-height: 42px` from the button base wins against `height` — a
+     min-height is a floor, not a preference — so it has to be lowered
+     explicitly or the bar keeps two different button heights. */
+  min-height: 32px;
+  padding-block: 0;
+}
+.live-group {
+  padding-block: 0;
+}
+@media (max-width: 760px) {
+  .ops-controls {
+    flex-wrap: wrap;
+  }
+}
+.live-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface);
+}
+.live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.live-toggle .live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.live-toggle.is-live {
+  color: var(--text-strong);
+}
+.live-toggle.is-live .live-dot {
+  background: var(--ok, #1a7f37);
+}
+
+/* COPILOT — a question box where the data is, with three starters. */
+.copilot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface);
+}
+.copilot-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.copilot-form {
+  display: flex;
+  gap: 8px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.copilot-form input {
+  flex: 1;
+  min-width: 0;
+}
+.copilot-prompts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.prompt-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.prompt-chip:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* Two columns; carriers get the wider side. */
+.ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+.ops-grid.wide-left {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+}
+@media (max-width: 1100px) {
+  .ops-grid,
+  .ops-grid.wide-left {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* One block per bind: filled up, hollow down, outlined never observed.
+   "2 of 3" hides which of the three, and an unobserved bind is not a
+   down one. */
+.bind-bars {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+}
+.bind-bars > span {
+  width: 14px;
+  height: 5px;
+  border-radius: 2px;
+}
+.bind-bars .seg-up {
+  background: var(--ok, #1a7f37);
+}
+.bind-bars .seg-down {
+  background: var(--bad, #b42318);
+}
+.bind-bars .seg-unobserved {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.no-telemetry {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Queue pressure, sharing the Platform panel. */
+.queue-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.queue-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.queue-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+.queue-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.queue-track > span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+}
+.queue-depth {
+  font-variant-numeric: tabular-nums;
+}
+/* An empty spool is a GOOD state and is said as one, rather than drawn
+   as a list of zero-height bars. */
+.queue-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* TRAFFIC — totals, then paired bars running oldest to newest. */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.key-messages {
+  background: var(--brand);
+}
+.key-dlrs {
+  background: var(--accent, #78bde4);
+}
+.traffic-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  margin: 12px 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--border);
+  overflow: hidden;
+}
+.traffic-totals div {
+  background: var(--surface);
+  padding: 10px 14px;
+}
+.traffic-totals b {
+  display: block;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.traffic-totals span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chart {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+}
+.chart-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 160px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 160px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--border);
+}
+.day {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+}
+.bar {
+  flex: 1;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+}
+.bar-messages {
+  background: var(--brand);
+}
+.bar-dlrs {
+  background: var(--accent, #78bde4);
+}
+.chart-labels {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.chart-labels span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* INCIDENTS */
+.incident-none {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.incident-none .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok, #1a7f37);
+}
+.incident-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.incident-list li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.incident-list li:last-child {
+  border-bottom: none;
+}
+.incident-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.incident-dot.bad {
+  background: var(--bad, #b42318);
+}
+.incident-dot.warn {
+  background: var(--warn, #9a6700);
+}
+.incident-dot.good {
+  background: var(--ok, #1a7f37);
+}
+.incident-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.incident-body strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.incident-body small,
+.incident-dur small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.incident-dur {
+  text-align: right;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.incident-empty {
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* CARRIER PANEL */
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-summary {
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+.panel-block {
+  margin-bottom: 20px;
+}
+.panel-block h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.bind-list-simple {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12.5px;
+}
+.bind-list-simple li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.bind-list-simple .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.bind-list-simple .status-dot.good {
+  background: var(--ok, #1a7f37);
+}
+.bind-list-simple .status-dot.warn {
+  background: var(--warn, #9a6700);
+}
+.bind-list-simple .status-dot.bad {
+  background: var(--bad, #b42318);
+}
+.panel-fields {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  row-gap: 10px;
+  column-gap: 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.panel-fields dt {
+  color: var(--muted);
+}
+.panel-fields dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+
 /* THE STATUS LINE ---------------------------------------------------------
    A severity chip, a sentence naming the carriers, and a way into the worst
    of them. Colour repeats the word; it never carries the meaning alone. */

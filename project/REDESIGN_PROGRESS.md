@@ -34,27 +34,21 @@ done" is otherwise only answerable by clicking through production.
 | Item | Notes |
 |---|---|
 | Route editor | Four-step side panel replacing the centre dialog. Save names what is missing, priority warns when taken, no-fallback warns, days are toggle buttons, a live sentence says what the route will do. Fifth step (change reason) on edit |
-| Dashboard, first pass | Status line naming the degraded and the silent carriers with a way into the worst one, replacing the orange telemetry banner; carriers lifted from last to second; "No telemetry" once per silent carrier instead of three `unknown`s; "Active incidents" → "Incidents" with "No open incidents" when none are open |
+| Operations dashboard | **Rebuilt whole**, not patched. Controls bar (range, live countdown, refresh); status line naming carriers; Copilot question box with three starters; four figures; Carriers first, 6 columns with per-bind bars and a side panel; Platform merging services and queue pressure; Traffic with totals and paired bars running oldest→newest; Incidents with open/resolved counts |
 
 ## Not started
 
 In the order they will be done.
 
-1. **Operations dashboard, second pass** — the first pass is above. Still to
-   do from `Kamex Dashboard.dc.html`: a countdown to the next refresh in the
-   refresh bar; Copilot as a question box with three suggested questions
-   rather than a link; bind bars in the carrier rows; services and queues
-   sharing one panel; the traffic chart running oldest → newest as paired
-   bars with totals above and a hover popup (it currently runs newest first).
-2. **`/sessions-smpp`** — the bind timeline pane is far too long. Paginate it
-   or cap it to a scroll region with a count, as the drawer histories were.
-   Also still 588px of horizontal overflow, 13 columns.
-3. **`/alert-lifecycle`** — columns were grouped but the screen has not had
+1. **`/sessions-smpp`** — the bind timeline pane is far too long. Cap it to a
+   scroll region with a count, as the drawer histories were. Also 588px of
+   horizontal overflow across 13 columns.
+2. **`/alert-lifecycle`** — columns were grouped but the screen has not had
    the house style: no summary strip, no tabs with counts, and its drawer is
    still the generic one.
-4. **Remaining dialogs** — every `ModalDialog` caller that is a create/edit
+3. **Remaining dialogs** — every `ModalDialog` caller that is a create/edit
    form wants the grouped-fieldset treatment the Carriers dialog got.
-5. **Overflow backlog** — 16 findings open on production. Worst first:
+4. **Overflow backlog** — 16 findings open on production. Worst first:
    `/routing` is now rebuilt so re-measure; then `/roles` +484,
    `/logs-audit` +475, `/sessions-smpp` +440, `/log-explorer` +377,
    `/content-rules` +365, `/live-traffic` +309, `/dlr-performance` +207,
@@ -63,8 +57,6 @@ In the order they will be done.
 
 ## Open questions for Peter
 
-- The dashboard design invents a third MTNUG bind called **"nakasero"**. What
-  is the real name?
 - Production has **1 of 3 routes with a fallback**. CPAAS-SMSONE and KAMEX
   have none, so if Kololo or Kamdixy drops, their messages queue rather than
   re-route. Configuration decision, not a defect — but now visible.
