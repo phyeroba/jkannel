@@ -9,11 +9,27 @@ done" is otherwise only answerable by clicking through production.
 (production is on `3f4258b`). Next task is the rest of the dialogs — see
 "Resume here".
 
-**New tool:** `node scripts/screen-sweep.mjs` walks every route, captures it,
-then clicks the control that OPENS something and captures that too. Run it
-with `BASE=https://gw1.speedamobile.com U=operator P=... OUT=<dir>`. It is how
-the dialog backlog became visible, and it re-measures overflow while it goes.
-The artifact at `claude.ai/artifact/FQ9MVFVexZesG8WzcGgheJ` now carries the
+**The sweep, v2 — read this before auditing anything.**
+`node scripts/screen-sweep.mjs` now walks in **two phases** and clicks **every**
+opener, not one:
+
+```
+BASE=https://gw1.speedamobile.com U=operator P=... OUT=<dir> node scripts/screen-sweep.mjs
+ONLY=/alerts,/carriers  …same…      # a subset
+SKIP_DIALOGS=1 / PHASE1=1           # faster passes
+```
+
+Phase one is the `navigation.ts` routes. Phase two is **every screen reached
+only by a link** — the carrier, SMSC and message detail pages, none of which
+is in the navigation and none of which any audit had visited before
+2026-10-06. It also clicks the first register row, for the drawer, and reports
+**which table** overflows by panel name and column count, not just a pixel
+count — two fixes went at the wrong table before it did that.
+
+It also reports `dialog +N`: a dialog taller than the window. That is how the
+SMSC editor's Save button was found 1,156px below the fold.
+
+The artifact at `claude.ai/artifact/FQ9MVFVexZesG8WzcGgheJ` carries the
 before/after screenshots.
 
 - **Authority**: `docs/handbook/CONSOLE_DESIGN_SPEC.md` (supersedes
