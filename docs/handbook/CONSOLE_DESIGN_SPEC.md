@@ -209,3 +209,73 @@ it. On a narrow screen the reading pane goes **below** the list, not beside it.
 - Every icon name the navigation uses must exist in `AppIcon.vue`. A missing
   one silently falls back to a cog, which is how duplicates appear that nobody
   can see.
+
+---
+
+## 5. Tables: the rule that caused most of the overflow
+
+`tbody td` is `white-space: nowrap`, deliberately — a long value must not
+build a tower of wrapped text and make every row four lines tall. The
+consequence is that **a cell must opt in to being readable**:
+
+| Content | Class | Why |
+|---|---|---|
+| A sentence | `.cell-wrap` + an inner `.clamp-2` | Truncating prose loses it; wrapping and clamping does not |
+| An opaque token — UUID, checksum, engine id, user agent, request path, regex | `.cell-clip` + the full value in `title` | It is matched or copied, never read end to end |
+| A timestamp | `shortWhen()` or `agoWhen()`, exact instant in `title` | Milliseconds and the UTC offset never distinguish one row from its neighbour |
+| A row of chips | `.cell-wrap` **and a `max-width`** | `.cell-wrap` lets text wrap; a flex line with no width keeps going |
+| An empty state | `.empty-cell` (wraps since 2026-10-06) | Its two sentences used to overflow a register *precisely when it was empty* |
+
+Six registers never opted in, and one sentence per row set the width of the
+whole table. That was the single largest cause of horizontal overflow in the
+console.
+
+### Grouping
+
+Six to eight columns. Fields that answer **one question** share a cell, value
+first and label second, stacked. The questions, not the schema:
+
+- three timestamps — since, last observed, last transition — are *how long has
+  it been like this*
+- rate, ceiling and utilisation are *how full is the pipe*, with the ratio
+  drawn as a bar rather than left to be computed from two numbers
+- queued, oldest and failed are *what is stuck*
+- a count and the names behind it are one answer, not two columns
+
+---
+
+## 6. A commit must stay reachable
+
+A long form in a sheet puts its Save below the last field. On the SMSC editor
+— thirty-eight fields — that measured **1,156px past the bottom of the
+window**: an operator who changed the first field had to scroll the whole form
+to commit it, and nothing on screen said the control existed.
+
+Any form taller than the viewport gets `.detail-actions.is-sticky`, which
+pins the action row to the bottom of the scroll container. The controls stay
+where they belong, at the end of the form; they just never leave the view.
+
+**The audit for this asks whether the button is on screen, not how tall the
+dialog is.** Measuring height scored the SMSC editor *worse* after the fix,
+because a sticky footer adds height. `scripts/screen-sweep.mjs` walks up from
+the primary button looking for a sticky or fixed ancestor and does not report
+a reachable control, however tall the form above it.
+
+---
+
+## 7. Audit every screen, not every nav entry
+
+`navigation.ts` lists fifty routes. The console has more: the carrier, SMSC
+and message **detail pages are reached only by clicking a row**, and no audit
+had ever visited them. When one finally did, `/smsc/kololo` turned out to be
+7,043px tall with **917px of overflow** — the worst in the console, on a page
+nobody had measured.
+
+`scripts/screen-sweep.mjs` therefore walks in two phases: the nav routes, then
+every in-app link those pages contained that the nav does not list, reduced to
+one example per route shape. It clicks **every** non-destructive opener on each
+page, not the first, and clicks the first register row for the drawer.
+
+It names the overflowing table by panel heading and column count. "`/smsc/kololo`
+overflow 917" sent one fix at the wrong table on that page; "Sessions on this
+SMSC +917/6col" did not.
