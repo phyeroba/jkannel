@@ -1894,3 +1894,14 @@ tbody td.cell-clip .row-id {
 .detail-actions.is-sticky .source-note {
   margin: 0 0 0 auto;
 }
+
+/* A CELL OF CHIPS NEEDS A WIDTH TO WRAP INSIDE ----------------------------
+   `.cell-wrap` lets the text wrap, but a row of chips is a flex line, and a
+   flex line with no width keeps going. The roles register still ran 215px
+   past its panel with the chips "wrapping". */
+tbody td.cell-wrap > .chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 320px;
+}

@@ -1003,11 +1003,18 @@ function statusTone(status: string) {
                     >
                   </template>
                 </td>
-                <td>
+                <!-- `lastEvent` is "kololo bound 2026-10-06 07:12:41" — a
+                     sentence with a full timestamp in it, in a cell that is
+                     nowrap. Sixty-six pixels past the panel on the one screen
+                     an operator looks at all day. -->
+                <td class="cell-clip">
                   <span class="mono">{{ carrier.openAlerts }}</span>
-                  <small class="row-id" :data-testid="`dashboard-last-event-${carrier.id}`">{{
-                    carrier.lastEvent || 'no transitions'
-                  }}</small>
+                  <small
+                    class="row-id clamp-1"
+                    :data-testid="`dashboard-last-event-${carrier.id}`"
+                    :title="carrier.lastEvent || ''"
+                    >{{ carrier.lastEvent || 'no transitions' }}</small
+                  >
                 </td>
               </tr>
               <tr v-if="carriersState === 'ok' && !carriers.length">

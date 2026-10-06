@@ -2428,18 +2428,37 @@ async function exportGrid(format: 'csv' | 'pdf') {
   }
 }
 
+/**
+ * The send queue's columns.
+ *
+ * `clip` is for a value that is matched or copied — an id, a number — and
+ * `wrap` is for the message body, which is the one cell here holding prose.
+ * Without either, `tbody td` is nowrap and a single long message set the
+ * width of the whole table: 132px past its panel, which put the timestamp
+ * off the right-hand edge.
+ */
 const queueColumns = [
-  { label: 'ID', value: (raw: RecordValue) => text(raw.id ?? raw.message_id, '') },
-  { label: 'Sender', value: (raw: RecordValue) => text(raw.sender ?? raw.from, '') },
+  { label: 'ID', value: (raw: RecordValue) => text(raw.id ?? raw.message_id, ''), clip: true },
+  { label: 'Sender', value: (raw: RecordValue) => text(raw.sender ?? raw.from, ''), clip: true },
   {
     label: 'Receiver',
     value: (raw: RecordValue) => text(raw.receiver ?? raw.recipient ?? raw.to, ''),
+    clip: true,
   },
-  { label: 'SMSC', value: (raw: RecordValue) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, '') },
-  { label: 'Text', value: (raw: RecordValue) => text(raw.text ?? raw.body ?? raw.msgdata, '') },
+  {
+    label: 'SMSC',
+    value: (raw: RecordValue) => text(raw.smsc ?? raw.smsc_id ?? raw.smscId, ''),
+    clip: true,
+  },
+  {
+    label: 'Text',
+    value: (raw: RecordValue) => text(raw.text ?? raw.body ?? raw.msgdata, ''),
+    wrap: true,
+  },
   {
     label: 'Timestamp',
-    value: (raw: RecordValue) => text(raw.timestamp ?? raw.created_at ?? raw.time, ''),
+    value: (raw: RecordValue) => shortWhen(raw.timestamp ?? raw.created_at ?? raw.time),
+    title: (raw: RecordValue) => text(raw.timestamp ?? raw.created_at ?? raw.time, ''),
   },
 ];
 
@@ -7889,7 +7908,14 @@ onUnmounted(() => {
               :key="String(item.id ?? index)"
               :data-testid="`queue-row-${index}`"
             >
-              <td v-for="column in queueColumns" :key="column.label">{{ column.value(item) }}</td>
+              <td
+                v-for="column in queueColumns"
+                :key="column.label"
+                :class="{ 'cell-clip': column.clip, 'cell-wrap': column.wrap }"
+                :title="column.title ? column.title(item) : column.clip ? column.value(item) : undefined"
+              >
+                <span :class="{ 'clamp-2': column.wrap }">{{ column.value(item) }}</span>
+              </td>
             </tr>
             <tr v-if="!loading && !cursorItems.length">
               <!-- An empty send queue is the healthy steady state, not a fault. -->

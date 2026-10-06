@@ -681,8 +681,17 @@ watch(engineId, reload);
                   it keeps one string per connection and no history of them, so
                   "top" would be a claim about a distribution we cannot see.
                 -->
-                <td class="mono cell-tight" data-testid="smsc-session-error">
-                  {{ smsc.lastError || 'none recorded' }}
+                <!--
+                  Kololo's last error is a sentence from the carrier, and this
+                  cell is nowrap by default: 917px past the panel, the widest
+                  overflow in the console, on a page nothing in the navigation
+                  links to. It wraps to two lines now, with the whole string
+                  on hover.
+                -->
+                <td class="mono cell-tight cell-wrap" data-testid="smsc-session-error">
+                  <span class="clamp-2" :title="smsc.lastError || ''">{{
+                    smsc.lastError || 'none recorded'
+                  }}</span>
                 </td>
                 <td>
                   <span class="status-badge" :class="bindTone(smsc.bindState)">{{

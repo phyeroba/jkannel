@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
+import { shortWhen } from '../utils/when';
 import DetailDrawer from '../components/DetailDrawer.vue';
 import { useLiveResource } from '../composables/useLiveResource';
 
@@ -795,7 +796,17 @@ onMounted(() => {
                   makes the column impossible to scan: the eye follows the left
                   edge, and the left edge alternates between a date and a time.
                 -->
-                <td class="mono log-time">{{ text(entry.timestamp) }}</td>
+                <!--
+                  Shortened, with the exact instant in `title`. The full
+                  `2026-09-03T08:49:24.452Z` is 24 monospace characters in a
+                  nowrap column, and the milliseconds and the Z never
+                  distinguish one line in the buffer from its neighbour —
+                  while the column they bought held the register 231px past
+                  its panel.
+                -->
+                <td class="mono log-time" :title="text(entry.timestamp)">
+                  {{ shortWhen(entry.timestamp) || text(entry.timestamp) }}
+                </td>
                 <td>
                   <span class="status-badge" :class="levelTone(entry.level)">
                     {{ text(entry.level) }}
