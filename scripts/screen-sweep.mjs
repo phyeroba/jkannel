@@ -100,9 +100,21 @@ async function capture(name, note, extra = {}) {
   await page.screenshot({ path: join(OUT, file), fullPage: true });
   const measured = await page.evaluate(() => ({
     height: document.documentElement.scrollHeight,
+    // Named, not just counted. "/smsc/kololo overflow 917" sent one fix at
+    // the wrong table on that page; "Operation history +917" does not.
     overflow: [...document.querySelectorAll('.table-wrap')]
-      .map((wrap) => wrap.scrollWidth - wrap.clientWidth)
-      .filter((value) => value > 4),
+      .map((wrap) => ({
+        px: wrap.scrollWidth - wrap.clientWidth,
+        panel: (
+          wrap.closest('section,article')?.querySelector('h2,h3')?.textContent ?? 'unnamed'
+        )
+          .trim()
+          .replace(/\s+/g, ' ')
+          .slice(0, 38),
+        cols: wrap.querySelectorAll('thead th').length,
+      }))
+      .filter((row) => row.px > 4)
+      .map((row) => `${row.panel} +${row.px}/${row.cols}col`),
     // A dialog taller than the window is the drawer-buries-its-controls
     // defect, which no existing audit looks for.
     dialogOverflow: [...document.querySelectorAll('[role="dialog"], .drawer-body')]

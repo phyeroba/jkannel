@@ -384,6 +384,58 @@ const draftCaseSensitive = ref(false);
 const draftContinue = ref(false);
 const draftCustomerId = ref('');
 
+/**
+ * What the form will not accept, listed rather than expressed as a disabled
+ * button. Save was enabled whatever was in the fields, so a missing keyword
+ * was discovered by the API refusing it — a round trip, and an error written
+ * for a caller rather than for the person who typed it.
+ */
+const moFormProblems = computed(() => {
+  const problems: string[] = [];
+  if (!draftName.value.trim()) problems.push('A name is required.');
+  if (draftDestinationType.value !== 'any' && !draftDestination.value.trim())
+    problems.push(`A destination value is required for a "${draftDestinationType.value}" match.`);
+  if (draftKeywordType.value !== 'any' && !draftKeyword.value.trim())
+    problems.push(`A keyword is required for a "${draftKeywordType.value}" match.`);
+  return problems;
+});
+
+/**
+ * The rule as one sentence.
+ *
+ * Eleven controls describe a rule; none of them says what the rule DOES. This
+ * assembles the same decision in the order it is evaluated, so a mistake —
+ * matching any sender when you meant one prefix — is visible before it is
+ * saved rather than after an inbound message goes somewhere unexpected.
+ */
+const draftSentence = computed(() => {
+  const criteria: string[] = [];
+  if (draftSmscId.value) {
+    const bind = smscOptions.value.find((option) => option.value === draftSmscId.value);
+    criteria.push(`arrives on ${bind?.label ?? draftSmscId.value}`);
+  }
+  if (draftSenderPrefix.value.trim())
+    criteria.push(`comes from a sender starting ${draftSenderPrefix.value.trim()}`);
+  if (draftDestinationType.value !== 'any')
+    criteria.push(
+      `is addressed to a shortcode ${draftDestinationType.value} “${draftDestination.value.trim() || '…'}”`,
+    );
+  if (draftKeywordType.value !== 'any')
+    criteria.push(
+      `has ${draftKeywordType.value.replace('_', ' ')} “${draftKeyword.value.trim() || '…'}”${
+        draftCaseSensitive.value ? ' (case sensitive)' : ''
+      }`,
+    );
+  const when = criteria.length ? `that ${criteria.join(', and ')}` : '— every inbound message';
+  const after = draftContinue.value
+    ? 'later rules are still consulted'
+    : 'no later rule is consulted';
+  const scope = draftCustomerId.value.trim() ? 'for one customer' : 'for every customer';
+  if (!draftEnabled.value)
+    return `Disabled. If enabled, it would match any message ${when}, ${scope}.`;
+  return `Matches any message ${when}, ${scope}, at priority ${draftPriority.value}. After it matches, ${after}.`;
+});
+
 function openRuleForm(rule?: RecordValue) {
   showRuleForm.value = true;
   ruleFormError.value = '';
@@ -1464,87 +1516,185 @@ onMounted(() => {
       wide
       @close="closeRuleForm"
     >
-      <label class="filter-select filter-search">
-        <span>Name (unique, up to 200 characters)</span>
-        <input v-model="draftName" data-testid="mo-form-name" type="text" />
-      </label>
-      <label class="filter-select filter-search">
-        <span>Description</span>
-        <input v-model="draftDescription" data-testid="mo-form-description" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Priority (lower is evaluated first)</span>
-        <input
-          v-model.number="draftPriority"
-          data-testid="mo-form-priority"
-          type="number"
-          min="0"
-          max="1000000"
-        />
-      </label>
-      <label class="filter-select">
-        <span>SMSC the message arrived on</span>
-        <select v-model="draftSmscId" data-testid="mo-form-smsc">
-          <option value="">Any SMSC</option>
-          <option v-for="option in smscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Destination (shortcode) match</span>
-        <select v-model="draftDestinationType" data-testid="mo-form-destination-type">
-          <option v-for="type in DESTINATION_MATCH_TYPES" :key="type" :value="type">
-            {{ type }}
-          </option>
-        </select>
-      </label>
-      <label v-if="draftDestinationType !== 'any'" class="filter-select">
-        <span>Destination value</span>
-        <input v-model="draftDestination" data-testid="mo-form-destination" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Sender prefix (digits, + ( ) - and spaces)</span>
-        <input v-model="draftSenderPrefix" data-testid="mo-form-sender-prefix" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Keyword match</span>
-        <select v-model="draftKeywordType" data-testid="mo-form-keyword-type">
-          <option v-for="type in KEYWORD_MATCH_TYPES" :key="type" :value="type">{{ type }}</option>
-        </select>
-      </label>
-      <label v-if="draftKeywordType !== 'any'" class="filter-select">
-        <span>Keyword</span>
-        <input v-model="draftKeyword" data-testid="mo-form-keyword" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Case sensitive</span>
-        <select v-model="draftCaseSensitive" data-testid="mo-form-case">
-          <option :value="false">No</option>
-          <option :value="true">Yes</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>After this rule matches</span>
-        <select v-model="draftContinue" data-testid="mo-form-continue">
-          <option :value="false">Stop — no later rule is consulted</option>
-          <option :value="true">Continue — later rules may also fan out</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Enabled</span>
-        <select v-model="draftEnabled" data-testid="mo-form-enabled">
-          <option :value="true">Yes</option>
-          <option :value="false">No</option>
-        </select>
-      </label>
-      <label class="filter-select filter-search">
-        <span>Customer scope (UUID, optional)</span>
-        <input v-model="draftCustomerId" data-testid="mo-form-customer" type="text" />
-      </label>
-      <p v-if="ruleFormError" class="form-error" role="alert" data-testid="mo-form-error">
-        {{ ruleFormError }}
-      </p>
+      <!--
+        ELEVEN FIELDS IN ONE FLAT COLUMN, with the labels beside the inputs so
+        every control started at a different x and the right edge was ragged.
+        Nothing said which fields decided what the rule MATCHES and which
+        decided what happens afterwards — which is the only distinction that
+        matters when you are reading somebody else's rule.
+
+        Three groups in the order the rule is actually composed: what it is,
+        what it matches, what happens next. The sentence at the end states the
+        whole rule in words before it is saved.
+      -->
+      <fieldset class="dialog-group">
+        <legend>Identity</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>Name <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftName"
+              data-testid="mo-form-name"
+              type="text"
+              maxlength="200"
+              placeholder="Opt-out — STOP"
+            />
+            <small>Unique, up to 200 characters. Shown wherever this rule appears.</small>
+          </label>
+          <label class="field dialog-span">
+            <span>Description</span>
+            <input
+              v-model="draftDescription"
+              data-testid="mo-form-description"
+              type="text"
+              placeholder="What this rule is for, and who asked for it"
+            />
+            <small>Read by whoever inherits this rule. Optional, and worth writing.</small>
+          </label>
+          <label class="field">
+            <span>Priority</span>
+            <input
+              v-model.number="draftPriority"
+              data-testid="mo-form-priority"
+              type="number"
+              min="0"
+              max="1000000"
+            />
+            <small>Lower is evaluated first. The catch-all sits at 1000.</small>
+          </label>
+          <label class="field">
+            <span>Enabled</span>
+            <select v-model="draftEnabled" data-testid="mo-form-enabled">
+              <option :value="true">Yes</option>
+              <option :value="false">No</option>
+            </select>
+            <small>A disabled rule keeps its place in the order and never matches.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>What it matches</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Arrived on</span>
+            <select v-model="draftSmscId" data-testid="mo-form-smsc">
+              <option value="">Any SMSC</option>
+              <option v-for="option in smscOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <small>Restrict the rule to one bind, or leave it for every inbound message.</small>
+          </label>
+          <label class="field">
+            <span>Sender prefix</span>
+            <input
+              v-model="draftSenderPrefix"
+              data-testid="mo-form-sender-prefix"
+              type="text"
+              placeholder="+25677"
+            />
+            <small>Digits, <span class="mono">+ ( ) -</span> and spaces. Blank matches any sender.</small>
+          </label>
+          <label class="field">
+            <span>Destination (shortcode)</span>
+            <select v-model="draftDestinationType" data-testid="mo-form-destination-type">
+              <option v-for="type in DESTINATION_MATCH_TYPES" :key="type" :value="type">
+                {{ type }}
+              </option>
+            </select>
+            <small>How the shortcode the subscriber texted is compared.</small>
+          </label>
+          <label v-if="draftDestinationType !== 'any'" class="field">
+            <span>Destination value <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftDestination"
+              data-testid="mo-form-destination"
+              type="text"
+              placeholder="8888"
+            />
+            <small>The shortcode to compare against.</small>
+          </label>
+          <label class="field">
+            <span>Keyword</span>
+            <select v-model="draftKeywordType" data-testid="mo-form-keyword-type">
+              <option v-for="type in KEYWORD_MATCH_TYPES" :key="type" :value="type">
+                {{ type }}
+              </option>
+            </select>
+            <small><span class="mono">first_word</span> is what an opt-out rule wants.</small>
+          </label>
+          <label v-if="draftKeywordType !== 'any'" class="field">
+            <span>Keyword value <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftKeyword"
+              data-testid="mo-form-keyword"
+              type="text"
+              placeholder="STOP"
+            />
+            <small>Compared according to the case setting beside it.</small>
+          </label>
+          <label v-if="draftKeywordType !== 'any'" class="field">
+            <span>Case sensitive</span>
+            <select v-model="draftCaseSensitive" data-testid="mo-form-case">
+              <option :value="false">No</option>
+              <option :value="true">Yes</option>
+            </select>
+            <small>Subscribers text in both cases; No is almost always right.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>What happens next</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>After this rule matches</span>
+            <select v-model="draftContinue" data-testid="mo-form-continue">
+              <option :value="false">Stop — no later rule is consulted</option>
+              <option :value="true">Continue — later rules may also fan out</option>
+            </select>
+            <small>
+              Stop is the safe default. Continue is how one message reaches several destinations,
+              and is also how a message gets delivered twice if a later rule overlaps.
+            </small>
+          </label>
+          <label class="field dialog-span">
+            <span>Customer scope</span>
+            <input
+              v-model="draftCustomerId"
+              data-testid="mo-form-customer"
+              type="text"
+              placeholder="UUID"
+            />
+            <small>Leave blank to apply to every customer on this tenant.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <p class="draft-sentence" data-testid="mo-form-sentence">{{ draftSentence }}</p>
+
+      <div
+        v-if="ruleFormError || moFormProblems.length"
+        class="form-alert is-error"
+        role="alert"
+        data-testid="mo-form-error"
+      >
+        <div>
+          <strong>{{
+            ruleFormError
+              ? 'This rule was not saved'
+              : moFormProblems.length > 1
+                ? `${moFormProblems.length} things are still needed`
+                : 'One thing is still needed'
+          }}</strong>
+          <span v-if="ruleFormError">{{ ruleFormError }}</span>
+          <ul v-else>
+            <li v-for="problem in moFormProblems" :key="problem">{{ problem }}</li>
+          </ul>
+        </div>
+      </div>
+
       <p class="source-note">
         A rule is created without destinations; add them below once it exists. There is no way to
         create a rule and its destinations in one call.
@@ -1556,7 +1706,7 @@ onMounted(() => {
         <button
           class="primary-button"
           data-testid="mo-form-save"
-          :disabled="ruleBusy || !canManage"
+          :disabled="ruleBusy || !canManage || moFormProblems.length > 0"
           @click="saveRule"
         >
           {{ ruleBusy ? 'Saving…' : 'Save rule' }}

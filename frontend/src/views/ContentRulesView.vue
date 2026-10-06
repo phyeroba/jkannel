@@ -289,6 +289,49 @@ const draftPriority = ref(100);
 const draftExpiresAt = ref('');
 const draftReason = ref('');
 
+/**
+ * What the form will not accept, listed rather than left to the API.
+ *
+ * Save was enabled whatever was in the fields, so an empty pattern was
+ * discovered by a refusal written for a caller rather than for the person who
+ * typed it.
+ */
+const contentFormProblems = computed(() => {
+  const problems: string[] = [];
+  if (!draftName.value.trim()) problems.push('A name is required.');
+  if (!draftPattern.value.trim()) problems.push('A pattern is required.');
+  else if (draftPattern.value.length > patternLimit.value)
+    problems.push(
+      `The pattern is ${draftPattern.value.length} characters; the limit is ${patternLimit.value}.`,
+    );
+  return problems;
+});
+
+/**
+ * The rule as one sentence.
+ *
+ * Thirteen controls specify a rule; none of them says what it does. Reading
+ * "block / regex / sender" off three dropdowns is a rule specified, not a
+ * rule understood, and the mistake this catches — a global block where an
+ * SMSC-scoped one was meant — is expensive.
+ */
+const contentDraftSentence = computed(() => {
+  const where = draftSmscId.value
+    ? (smscOptions.value.find((option) => option.value === draftSmscId.value)?.label ??
+      draftSmscId.value)
+    : 'every SMSC';
+  const who = draftCustomerId.value.trim() ? 'one customer' : 'every customer';
+  const how =
+    draftMatchType.value === 'any'
+      ? 'any value'
+      : `${draftMatchType.value} “${draftPattern.value.trim() || '…'}”${
+          draftCaseSensitive.value ? ' (case sensitive)' : ''
+        }`;
+  const core = `${draftAction.value} a message whose ${draftMatchField.value} is ${how}, on ${where}, for ${who}, at priority ${draftPriority.value}`;
+  if (!draftEnabled.value) return `Disabled. If enabled, it would ${core}.`;
+  return `This rule will ${core}.`;
+});
+
 const patternLimit = computed(() =>
   draftMatchType.value === 'regex' ? MAX_REGEX_PATTERN : MAX_LITERAL_PATTERN,
 );
@@ -1074,104 +1117,222 @@ onMounted(() => {
       wide
       @close="closeForm"
     >
-      <label class="filter-select filter-search">
-        <span>Name (unique, up to 200 characters)</span>
-        <input v-model="draftName" data-testid="content-form-name" type="text" />
-      </label>
-      <label class="filter-select filter-search">
-        <span>Description</span>
-        <input v-model="draftDescription" data-testid="content-form-description" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Action</span>
-        <select v-model="draftAction" data-testid="content-form-action">
-          <option v-for="action in ACTIONS" :key="action" :value="action">{{ action }}</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Match field</span>
-        <select v-model="draftMatchField" data-testid="content-form-match-field">
-          <option v-for="field in matchFieldOptions" :key="field" :value="field">
-            {{ field }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Match type</span>
-        <select v-model="draftMatchType" data-testid="content-form-match-type">
-          <option v-for="type in matchTypeOptions" :key="type" :value="type">{{ type }}</option>
-        </select>
-      </label>
-      <label class="filter-select filter-search">
-        <span>Pattern (at most {{ patternLimit }} characters)</span>
-        <input v-model="draftPattern" data-testid="content-form-pattern" type="text" />
-      </label>
+      <!--
+        THIRTEEN CONTROLS IN ONE FLAT COLUMN, with two loose paragraphs of
+        guidance wedged between them and the labels beside the inputs, so no
+        two controls started at the same x.
+
+        Nothing separated what the rule MATCHES from what it DOES, which is
+        the distinction that decides whether a rule is safe. Three groups in
+        the order the rule is composed, and a sentence stating the whole
+        decision before it is saved — because "block / regex / sender" in
+        three dropdowns is a rule specified, not a rule understood.
+      -->
+      <fieldset class="dialog-group">
+        <legend>Identity</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>Name <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftName"
+              data-testid="content-form-name"
+              type="text"
+              maxlength="200"
+              placeholder="Block competitor shortcodes"
+            />
+            <small>Unique, up to 200 characters.</small>
+          </label>
+          <label class="field dialog-span">
+            <span>Description</span>
+            <input
+              v-model="draftDescription"
+              data-testid="content-form-description"
+              type="text"
+              placeholder="Why this rule exists, and who asked for it"
+            />
+            <small>Read by whoever inherits the rule. Optional, and worth writing.</small>
+          </label>
+          <label class="field">
+            <span>Priority</span>
+            <input
+              v-model.number="draftPriority"
+              data-testid="content-form-priority"
+              type="number"
+              min="0"
+              max="1000000"
+            />
+            <small>
+              Lower is evaluated first and <strong>first match wins</strong>. To exempt something
+              from a block, the allow rule needs the <strong>lower</strong> number — otherwise the
+              block gets there first and the allow is shadowed.
+            </small>
+          </label>
+          <label class="field">
+            <span>Enabled</span>
+            <select v-model="draftEnabled" data-testid="content-form-enabled">
+              <option :value="true">Yes</option>
+              <option :value="false">No</option>
+            </select>
+            <small>A disabled rule keeps its place in the order and never matches.</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>What it matches</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Match field</span>
+            <select v-model="draftMatchField" data-testid="content-form-match-field">
+              <option v-for="field in matchFieldOptions" :key="field" :value="field">
+                {{ field }}
+              </option>
+            </select>
+            <small>Which part of the message is compared.</small>
+          </label>
+          <label class="field">
+            <span>Match type</span>
+            <select v-model="draftMatchType" data-testid="content-form-match-type">
+              <option v-for="type in matchTypeOptions" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <small>How it is compared. <span class="mono">regex</span> is the expensive one.</small>
+          </label>
+          <label class="field dialog-span">
+            <span>Pattern <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="draftPattern"
+              data-testid="content-form-pattern"
+              type="text"
+              :maxlength="patternLimit"
+            />
+            <small>
+              At most {{ patternLimit }} characters.
+              <template v-if="draftPattern"
+                >{{ draftPattern.length }} used.</template
+              >
+            </small>
+          </label>
+          <label class="field">
+            <span>Case sensitive</span>
+            <select v-model="draftCaseSensitive" data-testid="content-form-case">
+              <option :value="false">No</option>
+              <option :value="true">Yes</option>
+            </select>
+            <small>No is almost always right for message text.</small>
+          </label>
+        </div>
+        <p
+          v-if="draftMatchType === 'regex'"
+          class="form-alert is-warn"
+          role="note"
+          data-testid="content-form-regex-note"
+        >
+          <span>
+            <strong>A regex is checked three times over.</strong> It is rejected at save time if it
+            uses backreferences, lookbehind, a nested quantifier, a repeat bound above 100, more
+            than 12 quantifiers or more than 3 unbounded ones. At match time the subject is
+            truncated before the pattern runs. And if a single execution still exceeds the
+            send-path time budget, the rule is disabled and quarantined automatically — which means
+            the message being sent at that moment is evaluated as though this rule did not match.
+          </span>
+        </p>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>What it does, and where</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Action</span>
+            <select v-model="draftAction" data-testid="content-form-action">
+              <option v-for="action in ACTIONS" :key="action" :value="action">{{ action }}</option>
+            </select>
+            <small>What happens to a message that matches.</small>
+          </label>
+          <label class="field">
+            <span>SMSC scope</span>
+            <select v-model="draftSmscId" data-testid="content-form-smsc">
+              <option value="">Global (all SMSCs)</option>
+              <option v-for="option in smscOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <small>
+              Scoping to one SMSC moves filtering to <em>after</em> a carrier has been chosen, for
+              every rule on this tenant.
+            </small>
+          </label>
+          <label class="field">
+            <span>Customer scope</span>
+            <input
+              v-model="draftCustomerId"
+              data-testid="content-form-customer"
+              type="text"
+              placeholder="UUID"
+            />
+            <small>Leave blank to apply to every customer.</small>
+          </label>
+          <label class="field">
+            <span>Expires at</span>
+            <input
+              v-model="draftExpiresAt"
+              data-testid="content-form-expires"
+              type="datetime-local"
+            />
+            <small>Leave blank to keep it until somebody removes it.</small>
+          </label>
+          <label class="field dialog-span">
+            <span>Reason shown to the sender</span>
+            <input
+              v-model="draftReason"
+              data-testid="content-form-reason"
+              type="text"
+              placeholder="This content is not permitted on this route"
+            />
+            <small>
+              Returned to the API caller when this rule blocks. Blank gives them a refusal with no
+              explanation.
+            </small>
+          </label>
+        </div>
+      </fieldset>
+
+      <p class="draft-sentence" data-testid="content-form-sentence">{{ contentDraftSentence }}</p>
+
+      <!-- A warning, not a refusal: the API accepts a blocking rule with no
+           reason, and this form must not invent a requirement the platform
+           does not have. It is still worth saying out loud. -->
       <p
-        v-if="draftMatchType === 'regex'"
-        class="warn-notice"
-        role="note"
-        data-testid="content-form-regex-note"
+        v-if="draftAction === 'block' && !draftReason.trim()"
+        class="form-alert is-warn"
+        role="status"
+        data-testid="content-form-no-reason"
       >
-        A regex is checked three times over. It is rejected at save time if it uses backreferences,
-        lookbehind, a nested quantifier, a repeat bound above 100, more than 12 quantifiers or more
-        than 3 unbounded ones. At match time the subject is truncated before the pattern runs. And
-        if a single execution still exceeds the send-path time budget, the rule is disabled and
-        quarantined automatically — which means the message being sent at that moment is evaluated
-        as though this rule did not match.
+        <span>
+          <strong>No reason set.</strong> A caller whose message this blocks gets a refusal with no
+          explanation, and the first they will know of it is a support ticket.
+        </span>
       </p>
-      <label class="filter-select">
-        <span>Case sensitive</span>
-        <select v-model="draftCaseSensitive" data-testid="content-form-case">
-          <option :value="false">No</option>
-          <option :value="true">Yes</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Priority (lower is evaluated first)</span>
-        <input
-          v-model.number="draftPriority"
-          data-testid="content-form-priority"
-          type="number"
-          min="0"
-          max="1000000"
-        />
-      </label>
-      <p class="form-hint">
-        First match wins. To exempt something from a block, give the allow rule a
-        <strong>lower</strong> priority number than the block it is meant to override — otherwise
-        the block gets there first and the allow rule is shadowed.
-      </p>
-      <label class="filter-select">
-        <span>SMSC scope</span>
-        <select v-model="draftSmscId" data-testid="content-form-smsc">
-          <option value="">Global (all SMSCs)</option>
-          <option v-for="option in smscOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select filter-search">
-        <span>Customer scope (UUID, optional)</span>
-        <input v-model="draftCustomerId" data-testid="content-form-customer" type="text" />
-      </label>
-      <label class="filter-select">
-        <span>Enabled</span>
-        <select v-model="draftEnabled" data-testid="content-form-enabled">
-          <option :value="true">Yes</option>
-          <option :value="false">No</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Expires at (optional)</span>
-        <input v-model="draftExpiresAt" data-testid="content-form-expires" type="datetime-local" />
-      </label>
-      <label class="filter-select filter-search">
-        <span>Reason shown to the sender when this rule blocks</span>
-        <input v-model="draftReason" data-testid="content-form-reason" type="text" />
-      </label>
-      <p v-if="formError" class="form-error" role="alert" data-testid="content-form-error">
-        {{ formError }}
-      </p>
+
+      <div
+        v-if="formError || contentFormProblems.length"
+        class="form-alert is-error"
+        role="alert"
+        data-testid="content-form-error"
+      >
+        <div>
+          <strong>{{
+            formError
+              ? 'This rule was not saved'
+              : contentFormProblems.length > 1
+                ? `${contentFormProblems.length} things are still needed`
+                : 'One thing is still needed'
+          }}</strong>
+          <span v-if="formError">{{ formError }}</span>
+          <ul v-else>
+            <li v-for="problem in contentFormProblems" :key="problem">{{ problem }}</li>
+          </ul>
+        </div>
+      </div>
       <template #footer>
         <button class="secondary-button" data-testid="content-form-cancel" @click="closeForm">
           Cancel
