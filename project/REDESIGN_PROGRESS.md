@@ -5,9 +5,16 @@ as the work**, not afterwards: this file exists because a context compaction
 already cost one full set of design material, and because "which screens are
 done" is otherwise only answerable by clicking through production.
 
-**Resumed 2026-10-06.** `/sessions-smpp` and `/alert-lifecycle` are done and on
-`main`; production is still on `a50a3dd` until the next deploy. Next task is
-the dialogs — see "Resume here".
+**2026-10-06, end of the evening session: everything below is deployed**
+(production is on `3f4258b`). Next task is the rest of the dialogs — see
+"Resume here".
+
+**New tool:** `node scripts/screen-sweep.mjs` walks every route, captures it,
+then clicks the control that OPENS something and captures that too. Run it
+with `BASE=https://gw1.speedamobile.com U=operator P=... OUT=<dir>`. It is how
+the dialog backlog became visible, and it re-measures overflow while it goes.
+The artifact at `claude.ai/artifact/FQ9MVFVexZesG8WzcGgheJ` now carries the
+before/after screenshots.
 
 - **Authority**: `docs/handbook/CONSOLE_DESIGN_SPEC.md` (supersedes
   `design/design_spec/` for everything it covers)
