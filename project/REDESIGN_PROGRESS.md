@@ -5,9 +5,9 @@ as the work**, not afterwards: this file exists because a context compaction
 already cost one full set of design material, and because "which screens are
 done" is otherwise only answerable by clicking through production.
 
-**Resumed 2026-10-06.** `/sessions-smpp` is done and on `main`; production is
-still on `a50a3dd` until the next deploy. Next task is `/alert-lifecycle` —
-see "Resume here".
+**Resumed 2026-10-06.** `/sessions-smpp` and `/alert-lifecycle` are done and on
+`main`; production is still on `a50a3dd` until the next deploy. Next task is
+the dialogs — see "Resume here".
 
 - **Authority**: `docs/handbook/CONSOLE_DESIGN_SPEC.md` (supersedes
   `design/design_spec/` for everything it covers)
@@ -44,10 +44,11 @@ see "Resume here".
 | Screen | What it got |
 |---|---|
 | `/sessions-smpp` | **Rebuilt whole.** Verdict line naming the binds that are not bound with a way into the worst (never green on an absence of evidence); four figures; tabs with page counts + live line with Pause at 30s; 13 → **7 columns** (Since / Last observed / Last transition grouped; rate / ceiling / utilisation one cell with the ratio drawn); **bind timeline capped** to a scroll region that states `40 most recent of N`, with a Problems filter; drawer transitions capped too; scope note folded into a disclosure |
-| Shared CSS | The house bands (`.screen-head`, `.status-line`, `.tab`, `.live-line`, `.segmented`, `.table-foot`, `.capped-list`) defined **once** in `workspace-extras.css` instead of four scoped copies. Existing copies still win on specificity, so nothing moved; they come out as each screen is next touched |
+| `/alert-lifecycle` | **Rebuilt to the house shape.** Tabs carrying **whole-table** counts from `GET /alerts/summary`, each setting the server-side status filter so the number and the rows agree; a verdict leading on *unclaimed* with the age of the oldest; the live line in place of four controls; severity as a segmented control; the sheet leading with Acknowledge / Resolve / Reopen / Close, then a 130px field grid with relative times, then a capped timeline |
+| Shared CSS | The house bands (`.screen-head`, `.status-line`, `.tab`, `.live-line`, `.segmented`, `.table-foot`, `.capped-list`) and the side panel (`.panel-actions`, `.panel-fields`, `.panel-heading`, `.sev-dot`) defined **once** in `workspace-extras.css` instead of four scoped copies. Existing copies still win on specificity, so nothing moved; they come out as each screen is next touched |
 
 **Audits**: layout audit **0 findings** across 50 routes as of `a50a3dd`.
-Frontend **744 tests pass** (736 + 8 new); backend **2,045 pass** (run
+Frontend **750 tests pass** (736 + 14 new); backend **2,045 pass** (run
 serially — parallel workers get killed by memory pressure on this machine).
 
 > **The overflow audit could not be re-run on 2026-10-06**: Docker Desktop's
@@ -61,13 +62,7 @@ serially — parallel workers get killed by memory pressure on this machine).
 
 ## Resume here
 
-### 1. `/alert-lifecycle` — next task, not started
-
-Columns were grouped but the screen never got the house style: no summary
-strip, no tabs with counts, and its drawer is still the generic one. Follow
-`/alerts` — closest sibling, settled pattern.
-
-### 2. Remaining dialogs
+### 1. Remaining dialogs — next task
 
 Every `ModalDialog` caller that is a create/edit form wants the grouped
 fieldset treatment the Carriers dialog got; the bigger ones want the
@@ -75,7 +70,7 @@ four-step side panel the route editor got. **Walk the links and buttons on
 each screen** — Peter's repeated point was that drill-downs were being
 missed while the top of the page got rebuilt.
 
-### 3. Overflow backlog
+### 2. Overflow backlog
 
 16 findings open on production. Re-measure first: `/routing` has been rebuilt
 since the list was taken. Worst first after that:

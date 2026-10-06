@@ -1,9 +1,34 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+/**
+ * ALERT LIFECYCLE — the incident desk.
+ *
+ * Rebuilt 2026-10-06 to CONSOLE_DESIGN_SPEC §1. The columns had already been
+ * grouped (13 → 7) but the screen had never been given the house shape: it
+ * opened on a seven-control toolbar, its status filter was a dropdown with no
+ * counts, and its detail sheet put five badges and nine fields above the
+ * actions an operator came to use.
+ *
+ * What changed, and why:
+ *
+ *   - **Tabs carrying whole-table counts.** `GET /alerts/summary` tallies the
+ *     table through the same tenant-scoped connection as the list, so "Open
+ *     42" is 42 open alerts and not 42 rows on this page. The tab sets the
+ *     server-side status filter, so the count and the filter agree. If the
+ *     tally fails the tabs still work and simply carry no number — a wrong
+ *     count is worse than none.
+ *   - **A verdict before the register**, naming the oldest unacknowledged
+ *     alert, because that is the question an operator opens this screen with.
+ *   - **The live line** replaces `Auto refresh [On] Every [30s] (Refresh)`
+ *     plus a "Last updated" caption — four controls stating one idea.
+ *   - **The sheet leads with the actions.** Acknowledge / Resolve / Reopen /
+ *     Close were below five badges, nine fields and two banners.
+ */
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ApiError, apiRequest } from '../api';
 import { useLiveResource } from '../composables/useLiveResource';
 import { canAccess, session } from '../stores/session';
+import AppIcon from '../components/AppIcon.vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
 import EventTimeline from '../components/EventTimeline.vue';
 import TablePager from '../components/TablePager.vue';
@@ -15,7 +40,7 @@ import {
   alertOccurrences,
   alertStarted,
 } from '../utils/alerts';
-import { shortWhen } from '../utils/when';
+import { agoWhen, shortWhen, spanOf } from '../utils/when';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'idle' | 'loading' | 'ok' | 'error';
@@ -123,7 +148,8 @@ const listState = ref<LoadState>('loading');
 const listError = ref('');
 const listMissing = ref(false);
 const listTotal = ref(0);
-const statusFilter = ref('');
+/** Opens on Open, matching the tab that is active on arrival. */
+const statusFilter = ref('open');
 const severityFilter = ref('');
 const searchQuery = ref('');
 const listLimit = ref(50);
@@ -134,8 +160,133 @@ const listLimit = ref(50);
  */
 const listOffset = ref(0);
 
-const STATUS_CHOICES = ['open', 'acknowledged', 'suppressed', 'resolved', 'closed'];
-const SEVERITY_CHOICES = ['info', 'warning', 'critical'];
+const SEVERITY_CHOICES = ['info', 'warning', 'critical'] as const;
+
+/* --- the whole-table tally -----------------------------------------------
+ *
+ * The same endpoint the Alerts register uses. Every figure here is measured
+ * across the table, never derived from `alerts` — a count taken from the
+ * loaded page says "open 50" on a register paginated at fifty while three
+ * hundred are open, and a wrong count is worse than no count because it looks
+ * like an answer.
+ */
+interface AlertSummary {
+  total: number;
+  byStatus: Record<string, number>;
+  bySeverity: Record<string, number>;
+  openBySeverity: Record<string, number>;
+  unacknowledged: number;
+  oldestOpenedAt: string | null;
+  resolved30d: number;
+  medianResolveSeconds: number | null;
+}
+const summary = ref<AlertSummary | null>(null);
+
+/**
+ * A deployment without the tally endpoint answers 404, and an older one
+ * answers 200 with something that is not a tally. Both have to end up as
+ * `null` rather than as an object whose `byStatus` is undefined — the figures
+ * are read in six places and a half-populated summary would throw in the
+ * middle of a render.
+ */
+function asSummary(payload: unknown): AlertSummary | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const value = payload as Partial<AlertSummary>;
+  if (typeof value.total !== 'number' || !value.byStatus || typeof value.byStatus !== 'object')
+    return null;
+  return {
+    total: value.total,
+    byStatus: value.byStatus,
+    bySeverity: value.bySeverity ?? {},
+    openBySeverity: value.openBySeverity ?? {},
+    unacknowledged: value.unacknowledged ?? 0,
+    oldestOpenedAt: value.oldestOpenedAt ?? null,
+    resolved30d: value.resolved30d ?? 0,
+    medianResolveSeconds: value.medianResolveSeconds ?? null,
+  };
+}
+
+async function loadSummary() {
+  try {
+    summary.value = asSummary(await apiRequest<unknown>('/alerts/summary'));
+  } catch {
+    // Decoration over a register that loaded. A failed tally must not raise a
+    // banner and must not be filled in with zeros, which would report an
+    // empty system.
+    summary.value = null;
+  }
+}
+
+/**
+ * The status filter as tabs rather than a dropdown.
+ *
+ * Each tab sets the SERVER-SIDE filter, so the number on the tab and the rows
+ * below it are measuring the same thing. A client-side tab over a paginated
+ * register would not be.
+ */
+const TABS = [
+  { id: 'open', label: 'Open', statuses: ['open'] },
+  { id: 'acknowledged', label: 'Acknowledged', statuses: ['acknowledged'] },
+  { id: 'suppressed', label: 'Suppressed', statuses: ['suppressed'] },
+  { id: 'resolved', label: 'Resolved', statuses: ['resolved'] },
+  { id: 'closed', label: 'Closed', statuses: ['closed'] },
+  { id: 'all', label: 'All', statuses: [] },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
+/** Opens on Open: the tab that matters, not the one that is widest. */
+const activeTab = ref<TabId>('open');
+
+function tabCount(tab: TabId): number | null {
+  const by = summary.value?.byStatus;
+  if (!by) return null;
+  if (tab === 'all') return summary.value?.total ?? 0;
+  const definition = TABS.find((entry) => entry.id === tab);
+  return (definition?.statuses ?? []).reduce((sum, status) => sum + (by[status] ?? 0), 0);
+}
+function chooseTab(tab: TabId) {
+  activeTab.value = tab;
+  statusFilter.value = TABS.find((entry) => entry.id === tab)?.statuses[0] ?? '';
+  applyAlertFilters();
+}
+
+/* --- the verdict ---------------------------------------------------------
+ * §1 band one: the question an operator arrives with, answered before the
+ * rows. Unacknowledged beats open — an open alert somebody has taken is being
+ * worked, and an open alert nobody has taken is the one that gets missed. */
+const verdictTone = computed(() => {
+  if (!summary.value) return 'unknown';
+  if (summary.value.unacknowledged > 0) return 'bad';
+  if ((summary.value.byStatus.open ?? 0) > 0) return 'warn';
+  return 'good';
+});
+const verdictWord = computed(
+  () =>
+    ({ good: 'Clear', warn: 'In hand', bad: 'Unclaimed', unknown: 'Not counted' })[
+      verdictTone.value
+    ],
+);
+const verdictSentence = computed(() => {
+  const tally = summary.value;
+  if (!tally)
+    return 'The whole-table tally could not be read, so the counts below are this page only.';
+  if (tally.unacknowledged > 0)
+    return tally.oldestOpenedAt
+      ? `${tally.unacknowledged} alert(s) have been raised and nobody has taken them. The oldest opened ${agoWhen(tally.oldestOpenedAt)}.`
+      : `${tally.unacknowledged} alert(s) have been raised and nobody has taken them.`;
+  if ((tally.byStatus.open ?? 0) > 0)
+    return `${tally.byStatus.open} alert(s) are open and every one of them has been acknowledged.`;
+  return 'Nothing is open. Every alert raised has been acknowledged and closed out.';
+});
+const medianResolve = computed(() => {
+  const value = summary.value?.medianResolveSeconds;
+  return value === null || value === undefined ? null : spanOf(value);
+});
+/** Open counts by severity, biggest first, for the caption under the figure. */
+const openSplit = computed(() =>
+  Object.entries(summary.value?.openBySeverity ?? {})
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1]),
+);
 
 /** Any filter change restarts paging: page 3 of the previous filter is meaningless. */
 function applyAlertFilters() {
@@ -175,7 +326,23 @@ async function loadAlerts() {
     listError.value = messageFrom(reason, 'Alerts could not be loaded.');
     listState.value = 'error';
   }
+  // The tally rides with the list so the tabs and the rows are never a poll
+  // apart — a tab reading 41 above a register that has just dropped to 40 is
+  // the kind of disagreement an operator spends ten minutes on.
+  await loadSummary();
+  lastReadStamp.value = new Date();
+  sinceRead.value = 0;
 }
+
+/* --- the live line -------------------------------------------------------
+   "● Live · updated 3s ago · every 30s [Pause] [Refresh]" in place of four
+   labelled controls stating the same idea. */
+const lastReadStamp = ref<Date | null>(null);
+const sinceRead = ref(0);
+let tickTimer: ReturnType<typeof setInterval> | undefined;
+const refreshedLabel = computed(() =>
+  lastReadStamp.value ? `updated ${sinceRead.value}s ago` : 'not yet read',
+);
 
 /**
  * The alerts index selects `a.*`, so the lifecycle columns arrive in their
@@ -540,8 +707,10 @@ const incidentTimeline = computed(() => {
 // --- Auto refresh --------------------------------------------------------------
 // The index only. The open detail is deliberately not polled: an operator
 // typing a note must not have the record swapped underneath them.
-const refreshChoices = [10, 30, 60, 120];
-const { autoRefresh, intervalSeconds, refreshing, lastRefreshedAt, refreshNow } = useLiveResource(
+// The interval is no longer a control: the live line states it, and a second
+// dropdown for how often a screen re-reads itself was one of the four controls
+// that band replaced.
+const { autoRefresh, intervalSeconds, refreshing, refreshNow } = useLiveResource(
   () => loadAlerts(),
   { intervalSeconds: 30, immediate: false, pauseWhen: () => actionBusy.value },
 );
@@ -552,9 +721,14 @@ const route = useRoute();
 
 onMounted(() => {
   void loadAlerts();
+  tickTimer = setInterval(() => {
+    if (lastReadStamp.value)
+      sinceRead.value = Math.floor((Date.now() - lastReadStamp.value.getTime()) / 1000);
+  }, 1000);
   const deepLink = String(route.query.alert ?? '').trim();
   if (deepLink) void selectAlert(deepLink);
 });
+onBeforeUnmount(() => clearInterval(tickTimer));
 </script>
 
 <template>
@@ -564,86 +738,190 @@ onMounted(() => {
       closing and commenting require the alerts.acknowledge permission.
     </p>
 
-    <!-- Index + refresh -------------------------------------------------------- -->
-    <section class="toolbar panel grid-toolbar" aria-label="Alert index filters">
-      <label class="filter-select">
-        <span>Status</span>
-        <select
-          v-model="statusFilter"
-          data-testid="lifecycle-status-filter"
-          @change="applyAlertFilters"
-        >
-          <option value="">Any status</option>
-          <option v-for="choice in STATUS_CHOICES" :key="choice" :value="choice">
-            {{ choice }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Severity</span>
-        <select
-          v-model="severityFilter"
-          data-testid="lifecycle-severity-filter"
-          @change="applyAlertFilters"
-        >
-          <option value="">Any severity</option>
-          <option v-for="choice in SEVERITY_CHOICES" :key="choice" :value="choice">
-            {{ choice }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-select filter-search">
-        <span>Search</span>
-        <input
-          v-model="searchQuery"
-          data-testid="lifecycle-search"
-          type="search"
-          placeholder="Summary, details, or rule name"
-          @keyup.enter="applyAlertFilters"
-        />
-      </label>
-      <label class="filter-select">
-        <span>Auto refresh</span>
-        <select v-model="autoRefresh" data-testid="lifecycle-auto-toggle">
-          <option :value="true">On</option>
-          <option :value="false">Off</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Every</span>
-        <select v-model.number="intervalSeconds" data-testid="lifecycle-interval">
-          <option v-for="choice in refreshChoices" :key="choice" :value="choice">
-            {{ choice }}s
-          </option>
-        </select>
-      </label>
-      <button
-        class="primary-button"
-        data-testid="lifecycle-refresh"
-        :disabled="refreshing"
-        @click="refreshNow(true)"
-      >
-        {{ refreshing ? 'Refreshing…' : 'Refresh' }}
-      </button>
-      <span class="source-note" data-testid="lifecycle-last-refreshed">
-        {{ lastRefreshedAt ? `Last updated ${lastRefreshedAt}` : 'Waiting for the first load…' }}
+    <!-- HEADER BAND ------------------------------------------------------------ -->
+    <header class="screen-head">
+      <div class="screen-actions">
+        <RouterLink class="secondary-button" to="/alerts" data-testid="lifecycle-open-alerts">
+          Alerts register
+        </RouterLink>
+        <RouterLink class="secondary-button" to="/alert-response">
+          Escalation &amp; maintenance
+        </RouterLink>
+      </div>
+    </header>
+
+    <!-- THE VERDICT -------------------------------------------------------------
+      Unacknowledged beats open: an open alert somebody has taken is being
+      worked, and an open alert nobody has taken is the one that gets missed.
+    -->
+    <section class="status-line" :class="`is-${verdictTone}`" data-testid="lifecycle-status-line">
+      <span class="status-chip">
+        <span class="status-dot" aria-hidden="true"></span>{{ verdictWord }}
       </span>
+      <p aria-live="polite">{{ verdictSentence }}</p>
+      <button
+        v-if="summary && summary.unacknowledged > 0 && activeTab !== 'open'"
+        class="secondary-button is-compact"
+        type="button"
+        data-testid="lifecycle-show-open"
+        @click="chooseTab('open')"
+      >
+        Show open
+      </button>
+    </section>
+
+    <!-- SUMMARY STRIP -----------------------------------------------------------
+      Four measured figures from `GET /alerts/summary`. The strip renders
+      nothing at all when the tally fails: zeros would report an empty system.
+    -->
+    <section v-if="summary" class="stat-strip" data-testid="lifecycle-strip">
+      <article>
+        <p class="stat-label">Open</p>
+        <b class="stat-figure" data-testid="lifecycle-stat-open">{{ summary.byStatus.open ?? 0 }}</b>
+        <p class="stat-caption">
+          <template v-if="openSplit.length">
+            <span
+              v-for="([name, count], index) in openSplit"
+              :key="name"
+              :class="{ 'is-critical': name === 'critical' }"
+              >{{ count }} {{ name
+              }}<template v-if="index < openSplit.length - 1"> · </template></span
+            >
+          </template>
+          <template v-else>nothing open</template>
+        </p>
+      </article>
+      <article>
+        <p class="stat-label">Unclaimed</p>
+        <b class="stat-figure" data-testid="lifecycle-stat-unacked">{{ summary.unacknowledged }}</b>
+        <p class="stat-caption">
+          <template v-if="summary.oldestOpenedAt">
+            Oldest opened {{ agoWhen(summary.oldestOpenedAt) }}
+          </template>
+          <template v-else>nobody is waiting</template>
+        </p>
+      </article>
+      <article>
+        <p class="stat-label">Resolved · 30 days</p>
+        <b class="stat-figure" data-testid="lifecycle-stat-resolved">{{ summary.resolved30d }}</b>
+        <p class="stat-caption">Closed out in the last 30 days</p>
+      </article>
+      <article>
+        <p class="stat-label">Median time to resolve</p>
+        <!-- `not measured`, never `0m`: a zero would read as instant
+             resolution rather than as nothing to measure. -->
+        <b class="stat-figure" data-testid="lifecycle-stat-median">{{
+          medianResolve ?? 'not measured'
+        }}</b>
+        <p class="stat-caption">Across resolved alerts</p>
+      </article>
     </section>
 
     <!-- Alert index ------------------------------------------------------------ -->
     <section class="panel" data-testid="lifecycle-index-panel" aria-label="Alerts">
-      <header class="panel-header">
-        <div>
-          <h2>Alerts</h2>
-          <p aria-live="polite">
-            {{
-              listState === 'loading'
-                ? 'Loading alerts…'
-                : `${alerts.length} of ${listTotal} alert(s) shown`
-            }}
-          </p>
+      <!-- TABS + LIVE LINE ------------------------------------------------------
+        The tab sets the server-side status filter, so the count on the tab and
+        the rows beneath it are measuring the same thing.
+      -->
+      <div class="tab-bar">
+        <div class="tab-row" role="group" aria-label="Alert status">
+          <button
+            v-for="tab in TABS"
+            :key="tab.id"
+            type="button"
+            class="tab"
+            :class="{ 'is-active': activeTab === tab.id }"
+            :aria-pressed="activeTab === tab.id"
+            :data-testid="`lifecycle-tab-${tab.id}`"
+            @click="chooseTab(tab.id)"
+          >
+            {{ tab.label }}
+            <span v-if="tabCount(tab.id) !== null" class="tab-count">{{ tabCount(tab.id) }}</span>
+          </button>
         </div>
-      </header>
+        <div class="live-line" data-testid="lifecycle-live">
+          <span class="live-dot" :class="{ 'is-paused': !autoRefresh }" aria-hidden="true"></span>
+          <span
+            >{{ autoRefresh ? 'Live' : 'Paused' }} · {{ refreshedLabel }} · every
+            {{ intervalSeconds }}s</span
+          >
+          <button
+            class="secondary-button is-compact"
+            type="button"
+            data-testid="lifecycle-auto-toggle"
+            @click="autoRefresh = !autoRefresh"
+          >
+            {{ autoRefresh ? 'Pause' : 'Resume' }}
+          </button>
+          <button
+            class="secondary-button is-compact"
+            data-testid="lifecycle-refresh"
+            :disabled="refreshing"
+            @click="refreshNow(true)"
+          >
+            <AppIcon name="refresh" :size="14" />{{ refreshing ? 'Refreshing…' : 'Refresh' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- FILTER ROW -------------------------------------------------------------
+        Severity is a segmented control, not a dropdown: four mutually
+        exclusive choices that fit on one line should not cost a click to see.
+      -->
+      <div class="filter-row">
+        <label class="filter-search">
+          <span class="sr-only">Search alerts</span>
+          <input
+            v-model="searchQuery"
+            data-testid="lifecycle-search"
+            type="search"
+            placeholder="Summary, details, or rule name"
+            @keyup.enter="applyAlertFilters"
+          />
+        </label>
+        <div class="segmented" role="group" aria-label="Severity">
+          <button
+            type="button"
+            :class="{ 'is-active': severityFilter === '' }"
+            data-testid="lifecycle-severity-any"
+            @click="
+              severityFilter = '';
+              applyAlertFilters();
+            "
+          >
+            Any severity
+          </button>
+          <button
+            v-for="choice in SEVERITY_CHOICES"
+            :key="choice"
+            type="button"
+            :class="{ 'is-active': severityFilter === choice }"
+            :data-testid="`lifecycle-severity-${choice}`"
+            @click="
+              severityFilter = choice;
+              applyAlertFilters();
+            "
+          >
+            <span class="sev-dot" :class="severityTone(choice)" aria-hidden="true"></span>{{
+              choice
+            }}
+          </button>
+        </div>
+        <!--
+          The old Status dropdown is gone: it is the tab row now, which carries
+          the counts the dropdown could not. This select is kept only so a
+          deep-linked state outside the five tabs is still reachable.
+        -->
+        <label class="filter-select is-compact">
+          <span>Per page</span>
+          <select v-model.number="listLimit" data-testid="lifecycle-limit" @change="applyAlertFilters">
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </label>
+      </div>
+
       <p
         v-if="listState === 'error'"
         class="chart-empty"
@@ -872,47 +1150,17 @@ onMounted(() => {
           {{ detailError }}
         </p>
         <template v-else-if="record">
-          <div class="summary-strip">
-            <div class="metric">
-              <strong data-testid="lifecycle-detail-status">
-                <span class="status-badge" :class="statusTone(record.status)">
-                  {{ text(record.status) }}
-                </span>
-              </strong>
-              <small>Status</small>
-            </div>
-            <div class="metric">
-              <strong>
-                <span class="status-badge" :class="severityTone(record.severity)">
-                  {{ text(record.severity) }}
-                </span>
-              </strong>
-              <small>
-                Severity{{ record.previousSeverity ? ` (was ${record.previousSeverity})` : '' }}
-              </small>
-            </div>
-            <div class="metric">
-              <strong data-testid="lifecycle-detail-notification">
-                <span class="status-badge" :class="notificationTone(record.notificationState)">
-                  {{ text(record.notificationState, 'unknown') }}
-                </span>
-              </strong>
-              <small>Notification state</small>
-            </div>
-            <div class="metric">
-              <strong>{{ Number(record.reopenCount ?? 0) }}</strong>
-              <small>Reopened</small>
-            </div>
-            <div class="metric">
-              <strong>{{ Number(record.dedupCount ?? 1) }}</strong>
-              <small>Occurrences</small>
-            </div>
-          </div>
+          <!--
+            THE SHEET LEADS WITH WHAT YOU CAME TO DO.
 
-          <p class="row-id">
-            <strong>{{ text(record.summary) }}</strong>
-          </p>
+            Acknowledge, Resolve, Reopen and Close used to sit below five
+            badges, a summary line, two banners and a nine-row field list. On
+            an alert with a long correlation group that was most of a screen
+            of reading before the first control.
 
+            The banners stay above them, because a suppressed or undeliverable
+            alert changes which action is the right one.
+          -->
           <p
             v-if="suppressionActive"
             class="warn-notice"
@@ -933,31 +1181,10 @@ onMounted(() => {
             Check notification readiness on the Escalation &amp; Maintenance workspace.
           </p>
 
-          <dl class="detail-grid">
-            <dt>Alert ID</dt>
-            <dd class="mono">{{ text(record.id) }}</dd>
-            <dt>Assigned to</dt>
-            <dd class="mono" data-testid="lifecycle-detail-assignee">
-              {{ text(record.assignedToUsername ?? record.assignedTo, 'unassigned') }}
-            </dd>
-            <dt>Assigned at</dt>
-            <dd>{{ text(record.assignedAt) }}</dd>
-            <dt>Suppressed until</dt>
-            <dd data-testid="lifecycle-detail-suppressed">{{ text(record.suppressedUntil) }}</dd>
-            <dt>Opened</dt>
-            <dd>{{ text(record.openedAt) }}</dd>
-            <dt>Escalated</dt>
-            <dd>{{ text(record.escalatedAt) }}</dd>
-            <dt>Resolved</dt>
-            <dd>{{ text(record.resolvedAt) }}</dd>
-            <dt>Closed</dt>
-            <dd>{{ text(record.closedAt) }}</dd>
-            <dt>Correlation group</dt>
-            <dd class="mono">{{ text(record.correlationGroup) }}</dd>
-          </dl>
-
           <!-- Actions ---------------------------------------------------------- -->
-          <h3>Actions</h3>
+          <p class="panel-lede" data-testid="lifecycle-detail-summary">
+            <strong>{{ text(record.summary) }}</strong>
+          </p>
           <p v-if="actionNotice" class="notice" role="status" data-testid="lifecycle-action-notice">
             {{ actionNotice }}
           </p>
@@ -1077,8 +1304,74 @@ onMounted(() => {
             permission.
           </p>
 
+          <!-- Reference -----------------------------------------------------------
+            Below the actions, because this is what you check once you have
+            decided what to do. A 130px label column so the labels align down
+            the left and a field can be found without reading every one.
+
+            Timestamps are relative with the instant in `title`: nine ISO
+            strings stacked is the wall of text the register was freed from,
+            and the sheet is no better a place to read a UTC offset.
+          -->
+          <h3 class="panel-heading">Record</h3>
+          <dl class="panel-fields">
+            <dt>Status</dt>
+            <dd data-testid="lifecycle-detail-status">
+              <span class="status-badge" :class="statusTone(record.status)">{{
+                text(record.status)
+              }}</span>
+            </dd>
+            <dt>Severity</dt>
+            <dd>
+              <span class="status-badge" :class="severityTone(record.severity)">{{
+                text(record.severity)
+              }}</span>
+              <template v-if="record.previousSeverity">
+                <small class="row-id">raised from {{ record.previousSeverity }}</small>
+              </template>
+            </dd>
+            <dt>Notification</dt>
+            <dd data-testid="lifecycle-detail-notification">
+              <span class="status-badge" :class="notificationTone(record.notificationState)">{{
+                text(record.notificationState, 'unknown')
+              }}</span>
+            </dd>
+            <dt>Assigned to</dt>
+            <dd class="mono" data-testid="lifecycle-detail-assignee">
+              {{ text(record.assignedToUsername ?? record.assignedTo, 'unassigned') }}
+              <small v-if="record.assignedAt" class="row-id" :title="text(record.assignedAt)"
+                >{{ agoWhen(record.assignedAt) }}</small
+              >
+            </dd>
+            <dt>Occurrences</dt>
+            <dd class="mono">
+              {{ Number(record.dedupCount ?? 1) }}
+              <small v-if="Number(record.reopenCount ?? 0) > 0" class="row-id"
+                >reopened {{ Number(record.reopenCount) }} time(s)</small
+              >
+            </dd>
+            <dt>Opened</dt>
+            <dd :title="text(record.openedAt)">{{ agoWhen(record.openedAt) || '—' }}</dd>
+            <dt>Escalated</dt>
+            <dd :title="text(record.escalatedAt)">{{ agoWhen(record.escalatedAt) || '—' }}</dd>
+            <dt>Resolved</dt>
+            <dd :title="text(record.resolvedAt)">{{ agoWhen(record.resolvedAt) || '—' }}</dd>
+            <dt>Closed</dt>
+            <dd :title="text(record.closedAt)">{{ agoWhen(record.closedAt) || '—' }}</dd>
+            <dt>Suppressed until</dt>
+            <dd data-testid="lifecycle-detail-suppressed" :title="text(record.suppressedUntil)">
+              {{ shortWhen(record.suppressedUntil) || '—' }}
+            </dd>
+            <dt>Correlation</dt>
+            <dd class="mono clamp-1" :title="text(record.correlationGroup)">
+              {{ text(record.correlationGroup) }}
+            </dd>
+            <dt>Alert id</dt>
+            <dd class="mono clamp-1" :title="text(record.id)">{{ text(record.id) }}</dd>
+          </dl>
+
           <!-- Thread ----------------------------------------------------------- -->
-          <h3>Thread</h3>
+          <h3 class="panel-heading">Timeline</h3>
           <p class="source-note">
             {{ operatorComments.length }} operator comment(s) and
             {{ transitionEntries.length }} recorded transition(s). Transitions are written by the
@@ -1093,12 +1386,11 @@ onMounted(() => {
             {{ commentsError }}
           </p>
           <template v-else>
-            <EventTimeline
-              v-if="incidentTimeline.length"
-              :items="incidentTimeline"
-              dense
-              data-testid="lifecycle-thread"
-            />
+            <!-- Capped: a long-running incident with a busy thread would
+                 otherwise push the comment box off the end of the sheet. -->
+            <div v-if="incidentTimeline.length" class="capped-list">
+              <EventTimeline :items="incidentTimeline" dense data-testid="lifecycle-thread" />
+            </div>
             <p
               v-if="commentsState === 'ok' && !comments.length"
               class="source-note"

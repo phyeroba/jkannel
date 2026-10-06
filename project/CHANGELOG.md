@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-06b (the lifecycle desk, in the house shape)
+
+`/alert-lifecycle` had the right content and the wrong shape. Its columns were
+grouped back in September, but the screen still opened on a seven-control
+toolbar and a status dropdown with no counts, and its sheet put five badges,
+nine fields and two banners above the first button an operator came to press.
+
+**Tabs with whole-table counts.** `GET /alerts/summary` — built for `/alerts`
+and already tallying through the same tenant-scoped connection as the list — now
+feeds this screen too. Each tab sets the **server-side** status filter, so the
+number on the tab and the rows beneath it measure the same thing. A client-side
+tab over a paginated register would not. The tally is validated on arrival: a
+deployment answering 200 with something that is not a tally yields `null`, not an
+object whose `byStatus` is undefined and which throws mid-render.
+
+**A verdict that leads on *unclaimed*, not *open*.** An open alert somebody has
+taken is being worked; an open alert nobody has taken is the one that gets
+missed. The line names the count and the age of the oldest.
+
+**The live line** replaces `Auto refresh [On] · Every [30s] · (Refresh) · Last
+updated 09:50:54` — four controls and a caption stating one idea.
+
+**Severity is a segmented control.** Four mutually exclusive choices that fit on
+one line should not cost a click to see.
+
+**The sheet leads with the actions.** Then the record, as a 130px field grid with
+relative times and the instants in `title`; then the timeline, capped so a busy
+thread cannot push the comment box off the end.
+
+Frontend **750 tests pass** (744 before; 6 new, covering the whole-table counts,
+the refusal to render zeros when the tally fails, the tab→filter round trip, and
+the order of the sheet).
+
 ## 2026-10-06 (the bind timeline that had no end)
 
 `/sessions-smpp`, rebuilt to CONSOLE_DESIGN_SPEC §1 rather than patched. Peter's

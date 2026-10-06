@@ -102,6 +102,8 @@ const mountView = async (path = '/alert-lifecycle') => {
         component: AlertLifecycleView,
         meta: { title: 'Alert Lifecycle' },
       },
+      { path: '/alerts', component: { template: '<p/>' } },
+      { path: '/alert-response', component: { template: '<p/>' } },
     ],
   });
   await router.push(path);
@@ -168,7 +170,11 @@ describe('Alert lifecycle view', () => {
     await vi.waitFor(() =>
       expect(overlayHas(wrapper, '[data-testid="lifecycle-detail-assignee"]')).toBe(true),
     );
-    expect(overlay(wrapper, '[data-testid="lifecycle-detail-assignee"]').text()).toBe('joel');
+    // Who has it, and since when. The age qualifies the name rather than
+    // costing a second field; the exact instant is in the cell's `title`.
+    const assignee = overlay(wrapper, '[data-testid="lifecycle-detail-assignee"]');
+    expect(assignee.text()).toContain('joel');
+    expect(assignee.text()).toMatch(/\d+[smhd] ago/);
     expect(overlay(wrapper, '[data-testid="lifecycle-detail-notification"]').text()).toContain(
       'undeliverable',
     );
@@ -326,6 +332,122 @@ describe('Alert lifecycle view', () => {
         body: 'Paging the carrier.',
       });
     });
+    wrapper.unmount();
+  });
+});
+
+/**
+ * The 2026-10-06 rebuild: the five bands of CONSOLE_DESIGN_SPEC §1. The
+ * screen had the right content and the wrong shape — it opened on a
+ * seven-control toolbar and a status dropdown with no counts.
+ */
+const TALLY = {
+  total: 312,
+  byStatus: { open: 42, acknowledged: 9, suppressed: 2, resolved: 200, closed: 59 },
+  bySeverity: { critical: 11, warning: 140, info: 161 },
+  openBySeverity: { critical: 3, warning: 39 },
+  unacknowledged: 33,
+  oldestOpenedAt: '2026-08-04T09:00:00Z',
+  resolved30d: 88,
+  medianResolveSeconds: 4920,
+};
+const withTally = (extra: (url: string) => unknown = () => undefined) =>
+  stubApi((url) => (url.includes('/alerts/summary') ? apiResponse(TALLY) : extra(url)));
+
+describe('Alert lifecycle view — the five bands', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    permissions.value = new Set(['alerts.view', 'alerts.acknowledge', 'system.manage']);
+  });
+
+  it('counts the whole table on the tabs, not the loaded page', async () => {
+    withTally();
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlay(wrapper, '[data-testid="lifecycle-tab-open"]').text()).toContain('42'),
+    );
+    // One row is loaded; the tab must not say 1.
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true);
+    expect(overlay(wrapper, '[data-testid="lifecycle-tab-all"]').text()).toContain('312');
+    expect(overlay(wrapper, '[data-testid="lifecycle-stat-open"]').text()).toBe('42');
+    expect(overlay(wrapper, '[data-testid="lifecycle-stat-median"]').text()).toBe('1h 22m');
+    wrapper.unmount();
+  });
+
+  it('leads with the unclaimed verdict and the age of the oldest', async () => {
+    withTally();
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-status-line"]')).toBe(true),
+    );
+    const line = overlay(wrapper, '[data-testid="lifecycle-status-line"]');
+    await vi.waitFor(() => expect(line.text()).toContain('Unclaimed'));
+    expect(line.text()).toContain('33 alert(s) have been raised and nobody has taken them');
+    expect(line.text()).toMatch(/oldest opened \d+[smhd] ago/i);
+    wrapper.unmount();
+  });
+
+  it('renders no strip at all when the tally cannot be read', async () => {
+    // The default stub answers /alerts/summary with something that is not a
+    // tally. Zeros would report an empty system, so the strip is absent and
+    // the counts come off the tabs.
+    stubApi();
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
+    );
+    expect(overlayHas(wrapper, '[data-testid="lifecycle-strip"]')).toBe(false);
+    expect(overlay(wrapper, '[data-testid="lifecycle-tab-open"]').text().trim()).toBe('Open');
+    expect(overlay(wrapper, '[data-testid="lifecycle-status-line"]').text()).toContain(
+      'this page only',
+    );
+    wrapper.unmount();
+  });
+
+  it('opens on Open and sends the tab to the API as the status filter', async () => {
+    const fetchMock = withTally();
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-row-a1"]')).toBe(true),
+    );
+    const urls = () =>
+      fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes('/alerts?'));
+    expect(urls()[0]).toContain('filter.status=open');
+
+    await overlay(wrapper, '[data-testid="lifecycle-tab-resolved"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(urls().some((url) => url.includes('filter.status=resolved'))).toBe(true),
+    );
+    // "All" must clear the filter rather than sending an empty one.
+    await overlay(wrapper, '[data-testid="lifecycle-tab-all"]').trigger('click');
+    await vi.waitFor(() => expect(urls().at(-1)).not.toContain('filter.status'));
+    wrapper.unmount();
+  });
+
+  it('filters severity from a segmented control rather than a dropdown', async () => {
+    const fetchMock = withTally();
+    const wrapper = await mountView();
+    await vi.waitFor(() =>
+      expect(overlayHas(wrapper, '[data-testid="lifecycle-severity-critical"]')).toBe(true),
+    );
+    await overlay(wrapper, '[data-testid="lifecycle-severity-critical"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('filter.severity=critical')),
+      ).toBe(true),
+    );
+    wrapper.unmount();
+  });
+
+  it('puts the actions above the record, not below it', async () => {
+    withTally();
+    const wrapper = await mountView('/alert-lifecycle?alert=a1');
+    await vi.waitFor(() => expect(overlayHas(wrapper, '[data-testid="lifecycle-actions"]')).toBe(true));
+    const sheet = overlay(wrapper, '[data-testid="lifecycle-detail-panel"]').html();
+    // The control an operator came for comes before the reference they check
+    // afterwards. Position in the markup is the only way to assert order.
+    expect(sheet.indexOf('lifecycle-actions')).toBeLessThan(sheet.indexOf('panel-fields'));
     wrapper.unmount();
   });
 });

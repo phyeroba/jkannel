@@ -1734,3 +1734,84 @@ tbody td.cell-clip .row-id {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* THE HOUSE SIDE PANEL ------------------------------------------------------
+   Actions at the top, reference below them, history last. The order is the
+   point: a sheet that opens on five badges and nine fields makes an operator
+   read a screen of reference before reaching the control they came for.
+
+   Same note as the bands above — Alerts and the dashboard carry scoped copies
+   that still win on specificity; these are here so a screen can adopt the
+   shape without a third copy. */
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-fields {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  row-gap: 10px;
+  column-gap: 12px;
+  margin: 0 0 22px;
+  font-size: 13px;
+}
+.panel-fields dt {
+  color: var(--muted);
+}
+.panel-fields dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+/* A qualifier under a value — "raised from warning", "reopened 2 times" —
+   rather than a second field nobody asked for. */
+.panel-fields dd .row-id {
+  display: block;
+  margin-top: 2px;
+}
+/* The uppercase rule a section of the sheet gets. `h3` at body weight reads
+   as a paragraph that happens to be bold. */
+.panel-heading {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.panel-lede {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+/* A severity marker beside its word. The word is the signal; this repeats
+   it (§17.1) and never replaces it. */
+.sev-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.sev-dot.bad {
+  background: var(--bad, #b42318);
+}
+.sev-dot.warn {
+  background: var(--warn, #9a6700);
+}
+.sev-dot.good {
+  background: var(--ok, #1a7f37);
+}
+.sev-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-transform: capitalize;
+}
