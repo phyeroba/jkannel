@@ -843,7 +843,7 @@ onMounted(() => {
                   to two lines now, with the whole line on hover and the full
                   entry a click away in the detail panel.
                 -->
-                <td class="cell-wrap">
+                <td class="cell-wrap log-message">
                   <span class="clamp-2" :title="text(entry.message)">{{
                     text(entry.message)
                   }}</span>
@@ -958,6 +958,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* The buffer carries nine columns, so the message gets less room than the
+   shared `.cell-wrap` cap allows. Two lines at 300px is still a readable
+   excerpt, and the whole line is in `title` and in the detail panel. */
+tbody td.log-message {
+  max-width: 300px;
+}
 /* A sortable header is a button so it is reachable by keyboard and announced as
    one, but it must not LOOK like a button — the kit's table head is a quiet
    band and a row of controls in it would shout. So it inherits the `th`'s own
