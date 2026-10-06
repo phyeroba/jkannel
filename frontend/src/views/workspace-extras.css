@@ -1293,8 +1293,12 @@ tbody td .chip-list {
    Applied per column. A blanket version of this on every `td` was tried
    and failed the overflow audit on 84 screens, because most cells should
    size to their content. */
+/* 240, not 260. Four clipped columns on the audit register is nearly a
+   thousand pixels of cap before the first readable word, and twenty of them
+   was the whole of that register's remaining overflow. A clip only ever
+   shortens, and the full value is in `title`. */
 tbody td.cell-clip {
-  max-width: 260px;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

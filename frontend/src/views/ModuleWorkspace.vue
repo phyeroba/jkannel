@@ -551,6 +551,8 @@ const definitions: Record<string, Workspace> = {
         value: (raw) => text(raw.name),
         dot: (raw) => smscDotClass(raw),
         hint: (raw) => text(raw.engine_id ?? raw.engineId, ''),
+        // The engine id is matched or copied, never read end to end.
+        clip: true,
       },
       {
         header: 'Carrier',
@@ -559,6 +561,7 @@ const definitions: Record<string, Workspace> = {
           [raw.carrier_country ?? raw.carrierCountry, raw.carrier_network ?? raw.carrierNetwork]
             .filter(Boolean)
             .join(' · '),
+        clip: true,
       },
       // Protocol and host:port are one answer to "where does this dial".
       {

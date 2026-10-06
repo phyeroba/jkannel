@@ -115,11 +115,35 @@ async function capture(name, note, extra = {}) {
       }))
       .filter((row) => row.px > 4)
       .map((row) => `${row.panel} +${row.px}/${row.cols}col`),
-    // A dialog taller than the window is the drawer-buries-its-controls
-    // defect, which no existing audit looks for.
-    dialogOverflow: [...document.querySelectorAll('[role="dialog"], .drawer-body')]
-      .map((node) => node.scrollHeight - window.innerHeight)
-      .filter((value) => value > 0),
+    /*
+     * Is the dialog's commit button reachable without scrolling?
+     *
+     * The first version measured the dialog's HEIGHT, which is the wrong
+     * question: a long form is fine, a long form whose Save you cannot see
+     * is not. It also scored the SMSC editor as *worse* after the fix that
+     * made Save permanently visible, because a sticky footer adds height.
+     *
+     * So this asks what an operator asks: is the primary action on screen?
+     * A sticky or fixed footer is reachable by definition, whatever the form
+     * above it measures.
+     */
+    buriedAction: [...document.querySelectorAll('[role="dialog"], .drawer-body')]
+      .flatMap((node) => [
+        ...node.querySelectorAll('.primary-button, button[type="submit"]'),
+      ])
+      .filter((button) => {
+        for (let el = button; el && el !== document.body; el = el.parentElement) {
+          const position = getComputedStyle(el).position;
+          if (position === 'sticky' || position === 'fixed') return false;
+        }
+        return button.getBoundingClientRect().bottom > window.innerHeight + 4;
+      })
+      .map(
+        (button) =>
+          `${(button.textContent ?? '').trim().slice(0, 24)} +${Math.round(
+            button.getBoundingClientRect().bottom - window.innerHeight,
+          )}`,
+      ),
   }));
   index.push({ file, note, ...measured, ...extra });
   return file;
@@ -238,7 +262,7 @@ for (const entry of index)
       ? `  FAILED ${entry.note} — ${entry.error}`
       : `  ${String(entry.height).padStart(6)}px ${
           entry.overflow.length ? `overflow ${entry.overflow.join(',')}`.padEnd(22) : ''.padEnd(22)
-        }${entry.dialogOverflow?.length ? `dialog +${entry.dialogOverflow.join(',')} ` : ''}${entry.note}`,
+        }${entry.buriedAction?.length ? `BURIED[${entry.buriedAction.join('; ')}] ` : ''}${entry.note}`,
   );
 console.log(`\n${discovered.length} screen(s) found by link that the navigation does not list.`);
 await browser.close();

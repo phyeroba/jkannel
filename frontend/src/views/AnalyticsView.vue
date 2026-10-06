@@ -1148,24 +1148,51 @@ onMounted(() => void refreshAll());
                     also unbounded, which is the +196px.
                   -->
                   <th scope="col">{{ group.unit }}</th>
-                  <th scope="col">Messages</th>
-                  <th scope="col">DLRs</th>
-                  <th scope="col">Success</th>
-                  <th scope="col">Failure</th>
+                  <th scope="col">Volume</th>
+                  <th scope="col">Outcome</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
                   <td class="cell-clip" :title="row.label">{{ row.label }}</td>
-                  <td>{{ row.messages }}</td>
-                  <td>{{ row.dlrs }}</td>
+                  <!-- These panels sit two to a row, so the table has half a
+                       screen to work in. Messages and DLRs are one answer
+                       about volume; success and failure are two halves of one
+                       ratio. Five columns in a half-width panel ran 196px
+                       past it; three do not. -->
                   <td>
-                    <span class="status-badge good">{{ formatRate(row.successRate) }}</span>
+                    <span class="metric-stack">
+                      <span class="metric-line">
+                        <span class="v mono">{{ row.messages }}</span>
+                        <span class="k">messages</span>
+                      </span>
+                      <span class="metric-line">
+                        <span class="v mono">{{ row.dlrs }}</span>
+                        <span class="k">DLRs</span>
+                      </span>
+                    </span>
                   </td>
                   <td>
-                    <span class="status-badge" :class="row.failureRate > 0 ? 'muted' : ''">{{
-                      formatRate(row.failureRate)
-                    }}</span>
+                    <span class="metric-stack">
+                      <span class="metric-line">
+                        <span class="v">
+                          <span class="status-badge good">{{
+                            formatRate(row.successRate)
+                          }}</span>
+                        </span>
+                        <span class="k">delivered</span>
+                      </span>
+                      <span class="metric-line">
+                        <span class="v">
+                          <span
+                            class="status-badge"
+                            :class="row.failureRate > 0 ? 'muted' : ''"
+                            >{{ formatRate(row.failureRate) }}</span
+                          >
+                        </span>
+                        <span class="k">failed</span>
+                      </span>
+                    </span>
                   </td>
                 </tr>
               </tbody>
