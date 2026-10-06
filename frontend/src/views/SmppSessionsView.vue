@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * SMPP SESSIONS (PLAN.md 2.5, spec §5).
+ * SMPP SESSIONS (PLAN.md 2.5, spec §5; rebuilt to CONSOLE_DESIGN_SPEC §1).
  *
  * THIS SCREEN IS NAMED FOR SOMETHING IT CANNOT SHOW, AND SAYS SO.
  *
@@ -22,6 +22,24 @@
  * `limits` block the API returns is rendered in full, grouped by reason so an
  * `instances = 3` connection's sentence is never read as covering the rest.
  *
+ * WHAT THE 2026-10 REBUILD CHANGED
+ * ---------------------------------------------------------------------------
+ * The screen had the right content in the wrong shape. Peter's report was that
+ * the bind timeline "is too long"; measuring found two faults with one cause —
+ * nothing on the page was bounded.
+ *
+ *   - The timeline grew one row per transition with no cap, so a week of
+ *     flapping pushed the page to several screens of rail. It is now a capped
+ *     scroll region that says how much it is showing, with a filter for the
+ *     transitions that are actually problems.
+ *   - Thirteen columns ran 588px past the panel. Three separate timestamp
+ *     columns (Since, Last observed, Last transition) answer one question —
+ *     how long has it been like this — so they are now one cell, and the four
+ *     throughput columns are another. Seven columns, nothing dropped.
+ *   - The five bands of §1 are now in order: verdict, figures, tabs + live,
+ *     filters, rows. Before this the first thing on the screen after the scope
+ *     note was a row of seven dropdowns.
+ *
  * Backend contract:
  *   GET /smscs?search=&filter.type=&filter.enabled=&filter.lifecycleState=
  *              &sort=&limit=&offset=      (server-side grid, console.repository.ts)
@@ -30,13 +48,16 @@
  * `/sessions` is user login sessions and stays that way; this is a distinct
  * path with a distinct label.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
+import AppIcon from '../components/AppIcon.vue';
 import DataState from '../components/DataState.vue';
-import ObservabilityLimits from '../components/ObservabilityLimits.vue';
-import EventTimeline from '../components/EventTimeline.vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
+import EventTimeline from '../components/EventTimeline.vue';
+import ObservabilityLimits from '../components/ObservabilityLimits.vue';
+import TablePager from '../components/TablePager.vue';
 import { displayValue, type DataState as State } from '../utils/data-state';
+import { agoWhen } from '../utils/when';
 import {
   bindTone,
   bindWord,
@@ -45,6 +66,7 @@ import {
   formatRate,
   formatUtilisation,
   mapWithConcurrency,
+  utilisationTone,
   type ObservabilityLimits as Limits,
   type SmscDetail,
   type SmscRow,
@@ -60,6 +82,8 @@ const SORT_FIELDS = [
   { value: 'updatedAt', label: 'last updated' },
 ];
 const PAGE_SIZES = [10, 25, 50];
+/** Matches the alerts register, so "Live" means the same thing on both. */
+const REFRESH_SECONDS = 30;
 
 const rows = ref<SmscDetail[]>([]);
 
@@ -93,31 +117,161 @@ const flapping = computed(() =>
     .sort((a, b) => b.reconnects - a.reconnects),
 );
 
+/** The tone a transition's destination state deserves on the rail. */
+function transitionTone(toState: string | null | undefined): 'ok' | 'error' | 'missing' | 'warn' {
+  if (toState === 'bound') return 'ok';
+  if (toState === 'failed' || toState === 'disconnected') return 'error';
+  if (toState === null || toState === undefined) return 'missing';
+  return 'warn';
+}
+
 /**
  * Every bind's history on one rail, newest first — the design system's "Bind
  * timeline". Reading one bind's page tells you what happened to that bind;
  * this answers the different question of what happened to the estate, which is
  * how a correlated outage across several carriers becomes visible at all.
+ *
+ * Built in full first so the count beside the heading is the real number of
+ * transitions, then capped for rendering. A panel that shows fifty of three
+ * hundred and says "fifty" is not showing the estate's history, it is showing
+ * a window onto it, and the difference matters when you are asking whether
+ * four carriers dropped at the same moment.
  */
-const bindTimeline = computed(() =>
+const TIMELINE_CAP = 40;
+const timelineFilter = ref<'all' | 'problems'>('all');
+const allTransitions = computed(() =>
   rows.value
     .flatMap((row) => (row.transitions ?? []).map((entry) => ({ row, entry })))
-    .sort((a, b) => String(b.entry.observedAt).localeCompare(String(a.entry.observedAt)))
-    .slice(0, 50)
-    .map(({ row, entry }) => ({
-      at: formatMoment(entry.observedAt),
-      label: `${row.name}: ${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
-      detail: entry.kind,
-      state:
-        entry.toState === 'bound'
-          ? ('ok' as const)
-          : entry.toState === 'failed' || entry.toState === 'disconnected'
-            ? ('error' as const)
-            : entry.toState === null
-              ? ('missing' as const)
-              : ('warn' as const),
-    })),
+    .sort((a, b) => String(b.entry.observedAt).localeCompare(String(a.entry.observedAt))),
 );
+/** Problems only: anything that is not a transition INTO a bound state. */
+const filteredTransitions = computed(() =>
+  timelineFilter.value === 'problems'
+    ? allTransitions.value.filter(({ entry }) => transitionTone(entry.toState) !== 'ok')
+    : allTransitions.value,
+);
+const bindTimeline = computed(() =>
+  filteredTransitions.value.slice(0, TIMELINE_CAP).map(({ row, entry }) => ({
+    // Relative in the rail, exact in the title — a rail of ISO strings is the
+    // same wall of text the register was.
+    at: agoWhen(entry.observedAt),
+    label: `${row.name}: ${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+    detail: `${entry.kind} · ${formatMoment(entry.observedAt)}`,
+    state: transitionTone(entry.toState),
+  })),
+);
+const timelineCountLabel = computed(() => {
+  const total = allTransitions.value.length;
+  const matching = filteredTransitions.value.length;
+  const shown = Math.min(matching, TIMELINE_CAP);
+  if (!total) return 'none recorded';
+  if (timelineFilter.value === 'problems')
+    return shown < matching
+      ? `${shown} of ${matching} problem transitions · ${total} in all`
+      : `${matching} problem transitions · ${total} in all`;
+  return shown < total ? `${shown} most recent of ${total}` : `${total} transitions`;
+});
+
+const state = ref<State>('loading');
+const error = ref('');
+/** Connections whose detail read failed; named so `partial` means something. */
+const missed = ref<string[]>([]);
+
+/* --- the verdict ---------------------------------------------------------
+   §1 puts the verdict first. On a register of forty binds the question an
+   operator arrives with is "is anything down", and the answer was previously
+   only derivable by reading the State column of every row. */
+const notBound = computed(() =>
+  rows.value.filter((row) => row.bindState && row.bindState !== 'bound'),
+);
+const neverObserved = computed(() => rows.value.filter((row) => !row.bindState));
+/**
+ * Never green on an absence of evidence. A page where nothing has been
+ * observed is not a page where everything is fine, and the dashboard already
+ * made that mistake once.
+ */
+const verdictTone = computed(() => {
+  if (state.value !== 'live' && state.value !== 'partial') return 'unknown';
+  if (!rows.value.length) return 'unknown';
+  if (notBound.value.length) return 'bad';
+  if (neverObserved.value.length) return 'unknown';
+  if (flapping.value.length) return 'warn';
+  return 'good';
+});
+const verdictWord = computed(
+  () =>
+    ({
+      good: 'All bound',
+      warn: 'Flapping',
+      bad: 'Not bound',
+      unknown: 'Unverified',
+    })[verdictTone.value],
+);
+const verdictSentence = computed(() => {
+  if (state.value === 'loading') return 'Reading bind state for each connection…';
+  if (!rows.value.length) return 'No bind matched these filters, so there is nothing to assess.';
+  const parts: string[] = [];
+  if (notBound.value.length)
+    parts.push(
+      `${notBound.value.length} bind(s) observed in a state other than bound: ${notBound.value
+        .map((row) => row.name)
+        .join(', ')}`,
+    );
+  if (neverObserved.value.length)
+    parts.push(
+      `${neverObserved.value.length} have never been observed at all: ${neverObserved.value
+        .map((row) => row.name)
+        .join(', ')}`,
+    );
+  if (flapping.value.length)
+    parts.push(
+      `${flapping.value.length} have come up ${FLAP_THRESHOLD} or more times rather than coming up and staying`,
+    );
+  if (!parts.length)
+    return `All ${rows.value.length} bind(s) on this page are bound, and none has flapped.`;
+  return `${parts.join('. ')}.`;
+});
+/** The one to open first: a bind that is down beats one nobody has watched. */
+const worstBind = computed(
+  () => notBound.value[0] ?? flapping.value[0]?.row ?? neverObserved.value[0] ?? null,
+);
+
+/**
+ * Tabs over the LOADED PAGE, and the footer says so.
+ *
+ * The API can neither filter nor sort on bind state (it is written by the
+ * poller into a side table the grid does not join), so these cannot be
+ * server-side. A tab that silently counts one page of a paginated estate is
+ * the "open 50 while three hundred are open" mistake — so the count is
+ * labelled as the page's throughout, rather than presented as the estate's.
+ */
+const TABS = [
+  { id: 'all', label: 'All' },
+  { id: 'bound', label: 'Bound' },
+  { id: 'notbound', label: 'Not bound' },
+  { id: 'unobserved', label: 'Never observed' },
+  { id: 'flapping', label: 'Flapping' },
+] as const;
+type TabId = (typeof TABS)[number]['id'];
+const activeTab = ref<TabId>('all');
+
+function matchesTab(row: SmscDetail, tab: TabId): boolean {
+  switch (tab) {
+    case 'bound':
+      return row.bindState === 'bound';
+    case 'notbound':
+      return Boolean(row.bindState) && row.bindState !== 'bound';
+    case 'unobserved':
+      return !row.bindState;
+    case 'flapping':
+      return reconnectCount(row) >= FLAP_THRESHOLD;
+    default:
+      return true;
+  }
+}
+const tabCount = (tab: TabId) => rows.value.filter((row) => matchesTab(row, tab)).length;
+const visibleRows = computed(() => rows.value.filter((row) => matchesTab(row, activeTab.value)));
+
 /**
  * The bind opened in the detail sheet.
  *
@@ -135,11 +289,6 @@ const openBind = computed(
   () => rows.value.find((row) => row.engineId === openBindId.value) ?? null,
 );
 
-const state = ref<State>('loading');
-const error = ref('');
-/** Connections whose detail read failed; named so `partial` means something. */
-const missed = ref<string[]>([]);
-
 const total = ref(0);
 const limit = ref(25);
 const offset = ref(0);
@@ -150,17 +299,9 @@ const lifecycleFilter = ref('');
 const sortField = ref('name');
 const sortDirection = ref<'asc' | 'desc'>('asc');
 
-const rangeLabel = computed(() =>
-  rows.value.length
-    ? `Showing ${offset.value + 1}–${offset.value + rows.value.length} of ${total.value}`
-    : 'Showing 0 of 0',
-);
-
 const boundCount = computed(() => rows.value.filter((row) => row.bindState === 'bound').length);
-const unobservedCount = computed(() => rows.value.filter((row) => !row.bindState).length);
-const notBoundCount = computed(
-  () => rows.value.filter((row) => row.bindState && row.bindState !== 'bound').length,
-);
+const unobservedCount = computed(() => neverObserved.value.length);
+const notBoundCount = computed(() => notBound.value.length);
 /** Real SMPP sessions behind the rows on this page, from configuration. */
 const configuredSessions = computed(() =>
   rows.value.reduce((sum, row) => sum + Math.max(1, row.limits?.configuredInstances ?? 1), 0),
@@ -188,6 +329,19 @@ const limitGroups = computed(() => {
 function messageFrom(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
+
+/* --- the live line -------------------------------------------------------
+   One line stating one idea, per §3. The previous screen had no refresh at
+   all: a register of bind state that never re-reads is a photograph, and an
+   operator watching a carrier come back up had to reload the browser. */
+const paused = ref(false);
+const lastRead = ref<Date | null>(null);
+const sinceRead = ref(0);
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let tickTimer: ReturnType<typeof setInterval> | undefined;
+const refreshedLabel = computed(() =>
+  lastRead.value ? `updated ${sinceRead.value}s ago` : 'not yet read',
+);
 
 async function load() {
   state.value = 'loading';
@@ -224,6 +378,8 @@ async function load() {
     state.value =
       reason instanceof ApiError && reason.status === 403 ? 'permission-denied' : 'error';
   }
+  lastRead.value = new Date();
+  sinceRead.value = 0;
 }
 
 function applyFilters() {
@@ -238,24 +394,81 @@ function turnPage(direction: number) {
   void load();
 }
 
-function lastTransition(row: SmscDetail): string {
+/** The newest transition, as an age. `title` keeps the exact instant. */
+function lastTransitionAge(row: SmscDetail): string {
   const entry = row.transitions?.[0];
-  if (!entry) return 'none recorded';
-  return `${entry.kind} · ${formatMoment(entry.observedAt)}`;
+  return entry ? agoWhen(entry.observedAt) : 'none recorded';
+}
+function lastTransitionKind(row: SmscDetail): string {
+  const entry = row.transitions?.[0];
+  return entry ? entry.kind : 'no transition recorded';
+}
+function lastTransitionMoment(row: SmscDetail): string {
+  const entry = row.transitions?.[0];
+  return entry ? formatMoment(entry.observedAt) : 'never';
+}
+/** Width of the utilisation bar, or null when the ratio is not measurable. */
+function utilisationWidth(row: SmscDetail): string | null {
+  const value = row.capacity?.utilisation;
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return `${Math.min(100, Math.max(2, Math.round(value * 100)))}%`;
 }
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  refreshTimer = setInterval(() => {
+    if (!paused.value && state.value !== 'loading') void load();
+  }, REFRESH_SECONDS * 1000);
+  tickTimer = setInterval(() => {
+    if (lastRead.value) sinceRead.value = Math.floor((Date.now() - lastRead.value.getTime()) / 1000);
+  }, 1000);
+});
+onBeforeUnmount(() => {
+  clearInterval(refreshTimer);
+  clearInterval(tickTimer);
+});
 </script>
 
 <template>
   <div data-testid="smpp-sessions-view">
-    <!--
-      THE HEADLINE STATEMENT. First thing on the screen, before any figure,
-      because the gap between what this screen is called and what it can show is
-      the single most important thing an operator needs to know about it.
+    <!-- HEADER BAND ------------------------------------------------------- -->
+    <header class="screen-head">
+      <div class="screen-actions">
+        <RouterLink class="secondary-button" to="/smsc" data-testid="sessions-open-smsc">
+          SMSC Connections
+        </RouterLink>
+        <RouterLink class="secondary-button" to="/carriers">Carriers</RouterLink>
+      </div>
+    </header>
+
+    <!-- THE VERDICT -------------------------------------------------------
+      §1 band one. Previously the first thing after the scope note was a row of
+      seven dropdowns, and "is anything down" could only be answered by reading
+      the State column of every row.
     -->
-    <section class="panel scope-note" data-testid="sessions-scope" aria-labelledby="scope-heading">
-      <h2 id="scope-heading">This is a register of binds, not of sessions</h2>
+    <section class="status-line" :class="`is-${verdictTone}`" data-testid="sessions-status">
+      <span class="status-chip">
+        <span class="status-dot" aria-hidden="true"></span>{{ verdictWord }}
+      </span>
+      <p data-testid="sessions-summary" aria-live="polite">{{ verdictSentence }}</p>
+      <RouterLink
+        v-if="worstBind"
+        class="secondary-button is-compact"
+        :to="`/smsc/${worstBind.engineId}`"
+        data-testid="sessions-open-worst"
+      >
+        Open {{ worstBind.name }}
+      </RouterLink>
+    </section>
+
+    <!--
+      THE HEADLINE STATEMENT. The gap between what this screen is called and
+      what it can show is the most important thing an operator needs to know
+      about it — but it is read once and then known, so it is a disclosure that
+      opens to the full paragraph rather than four lines above every visit.
+    -->
+    <details class="panel scope-note" data-testid="sessions-scope">
+      <summary>This is a register of binds, not of sessions</summary>
       <p>
         A “session” in SMPP is one bound TCP connection. This gateway's engine does not expose them
         individually: it reports one entry per <span class="mono">smsc-id</span>, and an SMSC
@@ -264,55 +477,100 @@ onMounted(load);
         invent one. Each row below is a <strong>configured bind</strong> and everything on it is the
         total across whatever sessions that bind is running.
       </p>
+    </details>
+
+    <!-- SUMMARY STRIP ----------------------------------------------------- -->
+    <section class="stat-strip" data-testid="sessions-strip">
+      <article>
+        <p class="stat-label">Bound</p>
+        <b class="stat-figure" data-testid="sessions-metric-bound">{{
+          displayValue(boundCount, state)
+        }}</b>
+        <p class="stat-caption">Observed bound on this page</p>
+      </article>
+      <article>
+        <p class="stat-label">Observed, not bound</p>
+        <b class="stat-figure" data-testid="sessions-metric-notbound">{{
+          displayValue(notBoundCount, state)
+        }}</b>
+        <p class="stat-caption">
+          <template v-if="notBound.length">{{ notBound.map((row) => row.name).join(' · ') }}</template>
+          <template v-else>nothing down</template>
+        </p>
+      </article>
+      <article>
+        <p class="stat-label">Never observed</p>
+        <b class="stat-figure" data-testid="sessions-metric-unobserved">{{
+          displayValue(unobservedCount, state)
+        }}</b>
+        <p class="stat-caption">No poll has ever recorded a state</p>
+      </article>
+      <article>
+        <p class="stat-label">SMPP sessions configured</p>
+        <b class="stat-figure" data-testid="sessions-metric-configured">{{
+          displayValue(configuredSessions, state)
+        }}</b>
+        <!--
+          Said on the figure itself, not only in a footnote: this is the one
+          number on the strip that is not an observation.
+        -->
+        <p class="stat-caption" data-testid="sessions-configured-note">
+          Behind these binds · <strong>configuration, not observation</strong>
+        </p>
+      </article>
     </section>
 
-    <section class="panel" data-testid="sessions-panel" aria-labelledby="sessions-heading">
-      <header class="panel-header">
-        <div>
-          <h2 id="sessions-heading">SMPP Sessions</h2>
-          <p aria-live="polite" data-testid="sessions-summary">
-            {{
-              state === 'loading'
-                ? 'Reading bind state for each connection…'
-                : `${rows.length} bind(s) on this page.`
-            }}
-          </p>
+    <section class="panel">
+      <!-- TABS + LIVE LINE ------------------------------------------------
+        Buttons in a group, not a tablist: the rows below stay on screen and
+        are filtered, so nothing is swapping panels.
+      -->
+      <div class="tab-bar">
+        <div class="tab-row" role="group" aria-label="Filter binds by state, on this page">
+          <button
+            v-for="tab in TABS"
+            :key="tab.id"
+            type="button"
+            class="tab"
+            :class="{ 'is-active': activeTab === tab.id }"
+            :aria-pressed="activeTab === tab.id"
+            :data-testid="`sessions-tab-${tab.id}`"
+            @click="activeTab = tab.id"
+          >
+            {{ tab.label }}
+            <span class="tab-count">{{ tabCount(tab.id) }}</span>
+          </button>
         </div>
-      </header>
-
-      <div class="summary-strip">
-        <div class="metric">
-          <strong data-testid="sessions-metric-bound">{{ displayValue(boundCount, state) }}</strong>
-          <small>bound</small>
-        </div>
-        <div class="metric">
-          <strong data-testid="sessions-metric-notbound">{{
-            displayValue(notBoundCount, state)
-          }}</strong>
-          <small>observed, not bound</small>
-        </div>
-        <div class="metric">
-          <strong data-testid="sessions-metric-unobserved">{{
-            displayValue(unobservedCount, state)
-          }}</strong>
-          <small>never observed</small>
-        </div>
-        <div class="metric">
-          <strong data-testid="sessions-metric-configured">{{
-            displayValue(configuredSessions, state)
-          }}</strong>
-          <small>SMPP sessions configured behind these binds</small>
+        <div class="live-line" data-testid="sessions-live">
+          <span class="live-dot" :class="{ 'is-paused': paused }" aria-hidden="true"></span>
+          <span
+            >{{ paused ? 'Paused' : 'Live' }} · {{ refreshedLabel }} · every
+            {{ REFRESH_SECONDS }}s</span
+          >
+          <button
+            class="secondary-button is-compact"
+            type="button"
+            data-testid="sessions-pause"
+            @click="paused = !paused"
+          >
+            {{ paused ? 'Resume' : 'Pause' }}
+          </button>
+          <button
+            class="secondary-button is-compact"
+            type="button"
+            data-testid="sessions-refresh"
+            :disabled="state === 'loading'"
+            @click="load"
+          >
+            <AppIcon name="refresh" :size="14" />Refresh
+          </button>
         </div>
       </div>
-      <p class="source-note" data-testid="sessions-configured-note">
-        The last figure is <strong>configuration, not observation</strong>: it is the sum of the
-        configured connection counts, which is how many sessions the engine was told to open. How
-        many are actually up right now is not reported.
-      </p>
 
-      <div class="grid-toolbar">
+      <!-- FILTER ROW ------------------------------------------------------ -->
+      <div class="filter-row">
         <label class="filter-select filter-search">
-          <span>Search</span>
+          <span class="sr-only">Search binds</span>
           <input
             v-model="search"
             data-testid="sessions-search"
@@ -321,7 +579,7 @@ onMounted(load);
             @keyup.enter="applyFilters"
           />
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Protocol</span>
           <select v-model="typeFilter" data-testid="sessions-filter-type" @change="applyFilters">
             <option value="smpp">smpp</option>
@@ -331,7 +589,7 @@ onMounted(load);
             <option value="fake">fake</option>
           </select>
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Enabled</span>
           <select
             v-model="enabledFilter"
@@ -343,7 +601,7 @@ onMounted(load);
             <option value="false">Disabled</option>
           </select>
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Lifecycle</span>
           <select
             v-model="lifecycleFilter"
@@ -356,7 +614,7 @@ onMounted(load);
             <option value="retired">retired</option>
           </select>
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Sort</span>
           <select v-model="sortField" data-testid="sessions-sort" @change="applyFilters">
             <option v-for="field in SORT_FIELDS" :key="field.value" :value="field.value">
@@ -364,7 +622,7 @@ onMounted(load);
             </option>
           </select>
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Direction</span>
           <select
             v-model="sortDirection"
@@ -375,7 +633,7 @@ onMounted(load);
             <option value="desc">descending</option>
           </select>
         </label>
-        <label class="filter-select">
+        <label class="filter-select is-compact">
           <span>Per page</span>
           <select v-model.number="limit" data-testid="sessions-limit" @change="applyFilters">
             <option v-for="size in PAGE_SIZES" :key="size" :value="size">{{ size }}</option>
@@ -403,31 +661,31 @@ onMounted(load);
         :on-retry="load"
       >
         <div class="table-wrap">
+          <!--
+            SEVEN COLUMNS, FROM THIRTEEN. Nothing was dropped: Since, Last
+            observed and Last transition are three readings of one question and
+            share a cell; out rate, ceiling and utilisation are one answer about
+            throughput; queued and failed are one answer about the spool.
+          -->
           <table data-testid="sessions-table">
             <thead>
               <tr>
                 <th scope="col">Bind</th>
                 <th scope="col">Carrier</th>
                 <th scope="col">State</th>
-                <th scope="col">Since</th>
-                <th scope="col">Last observed</th>
-                <th scope="col">Sessions behind it</th>
-                <th scope="col">Queued</th>
-                <th scope="col">Failed</th>
-                <th scope="col">Out rate</th>
-                <th scope="col">Ceiling</th>
-                <th scope="col">Utilisation</th>
+                <th scope="col">Sessions</th>
+                <th scope="col">Throughput</th>
+                <th scope="col">Spool</th>
                 <!-- Counted from the transition history. The kit also asks for
                      Enquire RTT, Timeouts, P95 latency and Top error;
                      /status.json carries none of them and only bearerbox's own
                      log does, so they are absent rather than drawn as dashes. -->
-                <th scope="col">Reconnects</th>
-                <th scope="col">Last transition</th>
+                <th scope="col">Stability</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in rows"
+                v-for="row in visibleRows"
                 :key="row.id"
                 class="selectable"
                 tabindex="0"
@@ -436,79 +694,116 @@ onMounted(load);
                 @keydown.enter="openBindId = row.engineId"
               >
                 <td>
-                  <router-link class="text-link" :to="`/smsc/${row.engineId}`">{{
+                  <router-link class="text-link" :to="`/smsc/${row.engineId}`" @click.stop>{{
                     row.name
                   }}</router-link>
-                  <small class="row-id mono">{{ row.engineId }}</small>
+                  <small class="row-id mono clamp-1" :title="row.engineId">{{ row.engineId }}</small>
                 </td>
                 <td>
                   <router-link
                     v-if="row.carrierId"
                     class="text-link"
                     :to="`/carriers/${row.carrierId}`"
+                    @click.stop
                     >{{ row.carrierName }}</router-link
                   >
                   <span v-else class="row-id">unassigned</span>
                 </td>
+                <!--
+                  STATE, SINCE AND LAST OBSERVED IN ONE CELL. Word first; the
+                  tone class only repeats what it says (§17.1). The two
+                  timestamps are ages, with the instants in `title` — a register
+                  is not the place to read a UTC offset.
+                -->
                 <td>
-                  <!-- Word first; the tone class only repeats what it says (§17.1). -->
                   <span
                     class="status-badge"
                     :class="bindTone(row.bindState)"
                     :data-testid="`session-state-${row.engineId}`"
                     >{{ bindWord(row.bindState) }}</span
                   >
+                  <small class="row-id" :title="formatMoment(row.bindStateSince)">
+                    <template v-if="row.bindStateSince"
+                      >since {{ agoWhen(row.bindStateSince) }}</template
+                    >
+                    <template v-else>no start recorded</template>
+                  </small>
+                  <small class="row-id" :title="formatMoment(row.bindObservedAt)">
+                    <template v-if="row.bindObservedAt"
+                      >seen {{ agoWhen(row.bindObservedAt) }}</template
+                    >
+                    <template v-else>never polled</template>
+                  </small>
                 </td>
-                <td class="mono">{{ formatMoment(row.bindStateSince) }}</td>
-                <td class="mono">{{ formatMoment(row.bindObservedAt) }}</td>
                 <td :data-testid="`session-collapsed-${row.engineId}`">
                   <template v-if="row.limits?.sessionsCollapsed">
                     <span class="status-badge warn"
                       >{{ row.limits.configuredInstances }} collapsed into 1</span
                     >
                     <small class="row-id"
-                      >figures on this row are the total across all
+                      >figures are the total across all
                       {{ row.limits.configuredInstances }}</small
                     >
                   </template>
                   <span v-else class="row-id">1 configured</span>
                 </td>
-                <td class="mono">{{ displayValue(row.queued, state) }}</td>
-                <td class="mono">{{ displayValue(row.failed, state) }}</td>
-                <td class="mono">{{ formatRate(row.outboundRate, state) }}</td>
-                <td class="mono">{{ formatCeiling(row.capacity) }}</td>
-                <td class="mono" :data-testid="`session-utilisation-${row.engineId}`">
-                  {{ formatUtilisation(row.capacity?.utilisation, state) }}
+                <!-- Out rate against its ceiling, with the ratio drawn rather
+                     than left to be computed from two numbers in two columns. -->
+                <td>
+                  <span class="mono">{{ formatRate(row.outboundRate, state) }}</span>
+                  <small class="row-id">of {{ formatCeiling(row.capacity) }}</small>
+                  <span class="util-row">
+                    <span
+                      v-if="utilisationWidth(row)"
+                      class="util-track"
+                      aria-hidden="true"
+                    >
+                      <span
+                        :class="utilisationTone(row.capacity?.utilisation)"
+                        :style="{ width: utilisationWidth(row) ?? '0%' }"
+                      ></span>
+                    </span>
+                    <small class="row-id" :data-testid="`session-utilisation-${row.engineId}`">{{
+                      formatUtilisation(row.capacity?.utilisation, state)
+                    }}</small>
+                  </span>
                 </td>
-                <td class="mono" :data-testid="`session-reconnects-${row.engineId}`">
-                  {{ reconnectCount(row) }}
+                <td>
+                  <span class="mono">{{ displayValue(row.queued, state) }} queued</span>
+                  <small class="row-id mono">{{ displayValue(row.failed, state) }} failed</small>
                 </td>
-                <td class="mono">{{ lastTransition(row) }}</td>
+                <td>
+                  <span class="mono" :data-testid="`session-reconnects-${row.engineId}`">{{
+                    reconnectCount(row)
+                  }}</span>
+                  <small class="row-id">bind(s) recorded</small>
+                  <small class="row-id" :title="lastTransitionMoment(row)"
+                    >{{ lastTransitionKind(row) }} · {{ lastTransitionAge(row) }}</small
+                  >
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <footer class="pager">
-          <span data-testid="sessions-range">{{ rangeLabel }}</span>
-          <div class="pager-buttons">
-            <button
-              class="secondary-button"
-              data-testid="sessions-prev"
-              :disabled="offset === 0"
-              @click="turnPage(-1)"
-            >
-              Previous
-            </button>
-            <button
-              class="secondary-button"
-              data-testid="sessions-next"
-              :disabled="offset + rows.length >= total"
-              @click="turnPage(1)"
-            >
-              Next
-            </button>
-          </div>
+        <!-- FOOTER: the pager on one side, the reference on the other. -->
+        <footer class="table-foot">
+          <TablePager
+            :shown="rows.length"
+            :total="total"
+            :offset="offset"
+            :page-size="limit"
+            :busy="state === 'loading'"
+            noun="bind"
+            testid="sessions-pager"
+            @turn="turnPage"
+          />
+          <p class="foot-help" data-testid="sessions-grid-note">
+            Search, protocol, enabled, lifecycle, sort and paging are applied by the API. Bind state
+            is written by the poller into a table the grid does not join, so there is
+            <strong>no filter or sort on bind state</strong> — the tabs above count and filter
+            <em>this page only</em>, and say so rather than reporting a page as the estate.
+          </p>
         </footer>
       </DataState>
 
@@ -527,14 +822,6 @@ onMounted(load);
         }}</span
         >. If one of those sessions is failing while its siblings are healthy, nothing on this
         screen will show it — the counters are summed by the engine before JKANNEL ever sees them.
-      </p>
-
-      <p class="source-note" data-testid="sessions-grid-note">
-        Search, protocol, enabled, lifecycle, sort and paging are applied by the API. Bind state,
-        capacity and the transition history are not on the list endpoint, so each row on the page is
-        then read individually — which is why the page size is deliberately small. There is no
-        filter or sort on bind state, because the API cannot do either and filtering one page in the
-        browser would report “no failing binds” while looking at a fraction of the estate.
       </p>
     </section>
 
@@ -591,17 +878,54 @@ onMounted(load);
         </p>
       </article>
 
+      <!--
+        THE BIND TIMELINE, BOUNDED.
+
+        This panel grew one row per transition with no cap, so a week of
+        flapping made the page several screens tall and the panels below it
+        unreachable. It is now a scroll region of about six rows that states
+        how much of the history it is showing, with a filter for the
+        transitions that are actually problems — which is the question this
+        rail exists to answer.
+      -->
       <article class="panel" data-testid="sessions-bind-timeline">
         <header class="panel-header">
           <div>
             <h2>Bind timeline</h2>
             <p>Every connection's transitions on one rail, newest first</p>
           </div>
+          <div class="segmented" role="group" aria-label="Filter the timeline">
+            <button
+              type="button"
+              class=""
+              :class="{ 'is-active': timelineFilter === 'all' }"
+              data-testid="sessions-timeline-all"
+              @click="timelineFilter = 'all'"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-active': timelineFilter === 'problems' }"
+              data-testid="sessions-timeline-problems"
+              @click="timelineFilter = 'problems'"
+            >
+              Problems
+            </button>
+          </div>
         </header>
-        <EventTimeline v-if="bindTimeline.length" dense :items="bindTimeline" />
+        <p class="list-count" data-testid="sessions-timeline-count">{{ timelineCountLabel }}</p>
+        <div v-if="bindTimeline.length" class="capped-list">
+          <EventTimeline dense :items="bindTimeline" />
+        </div>
         <p v-else class="chart-empty" data-testid="sessions-timeline-empty">
-          No bind transition has been recorded across the estate. The history is never pruned, so an
-          empty rail means nothing has been observed to change.
+          <template v-if="timelineFilter === 'problems' && allTransitions.length">
+            No transition on this page was anything other than a bind coming up.
+          </template>
+          <template v-else>
+            No bind transition has been recorded across the estate. The history is never pruned, so
+            an empty rail means nothing has been observed to change.
+          </template>
         </p>
       </article>
     </section>
@@ -622,6 +946,12 @@ onMounted(load);
           data-testid="session-drawer-open"
           >Open full page</router-link
         >
+        <router-link
+          v-if="openBind?.carrierId"
+          class="secondary-button"
+          :to="`/carriers/${openBind.carrierId}`"
+          >Open carrier</router-link
+        >
       </template>
       <template v-if="openBind">
         <dl class="detail-grid">
@@ -639,6 +969,8 @@ onMounted(load);
           <dd class="mono">{{ reconnectCount(openBind) }}</dd>
           <dt>Queued</dt>
           <dd class="mono">{{ displayValue(openBind.queued, state) }}</dd>
+          <dt>Failed</dt>
+          <dd class="mono">{{ displayValue(openBind.failed, state) }}</dd>
           <dt>Out rate</dt>
           <dd class="mono">{{ formatRate(openBind.outboundRate, state) }}</dd>
           <dt>Ceiling</dt>
@@ -648,25 +980,21 @@ onMounted(load);
         </dl>
 
         <h3>Transitions</h3>
-        <EventTimeline
-          v-if="openBind.transitions?.length"
-          dense
-          :items="
-            openBind.transitions.map((entry) => ({
-              at: formatMoment(entry.observedAt),
-              label: `${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
-              detail: entry.kind,
-              state:
-                entry.toState === 'bound'
-                  ? 'ok'
-                  : entry.toState === 'failed' || entry.toState === 'disconnected'
-                    ? 'error'
-                    : entry.toState === null
-                      ? 'missing'
-                      : 'warn',
-            }))
-          "
-        />
+        <!-- Capped here too: a bind sampled all week would otherwise push the
+             rest of the record off the sheet. -->
+        <div v-if="openBind.transitions?.length" class="capped-list">
+          <EventTimeline
+            dense
+            :items="
+              openBind.transitions.map((entry) => ({
+                at: agoWhen(entry.observedAt),
+                label: `${entry.fromState ?? 'no recorded state'} → ${entry.toState ?? 'no recorded state'}`,
+                detail: `${entry.kind} · ${formatMoment(entry.observedAt)}`,
+                state: transitionTone(entry.toState),
+              }))
+            "
+          />
+        </div>
         <p v-else class="chart-empty">No transition has been recorded for this bind.</p>
       </template>
     </DetailDrawer>
@@ -674,15 +1002,59 @@ onMounted(load);
 </template>
 
 <style scoped>
+/* The scope note as a disclosure: the statement stays on screen, the
+   paragraph behind it is read once and then folded away. */
 .scope-note {
   border-left: 3px solid var(--warn);
+  margin-bottom: 14px;
 }
-.scope-note h2 {
-  margin: 0 0 8px;
-  font-size: 16px;
+.scope-note > summary {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-strong);
+  cursor: pointer;
 }
-.scope-note p {
+.scope-note > p {
+  margin: 10px 0 0;
+}
+
+/* The utilisation ratio, drawn. A bar makes "83% of ceiling" readable at a
+   glance; the figure beside it stays, because a bar cannot say `unknown`. */
+.util-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 3px;
+}
+.util-track {
+  flex: 0 0 56px;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.util-track > span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+}
+.util-track > span.warn {
+  background: var(--warn, #9a6700);
+}
+.util-track > span.bad {
+  background: var(--bad, #b42318);
+}
+.util-track > span.good {
+  background: var(--ok, #1a7f37);
+}
+.util-row .row-id {
   margin: 0;
+}
+
+/* About six rows of rail, then a scroll. Nothing is hidden and nothing is
+   truncated — the panel simply stops being able to push the page. */
+.capped-list {
+  max-height: 268px;
 }
 </style>
 <style src="./workspace-extras.css"></style>

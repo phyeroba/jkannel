@@ -1480,3 +1480,257 @@ tbody td.cell-clip .row-id {
   color: var(--text-strong);
   font-size: 13px;
 }
+
+/* ===========================================================================
+   THE HOUSE BANDS — header, status line, tabs + live line, filter row, foot
+
+   CONSOLE_DESIGN_SPEC §1 gives every screen the same five bands in the same
+   order. Until now each rebuilt screen carried its own scoped copy of the
+   band CSS: Alerts, Routing, Notifications and the dashboard had four
+   near-identical definitions of `.screen-head`, `.tab`, `.live-line` and
+   `.status-line`. Four copies is four places for them to drift, and a fifth
+   screen could not adopt the shape without a fifth copy.
+
+   These are the shared definitions. A view that still carries its own scoped
+   copy keeps winning on specificity (`[data-v-x].tab` beats `.tab`), so
+   adding this changes nothing on those screens — their copies come out as
+   each one is next touched.
+   ========================================================================= */
+
+/* HEADER BAND. The shell renders the page title and `route.meta.description`;
+   this row exists for the controls that belong to the screen rather than to
+   the table, right-aligned so the title keeps the left edge. */
+.screen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.screen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* STATUS LINE. For a screen that exists to answer a yes/no: a severity chip
+   carrying the word, a sentence naming what is wrong, and a way into the
+   worst of it. Colour repeats the word and never carries it alone (§17.1). */
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface);
+}
+.status-line p {
+  flex: 1 1 340px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+}
+.status-line .status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.status-line .status-chip .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+.status-line.is-good {
+  border-color: var(--ok, #1a7f37);
+}
+.status-line.is-good .status-chip {
+  background: var(--ok-soft, #e6f4ea);
+  color: var(--ok-strong, var(--ok, #1a7f37));
+}
+.status-line.is-warn {
+  border-color: var(--warn, #9a6700);
+}
+.status-line.is-warn .status-chip {
+  background: var(--warn-soft, #fbf0d8);
+  color: var(--warn-strong, var(--warn, #9a6700));
+}
+.status-line.is-bad {
+  border-color: var(--bad, #b42318);
+}
+.status-line.is-bad .status-chip {
+  background: var(--bad-soft, #fbe6e2);
+  color: var(--bad-strong, var(--bad, #b42318));
+}
+/* Not green. "Nothing is reported as broken" and "nothing is being observed"
+   are different states, and only one of them is good news. */
+.status-line.is-unknown {
+  border-color: var(--warn, #9a6700);
+}
+.status-line.is-unknown .status-chip {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+/* TABS + LIVE LINE. One row, divided from the filters below it. */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.tab-row {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--text-strong);
+}
+.tab.is-active {
+  color: var(--text-strong);
+  border-bottom-color: var(--brand);
+  font-weight: 500;
+}
+.tab-count {
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.tab.is-active .tab-count {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+/* The live line is one line, not a panel: "● Live · updated 3s ago · every
+   30s [Pause] [Refresh]" replaces three labelled controls stating one idea. */
+.live-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.live-line .live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok, #1a7f37);
+}
+.live-line .live-dot.is-paused {
+  background: var(--muted);
+}
+
+/* FILTER ROW. Search takes the slack; everything else is its natural width. */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.filter-row .filter-search {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.filter-row .filter-search input {
+  width: 100%;
+}
+
+/* SEGMENTED CONTROL. For a short, mutually exclusive choice — never
+   checkboxes, which promise a combination that is not on offer. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface-2);
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.segmented button.is-active {
+  background: var(--surface);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* TABLE FOOT. The pager on one side, one line of reference on the other —
+   not four lines of explanation above the rows. */
+.table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.table-foot .foot-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 62ch;
+}
+
+/* A CAPPED PANEL LIST. The drawer rule, generalised: a list that is evidence
+   rather than the point of the panel stops at a scroll region instead of
+   growing without bound. The count beside the heading says what is in it, so
+   a flush final row never reads as the end of the data. */
+.capped-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.capped-list::-webkit-scrollbar {
+  width: 10px;
+}
+.list-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

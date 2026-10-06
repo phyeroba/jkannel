@@ -121,7 +121,9 @@ const mountView = async (details: ReturnType<typeof detail>[], total = details.l
     history: createMemoryHistory(),
     routes: [
       { path: '/sessions-smpp', component: { template: '<p/>' } },
+      { path: '/smsc', component: { template: '<p/>' } },
       { path: '/smsc/:engineId', component: { template: '<p/>' } },
+      { path: '/carriers', component: { template: '<p/>' } },
       { path: '/carriers/:id', component: { template: '<p/>' } },
     ],
   });
@@ -244,7 +246,7 @@ describe('SMPP Sessions — the register', () => {
     // The pager lives inside the content the loading skeleton replaces, so wait
     // for the re-read to settle before turning the page.
     await vi.waitFor(() => expect(wrapper.find('[data-state="loading"]').exists()).toBe(false));
-    await wrapper.get('[data-testid="sessions-next"]').trigger('click');
+    await wrapper.get('[data-testid="sessions-pager-next"]').trigger('click');
     await vi.waitFor(() => expect(calls.some((url) => url.includes('offset=25'))).toBe(true));
   });
 
@@ -254,6 +256,29 @@ describe('SMPP Sessions — the register', () => {
     expect(wrapper.get('[data-testid="sessions-grid-note"]').text()).toContain(
       'no filter or sort on bind state',
     );
+  });
+
+  it('groups the three timestamps into one cell rather than three columns', async () => {
+    const { wrapper } = await mountView([detail('mtn-p1')]);
+    const headings = wrapper
+      .get('[data-testid="sessions-table"]')
+      .findAll('th')
+      .map((th) => th.text());
+    // Seven columns, from thirteen. Since / Last observed / Last transition
+    // are three readings of one question and share the State and Stability
+    // cells; the row still carries every value.
+    expect(headings).toEqual([
+      'Bind',
+      'Carrier',
+      'State',
+      'Sessions',
+      'Throughput',
+      'Spool',
+      'Stability',
+    ]);
+    const row = wrapper.get('[data-testid="session-mtn-p1"]').text();
+    expect(row).toContain('since');
+    expect(row).toContain('seen');
   });
 
   it('reports a partial read by naming the connections it could not read', async () => {
@@ -280,7 +305,9 @@ describe('SMPP Sessions — the register', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/sessions-smpp', component: { template: '<p/>' } },
+        { path: '/smsc', component: { template: '<p/>' } },
         { path: '/smsc/:engineId', component: { template: '<p/>' } },
+        { path: '/carriers', component: { template: '<p/>' } },
         { path: '/carriers/:id', component: { template: '<p/>' } },
       ],
     });
@@ -295,5 +322,110 @@ describe('SMPP Sessions — the register', () => {
     // Partial keeps the usable rows on screen AND names what is missing.
     expect(wrapper.get('[data-testid="sessions-state"]').text()).toContain('broken');
     expect(wrapper.find('[data-testid="session-mtn-p1"]').exists()).toBe(true);
+  });
+});
+
+/**
+ * The bind timeline is what Peter reported: "the bind timeline pane is too
+ * long, either paginate it or make it look better". It grew one row per
+ * transition with no cap, so a week of flapping made the page several screens
+ * tall and pushed everything below it out of reach.
+ */
+const flapper = (engineId: string, count: number) =>
+  detail(engineId, {
+    transitions: Array.from({ length: count }, (_, index) => ({
+      observedAt: new Date(Date.UTC(2026, 8, 1, 0, count - index)).toISOString(),
+      // Alternating, so half of them are problems and half are recoveries.
+      fromState: index % 2 === 0 ? 'bound' : 'disconnected',
+      toState: index % 2 === 0 ? 'disconnected' : 'bound',
+      kind: 'poll',
+    })),
+  });
+
+describe('SMPP Sessions — the bind timeline is bounded', () => {
+  const railRows = (wrapper: { get: (selector: string) => { findAll: (s: string) => unknown[] } }) =>
+    wrapper.get('[data-testid="sessions-bind-timeline"]').findAll('.timeline li');
+
+  it('caps the rail and says how much of the history it is showing', async () => {
+    const { wrapper } = await mountView([flapper('mtn-p1', 60)]);
+    expect(railRows(wrapper)).toHaveLength(40);
+    expect(wrapper.get('[data-testid="sessions-timeline-count"]').text()).toBe(
+      '40 most recent of 60',
+    );
+  });
+
+  it('says the exact count when the whole history fits', async () => {
+    const { wrapper } = await mountView([flapper('mtn-p1', 6)]);
+    expect(railRows(wrapper)).toHaveLength(6);
+    expect(wrapper.get('[data-testid="sessions-timeline-count"]').text()).toBe('6 transitions');
+  });
+
+  it('filters the rail to the transitions that are problems', async () => {
+    const { wrapper } = await mountView([flapper('mtn-p1', 10)]);
+    await wrapper.get('[data-testid="sessions-timeline-problems"]').trigger('click');
+    // Five of the ten went INTO a bound state; those are not problems.
+    expect(railRows(wrapper)).toHaveLength(5);
+    expect(wrapper.get('[data-testid="sessions-timeline-count"]').text()).toContain(
+      '5 problem transitions · 10 in all',
+    );
+    for (const row of wrapper.get('[data-testid="sessions-bind-timeline"]').findAll('.timeline li'))
+      expect(row.text()).toContain('→ disconnected');
+  });
+
+  it('does not claim an empty estate when only the filter is empty', async () => {
+    const { wrapper } = await mountView([
+      detail('mtn-p1', {
+        transitions: [
+          { observedAt: '2026-09-01T00:00:00Z', fromState: null, toState: 'bound', kind: 'poll' },
+        ],
+      }),
+    ]);
+    await wrapper.get('[data-testid="sessions-timeline-problems"]').trigger('click');
+    expect(wrapper.get('[data-testid="sessions-timeline-empty"]').text()).toContain(
+      'anything other than a bind coming up',
+    );
+  });
+});
+
+describe('SMPP Sessions — the verdict and the tabs', () => {
+  it('leads with the verdict and names the binds that are not bound', async () => {
+    const { wrapper } = await mountView([
+      detail('mtn-p1'),
+      detail('airtel-p1', { name: 'AIRTEL-P1', bindState: 'failed' }),
+    ]);
+    const status = wrapper.get('[data-testid="sessions-status"]');
+    expect(status.classes()).toContain('is-bad');
+    expect(status.text()).toContain('Not bound');
+    expect(status.text()).toContain('AIRTEL-P1');
+    // A way into the worst of it, rather than a sentence about it.
+    expect(wrapper.get('[data-testid="sessions-open-worst"]').attributes('href')).toContain(
+      '/smsc/airtel-p1',
+    );
+  });
+
+  it('is never green when nothing has been observed', async () => {
+    const { wrapper } = await mountView([
+      detail('mtn-p1', { bindState: null, bindStateSince: null, bindObservedAt: null }),
+    ]);
+    const status = wrapper.get('[data-testid="sessions-status"]');
+    expect(status.classes()).toContain('is-unknown');
+    expect(status.text()).toContain('Unverified');
+  });
+
+  it('filters the register by bind state and labels the counts as the page', async () => {
+    const { wrapper } = await mountView([
+      detail('mtn-p1'),
+      detail('airtel-p1', { bindState: 'failed' }),
+    ]);
+    expect(wrapper.get('[data-testid="sessions-tab-all"]').text()).toContain('2');
+    expect(wrapper.get('[data-testid="sessions-tab-notbound"]').text()).toContain('1');
+
+    await wrapper.get('[data-testid="sessions-tab-notbound"]').trigger('click');
+    expect(wrapper.find('[data-testid="session-airtel-p1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="session-mtn-p1"]').exists()).toBe(false);
+
+    // The count is one page of a paginated estate, and must not read as the
+    // estate's total.
+    expect(wrapper.get('[data-testid="sessions-grid-note"]').text()).toContain('this page only');
   });
 });

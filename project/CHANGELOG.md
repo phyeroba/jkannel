@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-06 (the bind timeline that had no end)
+
+`/sessions-smpp`, rebuilt to CONSOLE_DESIGN_SPEC §1 rather than patched. Peter's
+report was that "the bind timeline pane is too long"; measuring found two faults
+with one cause — nothing on the screen was bounded.
+
+**The timeline grew one row per transition, forever.** Across an estate that has
+been polled since August that is hundreds of rows of rail, so the panels below it
+were several screens down and the page had no end. It is now a capped scroll
+region of about six rows that *states what it is showing* — `40 most recent of
+312` — with a Problems filter, because the question the rail exists to answer is
+which binds dropped, not which ones are fine. The drawer's own Transitions list
+got the same cap, for the same reason.
+
+**Thirteen columns, 588px past the panel, now seven.** Since, Last observed and
+Last transition are three readings of one question and share two cells; out rate,
+ceiling and utilisation are one answer about throughput, with the ratio drawn as
+a bar rather than left to be computed from two numbers in two columns. Nothing
+was dropped.
+
+**The five bands are now in order.** Before this, the first thing after the scope
+note was a row of seven dropdowns, and "is anything down" could only be answered
+by reading the State column of every row. Now: a verdict naming the binds that
+are not bound with a way into the worst of them; four figures; tabs with counts
+and a live line; the filters; the rows. The verdict is **never green on an
+absence of evidence** — a page where nothing has been observed reads `Unverified`,
+not `All bound`, which is the mistake the dashboard made in `612fa87`.
+
+**It refreshes.** A register of bind state that never re-reads is a photograph;
+an operator watching a carrier come back up had to reload the browser. 30s, with
+Pause, matching `/alerts`.
+
+**The house bands are now defined once.** `.screen-head`, `.status-line`, `.tab`,
+`.live-line`, `.segmented` and `.table-foot` had four near-identical scoped copies
+across Alerts, Routing, Notifications and the dashboard, and a fifth screen could
+not adopt the shape without a fifth copy. They are in `workspace-extras.css`; the
+scoped copies still win on specificity, so nothing moved on those screens, and
+they come out as each one is next touched.
+
+Frontend **744 tests pass** (736 before; 8 new, covering the cap, the filter, the
+verdict's refusal to go green, and the seven columns).
+
 ## 2026-09-30 (the audit only ever looked at six screens)
 
 `scripts/layout-audit.mjs` has had the right rules since it was written and
