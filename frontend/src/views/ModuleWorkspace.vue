@@ -569,6 +569,7 @@ const definitions: Record<string, Workspace> = {
         value: (raw) => hostPort(raw),
         mono: true,
         hint: (raw) => text(raw.type, ''),
+        clip: true,
       },
       {
         header: 'State',

@@ -1154,7 +1154,7 @@ onMounted(() => void refreshAll());
               </thead>
               <tbody>
                 <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
-                  <td class="cell-clip" :title="row.label">{{ row.label }}</td>
+                  <td class="cell-clip rate-label" :title="row.label">{{ row.label }}</td>
                   <!-- These panels sit two to a row, so the table has half a
                        screen to work in. Messages and DLRs are one answer
                        about volume; success and failure are two halves of one
@@ -1538,26 +1538,25 @@ onMounted(() => void refreshAll());
       <ModalDialog
         :open="showDefForm"
         title="New report definition"
+        subtitle="A saved report the scheduler can run on its own. Only the kinds the scheduler can actually run are offered — other panels on this page can be read here but not saved as a definition."
         wide
         testid="definition-dialog"
         @close="showDefForm = false"
       >
-        <p class="source-note">
-          A definition is a saved report the scheduler can run on its own. Only the kinds the
-          scheduler can actually run are offered — other panels on this page can be read here but
-          not saved as a definition.
-        </p>
+        <fieldset class="dialog-group">
+          <legend>Definition</legend>
         <div class="dialog-grid">
           <label class="field">
-            <span>Name</span>
+            <span>Name <em class="req" aria-hidden="true">required</em></span>
             <input
               v-model="newDefName"
               data-testid="definition-name"
               placeholder="Daily volume CSV"
             />
+            <small>What this report is called wherever it is listed or delivered.</small>
           </label>
           <label class="field">
-            <span>Report type</span>
+            <span>Report type <em class="req" aria-hidden="true">required</em></span>
             <select v-model="newDefType" data-testid="definition-type">
               <option v-for="kind in availableKinds" :key="kind.key" :value="kind.key">
                 {{ kind.label }}
@@ -1575,6 +1574,7 @@ onMounted(() => void refreshAll());
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
             </select>
+            <small>Manual means it exists and is only ever run when somebody asks.</small>
           </label>
           <label class="field">
             <span>Format</span>
@@ -1582,11 +1582,38 @@ onMounted(() => void refreshAll());
               <option value="summary">Summary</option>
               <option value="csv">CSV</option>
             </select>
+            <small>CSV is the one to pick if anything downstream parses it.</small>
           </label>
           <label class="field checkbox-row dialog-span">
             <input v-model="newDefEnabled" type="checkbox" data-testid="definition-enabled" />
             <span>Enabled — the scheduler may run this definition</span>
           </label>
+        </div>
+        </fieldset>
+
+        <!-- What the settings add up to. A definition saved on the wrong
+             cadence is not noticed until the reports stop arriving. -->
+        <p class="draft-sentence" data-testid="definition-sentence">
+          <strong>{{ newDefName.trim() || 'This definition' }}</strong> produces a
+          {{ newDefFormat }} report<template v-if="newDefSchedule">
+            every {{ newDefSchedule.replace('ly', '') }}</template
+          ><template v-else> only when somebody runs it</template
+          >{{ newDefEnabled ? '' : ', and is disabled so the scheduler will not run it' }}.
+        </p>
+
+        <div
+          v-if="!newDefName.trim() || !newDefType"
+          class="form-alert is-error"
+          role="status"
+          data-testid="definition-problems"
+        >
+          <div>
+            <strong>Still needed</strong>
+            <ul>
+              <li v-if="!newDefName.trim()">A name is required.</li>
+              <li v-if="!newDefType">A report type is required.</li>
+            </ul>
+          </div>
         </div>
         <template #footer>
           <button class="secondary-button" @click="showDefForm = false">Cancel</button>
@@ -1757,6 +1784,11 @@ onMounted(() => void refreshAll());
 <style src="./workspace-extras.css"></style>
 
 <style scoped>
+/* These two panels sit two to a row, so the name column gets a tighter cap
+   than the shared 240px. The full name is in `title`. */
+tbody td.rate-label {
+  max-width: 170px;
+}
 /*
   The page is a stack of sections, and none of them carried a bottom margin: the
   three `.dashboard-grid` rows (traffic trend / by SMSC / success rate, and their
