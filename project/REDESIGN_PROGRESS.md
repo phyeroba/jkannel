@@ -85,24 +85,33 @@ serially — parallel workers get killed by memory pressure on this machine).
 
 ## Resume here
 
-### 1. Remaining dialogs — next task
+### The overflow backlog is closed
 
-Every `ModalDialog` caller that is a create/edit form wants the grouped
-fieldset treatment the Carriers dialog got; the bigger ones want the
-four-step side panel the route editor got. **Walk the links and buttons on
-each screen** — Peter's repeated point was that drill-downs were being
-missed while the top of the page got rebuilt.
+All thirteen screens are at zero, measured on production, including the six
+the navigation never linked to. The table of before/after is in
+`project/CHANGELOG.md` and in the artifact.
 
-### 2. Overflow backlog
+### The create/edit dialogs are done
 
-16 findings open on production. Re-measure first: `/routing` has been rebuilt
-since the list was taken. Worst first after that:
-`/roles` +484 · `/logs-audit` +475 ·
-~~`/sessions-smpp` +440~~ (rebuilt, unmeasured) · `/log-explorer` +377 · `/content-rules` +365 · `/live-traffic` +309 ·
-`/dlr-performance` +207 · `/reports` +196 · `/configuration` +169 ·
-`/queues` +164 and +132 · `/alert-response` +130.
+user · API client · backup · backup schedule · recipient policy · reference
+record · inbound rule · content rule · report definition · carrier · route —
+all have the grouped shape: a subtitle saying what the record is for, named
+fieldsets, a hint under every field, REQUIRED markers, a sentence stating
+what will happen, and a Save that **lists what is missing** rather than being
+grey for a reason it will not give.
 
----
+### What is left
+
+1. **The remaining read-only screens.** The sweep captures them all; nothing
+   on them is broken, but several have not been looked at with the five-band
+   shape in mind — `/api-reference` (4,685px), `/messages` (5,779px),
+   `/sessions` (5,187px), `/delivery-reports` (3,953px), `/system` (3,799px).
+   Tall is not automatically wrong, but those are the candidates.
+2. **The drawers.** The sweep now captures the one behind a row click on
+   every register. Alerts, lifecycle, SMSC and carriers have the house sheet;
+   the rest are still the generic drawer.
+3. **`/traffic` is a second copy of the dashboard** reached by a link and not
+   in the navigation. Decide whether it should exist.
 
 ## Worth telling Peter
 
