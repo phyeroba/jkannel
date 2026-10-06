@@ -113,6 +113,23 @@ grey for a reason it will not give.
 3. **`/traffic` is a second copy of the dashboard** reached by a link and not
    in the navigation. Decide whether it should exist.
 
+## CPaaS integration — state as of 2026-10-06 evening
+
+- **KAMEX approved** and added to CPAAS-SMSONE's allowed senders (audited).
+- **Loopback bind fixed.** Both fake SMSCs had been *stopped through the
+  admin API* on 2026-09-29 21:45 and never restarted, so bearerbox was not
+  listening on 10000 at all. `local-fake` restarted and bound. Not
+  `local-fake-b` — it is the MTN route's fallback target.
+- **`GET /gateway/messages?foreignId=`** built, deployed, verified.
+  `whoami` now returns `customerId`.
+- **CPaaS's four live sends were refused at routing.** The KAMEX route exists
+  and matched; its only target is `kamdixy`, which is retrying, and it has no
+  fallback. `kololo` is bound. **Peter decided 2026-10-06: change nothing** —
+  no re-point, no fallback. CPaaS traffic stays refused until kamdixy binds.
+- **Still to do:** observe `%d` substitution and `dlr_url` rewriting through
+  the restored loopback bind, and answer CPaaS questions 1 and 2 with that
+  evidence.
+
 ## Worth telling Peter
 
 - **Production has 1 of 3 routes with a fallback.** CPAAS-SMSONE and KAMEX
