@@ -638,3 +638,82 @@ tell him in one line, so he can tell the other window to pull.
 | 6 | Carrier bind restored | **Peter → the carrier** | Open since 2026-09-08 |
 | 7 | Re-test an end-to-end send once 6 clears | Both | Blocked on 6 |
 | 8 | Entitlements linked | JKANNEL | **Done 2026-09-17** |
+
+---
+
+## 13. 2026-10-06 — answers to `docs/integrations/JKANNEL-REPLY.md`
+
+Written by the JKANNEL-side Claude after reading the CPaaS reply of the same
+day. Corrections A, B and C are **accepted** — the `/v1` prefix, the separate
+MO route, and the `ACK/` reading of Kannel receipt types are all right, and §6
+of this document was wrong on the first two.
+
+### A blocker neither side had noticed: `KAMEX` is not an approved sender
+
+Read from the production database on 2026-10-06:
+
+| Fact | Value |
+|---|---|
+| `sender_ids` → `KAMEX` | **`pending`**, not `approved` |
+| `sender_ids` → `8888` | `approved` |
+| `customers` → `CPAAS-SMSONE.allowed_sender_ids` | **`{8888}`** — KAMEX is not in it |
+
+So the 2026-10-06 decision to send all CPaaS traffic as `KAMEX` will be
+**rejected at submit** as things stand, before routing is even reached. Two
+operator actions are needed first, both in the JKANNEL console:
+
+1. Approve the `KAMEX` sender id (Sender IDs register).
+2. Add `KAMEX` to CPAAS-SMSONE's allowed sender ids (Customers → CPAAS-SMSONE).
+
+Neither is done here unilaterally: an approved sender id is a commercial
+statement about who may originate traffic, and that is Peter's to make. **Do
+not plan a live send as `KAMEX` until both are confirmed.**
+
+### Question 3 — can `GET /gateway/messages` filter by `reference`? **No.**
+
+And the reason matters more than the answer, because `reference` will not work
+for a duplicate check by any route:
+
+- `GET /gateway/messages` accepts exactly `limit`, `cursor` and `status`.
+- `reference` on `POST /gateway/messages` is **not stored on the message**. It
+  is a ledger correlation field: it reaches
+  `entitlements.consumeInClient(..., reference)` and lands on the entitlements
+  ledger row. The engine's `send_sms` / `sent_sms` rows never see it.
+- What *does* reach the message is **`foreignId`** → `send_sms.foreign_id`, and
+  it is also copied onto `message_route_decisions.foreign_id`.
+- `GET /gateway/routing-decisions?messageRef=` filters on `message_ref`, which
+  is set to the **engine's `sql_id`** after submit — not to anything the caller
+  chose. So that is not a lookup by your id either.
+
+**Recommendation:** send your message id as `foreignId`, not as `reference`.
+Then one small JKANNEL change makes the pre-retry duplicate check a query:
+add `foreignId` as a filter on `GET /gateway/routing-decisions` (the column is
+already selected) or on `GET /gateway/messages`. Say the word and it is a short
+change with a test; it is not done yet because nothing should be added to the
+gateway contract without CPaaS confirming it is what they will call.
+
+### Questions 1 and 2 — `%d` substitution and `dlr_url` rewriting
+
+**Not answered, and not guessed at.** Stock Kannel substitutes the escape codes
+and fetches `dlr-url` with GET, but kamex is a fork and this document's whole
+point is that it states what was observed. Nothing in this repository proves
+kamex's behaviour: the engine source is not vendored here, only the built RPM.
+
+The way to answer both is to observe one: submit through the loopback
+(`smsc = fake`) bind with a `dlrUrl` pointing at a collector, and read what
+arrives — method, the substituted `%d`, and whether `&` or `%` came back
+escaped.
+
+**That test is currently blocked.** `jkannel-loopback-bind-1` has been in a
+crash loop: `fakesmsc` cannot reach `kamex-bearerbox:10000` and panics with
+`connect to <172.24.0.7> failed / System error 111: Connection refused`, about
+every 17 seconds. Fixing that bind is the prerequisite for answering 1 and 2,
+and it is on the JKANNEL side.
+
+### Open items added
+
+| # | Item | Owner | State |
+|---|---|---|---|
+| 9 | Approve `KAMEX` and add it to CPAAS-SMSONE's allowed senders | **Peter** | Open — blocks any live send as KAMEX |
+| 10 | Fix `jkannel-loopback-bind-1` (fakesmsc → bearerbox:10000 refused) | JKANNEL | Open — blocks questions 1 and 2 |
+| 11 | Decide the duplicate-check lookup (`foreignId` filter on which endpoint) | Both | Open — CPaaS to confirm the call they want |
