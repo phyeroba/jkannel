@@ -30,31 +30,48 @@ async function submit() {
   <main class="login-page">
     <section class="login-visual" aria-label="JKANNEL platform overview">
       <div class="login-logo"><AppIcon name="sms" :size="27" /><strong>JKANNEL</strong></div>
+      <!--
+        WHAT THIS PANEL MUST NOT DO.
+
+        It used to carry three figures — "Throughput 16k +8.2%", "Delivery rate
+        98.7% last hour", "Connected SMSCs 12" — with two bar charts drawn from
+        hardcoded arrays. None of it was measured. This deployment has three
+        SMSCs, not twelve, and one of its carriers has been refusing the
+        connection since 8 September.
+
+        That is the exact thing the rest of this console refuses to do: §3.3
+        and §17 are built on never presenting an unmeasured value as a measured
+        one, and the first screen anybody sees was doing it in 19px bold. There
+        is also nowhere honest to get real figures from here — this page is
+        pre-authentication, and live throughput is not something to publish to
+        an unauthenticated visitor.
+
+        So the cards say what the platform DOES. No number appears that is not
+        a protocol version.
+      -->
       <div class="login-illustration" aria-hidden="true">
         <span class="illustration-ring"></span><span class="illustration-core"></span>
         <article class="login-stat first">
-          <strong>Throughput</strong><small>Current traffic</small>
-          <div class="mini-bars bars-one">
-            <i
-              v-for="height in [34, 55, 43, 72, 61, 88, 76, 100]"
-              :key="height"
-              :style="{ height: `${height}%` }"
-            ></i>
-          </div>
-          <div><b>16k</b><em>+8.2%</em></div>
+          <span class="stat-icon"><AppIcon name="link" :size="15" /></span>
+          <strong>Carrier binds</strong>
+          <small>
+            SMPP 3.4 transmit, receive and transceiver — with the bind state as the poller observed
+            it, never as it was assumed.
+          </small>
         </article>
         <article class="login-stat second">
-          <strong>Delivery rate</strong><small>Last hour</small>
-          <div class="mini-bars bars-two">
-            <i
-              v-for="height in [45, 35, 62, 49, 78, 66, 89, 82]"
-              :key="height"
-              :style="{ height: `${height}%` }"
-            ></i>
-          </div>
-          <div><b>98.7%</b><em>+1.4%</em></div>
+          <span class="stat-icon"><AppIcon name="receipt" :size="15" /></span>
+          <strong>Receipts, traced</strong>
+          <small>
+            Each message followed from submit to the handset acknowledgement — or told plainly that
+            no receipt came back.
+          </small>
         </article>
-        <article class="login-live"><small>Connected SMSCs</small><strong>12</strong></article>
+        <article class="login-live">
+          <AppIcon name="shield" :size="15" />
+          <strong>Tenant isolated</strong>
+          <small>Row-level security, enforced</small>
+        </article>
       </div>
       <p class="login-caption">
         Interface with and extend Kamex or Kannel from one friendly control room for messaging,

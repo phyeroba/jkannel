@@ -438,6 +438,17 @@ th {
   right: 0;
   bottom: 20px;
 }
+.login-stat .stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 9px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--brand);
+}
 .login-stat strong,
 .login-stat small {
   display: block;
@@ -446,47 +457,20 @@ th {
   font-size: 13px;
   color: var(--text-strong);
 }
+/* A sentence, not a caption: these cards say what the platform does, and the
+   claim has to be readable rather than squeezed under a figure. */
 .login-stat small {
-  font-size: 11px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--muted);
-}
-.mini-bars {
-  display: flex;
-  align-items: end;
-  gap: 4px;
-  height: 34px;
-  margin: 12px 0 8px;
-}
-.mini-bars i {
-  flex: 1;
-  border-radius: 3px 3px 0 0;
-  background: var(--brand);
-  opacity: 0.78;
-}
-.bars-two i {
-  background: var(--info);
-}
-.login-stat > div:last-child {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-}
-.login-stat b {
-  font-size: 19px;
-  color: var(--text-strong);
-}
-.login-stat em {
-  font-size: 12px;
-  color: var(--good);
-  font-style: normal;
-  font-weight: 600;
 }
 .login-live {
   position: absolute;
   left: 50%;
   bottom: 2px;
   transform: translateX(-50%);
-  width: 130px;
+  width: 168px;
   background: var(--brand);
   border-radius: 12px;
   padding: 13px 15px;
@@ -502,7 +486,7 @@ th {
   opacity: 0.85;
 }
 .login-live strong {
-  font-size: 20px;
+  font-size: 14px;
   margin-top: 2px;
 }
 .login-caption {

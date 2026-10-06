@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-10-06c (the sign-in page was inventing its figures, and five dialogs were flat)
+
+**A screenshot sweep now exists.** `scripts/screen-sweep.mjs` walks every route
+from `navigation.ts` — the same source the other two audits read — captures it,
+then finds the control that OPENS something (New, Add, Create, Edit, Open),
+clicks it and captures what opened. The layout and overflow audits measure two
+numbers; neither can see that a dialog is a flat list of eleven fields. This is
+what the redesign kept missing: a page top was rebuilt and the sheet behind its
+own button was never looked at.
+
+First run against production, 1600px, 64 captures including 16 dialogs. It also
+re-measured the overflow backlog, and **`/sessions-smpp` came back at zero** —
+it was +588 before yesterday's rebuild.
+
+**The sign-in page was presenting invented figures as measurements.** It
+carried "Throughput 16k +8.2%", "Delivery rate 98.7% — last hour" and
+"Connected SMSCs 12", with two bar charts drawn from hardcoded arrays. This
+deployment has three SMSCs and a carrier that has been refusing the connection
+since 8 September. §3.3 and §17 exist precisely to stop an unmeasured value
+being shown as a measured one, and the first screen anybody sees was breaking
+them in 19px bold. There is also nowhere honest to source real figures there —
+the page is pre-authentication. The cards now say what the platform *does*, and
+the only numeral left on the page is a protocol version.
+
+**Five create dialogs brought to the carrier dialog's shape** — a subtitle
+saying what the record is for, named fieldsets, a hint under every field, a
+REQUIRED marker, and a submit that names what it creates:
+
+- **Create user** — nine role checkboxes in a flat column became a choice list
+  where the picked rows are legible without reading the ticks, plus a sentence
+  saying what the account will be able to do and a warning on Super
+  Administrator. The grey Save now lists what is missing instead of refusing to
+  say.
+- **Create API client** — warns when no scope is selected, because a key with
+  none authenticates and is then refused by every endpoint, which from the
+  caller's side is indistinguishable from a broken credential.
+- **Create backup** — the three scope radios said what was IN each choice and
+  never what was missing from it. Each option now states what it leaves out,
+  which is the thing that matters at restore time.
+- **New backup schedule** — grouped into what it is and when it runs, with a
+  sentence assembling the cadence. A schedule wrong by a factor of sixty is not
+  noticed for a month.
+- **Add a recipient policy entry** — labels sat *beside* their inputs, the one
+  field shape the design system does not style. Regrouped, with the list type
+  leading (the same destination is refused on `blacklist` and uniquely accepted
+  on `whitelist`) and a sentence stating the outcome.
+- **New reference record** — invalid JSON was discovered by the API refusing it.
+  It is checked as it is typed now.
+
+Frontend **756 tests pass** (750 before).
+
 ## 2026-10-06b (the lifecycle desk, in the house shape)
 
 `/alert-lifecycle` had the right content and the wrong shape. Its columns were

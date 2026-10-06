@@ -1815,3 +1815,56 @@ tbody td.cell-clip .row-id {
   gap: 7px;
   text-transform: capitalize;
 }
+
+/* A LIST OF CHOICES IN A DIALOG ---------------------------------------------
+   Nine checkboxes in a flat column, each with a sentence of description, is
+   the shape every "pick the roles / pick the scopes" form arrived in. It
+   reads as a specification rather than a choice: nothing shows which ones are
+   picked except nine small ticks down the left edge.
+
+   A chosen row is tinted and bordered, so the selection is legible without
+   reading the ticks, and the whole row is the hit target. */
+.choice-list {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.choice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.choice:hover {
+  border-color: var(--border-strong, var(--border));
+  background: var(--surface-2);
+}
+.choice.is-chosen {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.choice > input {
+  margin: 2px 0 0;
+}
+.choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.choice-text strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-strong);
+}
+.choice-text small {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}

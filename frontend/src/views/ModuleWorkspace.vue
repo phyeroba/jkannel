@@ -1434,6 +1434,46 @@ const showCreateUser = ref(false);
 const newUsername = ref('');
 const newPassword = ref('');
 const newRoleIds = ref<string[]>([]);
+
+/**
+ * What the create-user form will not accept, listed rather than expressed as
+ * a disabled button.
+ *
+ * A greyed-out Save with no explanation is the commonest complaint about this
+ * console's forms: the operator has typed something, nothing happens, and the
+ * form will not say which of the three fields is the problem. The carrier
+ * dialog already answers this by listing every problem at once; this is the
+ * same answer for the rest of them.
+ */
+const newUserProblems = computed(() => {
+  const problems: string[] = [];
+  if (!newUsername.value.trim()) problems.push('A username is required.');
+  else if (newUsername.value.trim().length < 3)
+    problems.push('The username must be at least 3 characters.');
+  if (!newPassword.value) problems.push('A password is required.');
+  else if (newPassword.value.length < 12)
+    problems.push(
+      `The password must be at least 12 characters — this one is ${newPassword.value.length}.`,
+    );
+  if (!newRoleIds.value.length)
+    problems.push('Pick at least one role, or the account can sign in and see nothing.');
+  return problems;
+});
+
+/** The roles picked, by name, for the sentence under the list. */
+const newRoleNames = computed(() =>
+  roleOptions.value
+    .filter((role) => newRoleIds.value.includes(String(role.id)))
+    .map((role) => text(role.name)),
+);
+/**
+ * Picking this grants everything, including platform settings. It is the one
+ * choice on the form that cannot be undone by editing a permission later, so
+ * it says so at the moment it is made rather than in a tooltip.
+ */
+const newUserIsSuper = computed(() =>
+  newRoleNames.value.some((name) => /super\s*admin/i.test(name)),
+);
 const editUserStatus = ref('');
 const editUserRoleIds = ref<string[]>([]);
 const editUserPassword = ref('');
@@ -5093,56 +5133,96 @@ onUnmounted(() => {
       <ModalDialog
         :open="showScheduleForm"
         title="New backup schedule"
+        subtitle="A standing instruction: the platform takes this backup on its own, on the cadence below, until the schedule is disabled."
         testid="schedule-form"
         wide
         @close="showScheduleForm = false"
       >
-        <label class="filter-select filter-search">
-          <span>Name</span>
-          <input v-model="scheduleName" data-testid="schedule-name" placeholder="Nightly full" />
-        </label>
-        <label class="filter-select">
-          <span>Trigger</span>
-          <select v-model="scheduleMode" data-testid="schedule-mode">
-            <option value="interval">Every N minutes</option>
-            <option value="cron">Cron expression</option>
-          </select>
-        </label>
-        <label v-if="scheduleMode === 'interval'" class="filter-select">
-          <span>Interval (minutes)</span>
-          <input
-            v-model.number="scheduleIntervalMinutes"
-            data-testid="schedule-interval"
-            type="number"
-            min="1"
-          />
-        </label>
-        <label v-else class="filter-select">
-          <span>Cron</span>
-          <input v-model="scheduleCron" data-testid="schedule-cron" placeholder="0 2 * * *" />
-        </label>
-        <label class="filter-select">
-          <span>Kind</span>
-          <select v-model="scheduleKind" data-testid="schedule-kind">
-            <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Retention class</span>
-          <select v-model="scheduleRetention" data-testid="schedule-retention">
-            <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
-          </select>
-        </label>
-        <label class="filter-select">
-          <span>Enabled</span>
-          <select v-model="scheduleEnabled" data-testid="schedule-enabled">
-            <option :value="true">Yes</option>
-            <option :value="false">No</option>
-          </select>
-        </label>
-        <p v-if="scheduleError" class="form-error" role="alert" data-testid="schedule-error">
-          {{ scheduleError }}
-        </p>
+        <fieldset class="dialog-group">
+          <legend>What it is</legend>
+          <div class="dialog-grid">
+            <label class="field dialog-span">
+              <span>Name <em class="req" aria-hidden="true">required</em></span>
+              <input
+                v-model="scheduleName"
+                data-testid="schedule-name"
+                placeholder="Nightly full"
+              />
+              <small>Names the schedule, and every backup it produces.</small>
+            </label>
+            <label class="field">
+              <span>Kind</span>
+              <select v-model="scheduleKind" data-testid="schedule-kind">
+                <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
+              </select>
+              <small>Full copies everything; incremental copies what changed.</small>
+            </label>
+            <label class="field">
+              <span>Retention class</span>
+              <select v-model="scheduleRetention" data-testid="schedule-retention">
+                <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
+              </select>
+              <small>How long each run is kept before pruning may remove it.</small>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="dialog-group">
+          <legend>When it runs</legend>
+          <div class="dialog-grid">
+            <label class="field">
+              <span>Trigger</span>
+              <select v-model="scheduleMode" data-testid="schedule-mode">
+                <option value="interval">Every N minutes</option>
+                <option value="cron">Cron expression</option>
+              </select>
+              <small>An interval counts from the last run; cron fires at wall-clock times.</small>
+            </label>
+            <label v-if="scheduleMode === 'interval'" class="field">
+              <span>Interval (minutes)</span>
+              <input
+                v-model.number="scheduleIntervalMinutes"
+                data-testid="schedule-interval"
+                type="number"
+                min="1"
+              />
+              <small>1440 is once a day.</small>
+            </label>
+            <label v-else class="field">
+              <span>Cron</span>
+              <input v-model="scheduleCron" data-testid="schedule-cron" placeholder="0 2 * * *" />
+              <small>Five fields, server time. <span class="mono">0 2 * * *</span> is 02:00 daily.</small>
+            </label>
+            <label class="field">
+              <span>Enabled</span>
+              <select v-model="scheduleEnabled" data-testid="schedule-enabled">
+                <option :value="true">Yes</option>
+                <option :value="false">No</option>
+              </select>
+              <small>A disabled schedule is kept and never fires.</small>
+            </label>
+          </div>
+          <!-- What the settings add up to, before they are saved. A cadence
+               assembled from a dropdown and a number is the kind of thing that
+               is wrong by a factor of sixty and nobody notices for a month. -->
+          <p class="draft-sentence" data-testid="schedule-sentence">
+            <strong>{{ scheduleName.trim() || 'This schedule' }}</strong> will take a
+            {{ scheduleKind }} backup
+            <template v-if="scheduleMode === 'interval'">
+              every {{ scheduleIntervalMinutes || '—' }} minute(s)</template
+            ><template v-else> on cron {{ scheduleCron || '—' }}</template>, kept as
+            {{ scheduleRetention }}{{ scheduleEnabled ? '' : ', but it is disabled and will not run' }}.
+          </p>
+        </fieldset>
+
+        <div
+          v-if="scheduleError"
+          class="form-alert is-error"
+          role="alert"
+          data-testid="schedule-error"
+        >
+          <div><strong>This cannot be saved yet</strong><span>{{ scheduleError }}</span></div>
+        </div>
         <template #footer>
           <button
             class="secondary-button"
@@ -5349,45 +5429,108 @@ onUnmounted(() => {
       </ul>
     </section>
 
+    <!--
+      Grouped like the carrier dialog: a subtitle saying what the record is
+      for, named fieldsets, a hint under every field, and one error block that
+      lists every problem instead of a Save button that is grey for a reason
+      it will not give.
+    -->
     <ModalDialog
       :open="showCreateUser"
       title="Create user"
+      subtitle="A console sign-in. Roles decide what it can do — an account with none can sign in and see nothing."
       testid="create-user-form"
+      wide
       @close="showCreateUser = false"
     >
-      <label>
-        Username
-        <input v-model="newUsername" data-testid="new-username" />
-      </label>
-      <label>
-        Password (min 12 characters)
-        <input v-model="newPassword" type="password" data-testid="new-password" />
-      </label>
-      <p v-if="newPassword && newPassword.length < 12" class="form-hint">
-        Password must be at least 12 characters.
-      </p>
-      <fieldset class="role-checkboxes" data-testid="new-roles">
-        <legend>Roles</legend>
-        <label
-          v-for="role in roleOptions"
-          :key="String(role.id)"
-          class="role-option"
-          :data-testid="`new-role-${role.id}`"
-        >
-          <input v-model="newRoleIds" type="checkbox" :value="String(role.id)" />
-          <span class="role-text">
-            <strong>{{ text(role.name) }}</strong>
-            <small>{{ text(role.description) }}</small>
-          </span>
-        </label>
-        <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
+      <fieldset class="dialog-group">
+        <legend>Sign-in</legend>
+        <div class="dialog-grid">
+          <label class="field">
+            <span>Username <em class="req" aria-hidden="true">required</em></span>
+            <input v-model="newUsername" data-testid="new-username" autocomplete="off" />
+            <small>What they type to sign in. It cannot be changed afterwards.</small>
+          </label>
+          <label class="field" :class="{ 'is-invalid': newPassword && newPassword.length < 12 }">
+            <span>Password <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="newPassword"
+              type="password"
+              data-testid="new-password"
+              autocomplete="new-password"
+            />
+            <small v-if="newPassword && newPassword.length < 12" class="field-error">
+              {{ 12 - newPassword.length }} more character(s) needed.
+            </small>
+            <small v-else>At least 12 characters. They can change it after the first sign-in.</small>
+          </label>
+        </div>
       </fieldset>
+
+      <fieldset class="dialog-group" data-testid="new-roles">
+        <legend>Roles</legend>
+        <div class="choice-list">
+          <label
+            v-for="role in roleOptions"
+            :key="String(role.id)"
+            class="choice"
+            :class="{ 'is-chosen': newRoleIds.includes(String(role.id)) }"
+            :data-testid="`new-role-${role.id}`"
+          >
+            <input v-model="newRoleIds" type="checkbox" :value="String(role.id)" />
+            <span class="choice-text">
+              <strong>{{ text(role.name) }}</strong>
+              <small>{{ text(role.description) }}</small>
+            </span>
+          </label>
+          <p v-if="!roleOptions.length" class="form-hint">No roles are available to assign.</p>
+        </div>
+        <!--
+          What the choice adds up to, in a sentence. Nine checkboxes with nine
+          descriptions is a specification; this is the summary a reviewer
+          actually needs before pressing Create.
+        -->
+        <p v-if="newRoleNames.length" class="draft-sentence" data-testid="new-user-sentence">
+          <strong>{{ newUsername.trim() || 'This account' }}</strong> will sign in with
+          {{ newRoleNames.join(', ') }}.
+        </p>
+        <p
+          v-if="newUserIsSuper"
+          class="form-alert is-warn"
+          role="status"
+          data-testid="new-user-super-warning"
+        >
+          <span>
+            <strong>Super Administrator grants everything</strong>, including platform settings and
+            the ability to change any other account. Give it only to someone who needs all of it.
+          </span>
+        </p>
+      </fieldset>
+
+      <div
+        v-if="newUserProblems.length"
+        class="form-alert is-error"
+        role="status"
+        data-testid="create-user-problems"
+      >
+        <div>
+          <strong>{{
+            newUserProblems.length > 1
+              ? `${newUserProblems.length} things are still needed`
+              : 'One thing is still needed'
+          }}</strong>
+          <ul>
+            <li v-for="problem in newUserProblems" :key="problem">{{ problem }}</li>
+          </ul>
+        </div>
+      </div>
+
       <template #footer>
         <button class="secondary-button" @click="showCreateUser = false">Cancel</button>
         <button
           class="primary-button"
           data-testid="create-user-submit"
-          :disabled="loading || !newUsername.trim() || newPassword.length < 12"
+          :disabled="loading || newUserProblems.length > 0"
           @click="createUser"
         >
           Create user
@@ -5398,19 +5541,62 @@ onUnmounted(() => {
     <ModalDialog
       :open="showApiClientForm"
       title="Create API client"
+      subtitle="A machine identity that carries credentials. The key itself is shown once, immediately after this, and never again."
       testid="api-client-form"
+      wide
       @close="showApiClientForm = false"
     >
-      <!-- A bare `<label>` with a loose text node is the one field shape the
-           design system does not style, so this dialog was the only one whose
-           label did not sit above its control. -->
-      <div class="dialog-grid">
-        <label class="filter-select filter-search dialog-span">
-          <span>Name</span>
-          <input v-model="apiClientName" data-testid="api-client-name" />
-        </label>
+      <fieldset class="dialog-group">
+        <legend>Identity</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>Name <em class="req" aria-hidden="true">required</em></span>
+            <input
+              v-model="apiClientName"
+              data-testid="api-client-name"
+              placeholder="CPAAS production sender"
+            />
+            <small>
+              Who or what will use this key. It is what appears in the audit log beside every call
+              the key makes, so name the system, not the person.
+            </small>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="dialog-group">
+        <legend>Scopes</legend>
+        <ScopePicker v-model="apiClientScopes" />
+        <!-- A key with no scope authenticates and is refused by every
+             endpoint, which reads from the outside exactly like a broken
+             credential. Said here rather than discovered at integration. -->
+        <p
+          v-if="!apiClientScopes.length"
+          class="form-alert is-warn"
+          role="status"
+          data-testid="api-client-no-scope"
+        >
+          <span>
+            <strong>No scope selected.</strong> The key will authenticate and then be refused by
+            every endpoint — which looks, from the caller's side, like a broken credential.
+          </span>
+        </p>
+      </fieldset>
+
+      <div
+        v-if="!apiClientName.trim()"
+        class="form-alert is-error"
+        role="status"
+        data-testid="api-client-problems"
+      >
+        <div>
+          <strong>One thing is still needed</strong>
+          <ul>
+            <li>A name is required.</li>
+          </ul>
+        </div>
       </div>
-      <ScopePicker v-model="apiClientScopes" />
+
       <template #footer>
         <button class="secondary-button" @click="showApiClientForm = false">Cancel</button>
         <button
@@ -5454,67 +5640,106 @@ onUnmounted(() => {
     <ModalDialog
       :open="showBackupModal"
       title="Create backup"
+      subtitle="Runs now, once. The scope decides what goes in it — and what will not be there to restore from."
       testid="backup-modal"
+      wide
       @close="showBackupModal = false"
     >
-      <label>
-        Backup name (label)
-        <input
-          v-model="backupLabel"
-          data-testid="backup-label"
-          placeholder="e.g. pre-upgrade snapshot"
-        />
-      </label>
-      <label class="filter-select">
-        <span>Kind</span>
-        <select v-model="backupKind" data-testid="backup-kind">
-          <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
-        </select>
-      </label>
-      <label class="filter-select">
-        <span>Retention class</span>
-        <select v-model="backupRetention" data-testid="backup-retention">
-          <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
-        </select>
-      </label>
+      <fieldset class="dialog-group">
+        <legend>Label and retention</legend>
+        <div class="dialog-grid">
+          <label class="field dialog-span">
+            <span>Name</span>
+            <input
+              v-model="backupLabel"
+              data-testid="backup-label"
+              placeholder="pre-upgrade snapshot"
+            />
+            <small>How this one will be recognised in the register months from now.</small>
+          </label>
+          <label class="field">
+            <span>Kind</span>
+            <select v-model="backupKind" data-testid="backup-kind">
+              <option v-for="kind in BACKUP_KINDS" :key="kind" :value="kind">{{ kind }}</option>
+            </select>
+            <small>Full copies everything; incremental copies what changed since the last one.</small>
+          </label>
+          <label class="field">
+            <span>Retention class</span>
+            <select v-model="backupRetention" data-testid="backup-retention">
+              <option v-for="cls in RETENTION_CLASSES" :key="cls" :value="cls">{{ cls }}</option>
+            </select>
+            <small>How long it is kept before the pruning job is allowed to remove it.</small>
+          </label>
+        </div>
+      </fieldset>
       <p class="form-hint">
         The retention class decides how long the backup survives the retention sweep;
         <code>manual</code> is never expired automatically.
       </p>
       <fieldset class="scope-fieldset">
         <legend>Scope</legend>
-        <label class="checkbox-row">
-          <input
-            v-model="backupScope"
-            type="radio"
-            value="full"
-            name="backup-scope"
-            data-testid="backup-scope-full"
-          />
-          Full (database + configurations)
-        </label>
-        <label class="checkbox-row">
-          <input
-            v-model="backupScope"
-            type="radio"
-            value="database"
-            name="backup-scope"
-            data-testid="backup-scope-database"
-          />
-          Database only
-        </label>
-        <label class="checkbox-row">
-          <input
-            v-model="backupScope"
-            type="radio"
-            value="configurations"
-            name="backup-scope"
-            data-testid="backup-scope-configurations"
-          />
-          Configurations only
-        </label>
+        <!--
+          Three radios reading "Full", "Database only", "Configurations only"
+          state what is IN each choice and never what is missing from it. The
+          one thing an operator needs at restore time is what they did not
+          take, so each option says it.
+        -->
+        <div class="choice-list">
+          <label
+            class="choice"
+            :class="{ 'is-chosen': backupScope === 'full' }"
+          >
+            <input
+              v-model="backupScope"
+              type="radio"
+              value="full"
+              name="backup-scope"
+              data-testid="backup-scope-full"
+            />
+            <span class="choice-text">
+              <strong>Full — database and configurations</strong>
+              <small>Everything this gateway holds. The only scope you can restore the whole service from.</small>
+            </span>
+          </label>
+          <label
+            class="choice"
+            :class="{ 'is-chosen': backupScope === 'database' }"
+          >
+            <input
+              v-model="backupScope"
+              type="radio"
+              value="database"
+              name="backup-scope"
+              data-testid="backup-scope-database"
+            />
+            <span class="choice-text">
+              <strong>Database only</strong>
+              <small>Messages, receipts, routes and audit. <em>Not</em> the engine configuration — restoring this alone leaves the binds undefined.</small>
+            </span>
+          </label>
+          <label
+            class="choice"
+            :class="{ 'is-chosen': backupScope === 'configurations' }"
+          >
+            <input
+              v-model="backupScope"
+              type="radio"
+              value="configurations"
+              name="backup-scope"
+              data-testid="backup-scope-configurations"
+            />
+            <span class="choice-text">
+              <strong>Configurations only</strong>
+              <small>Binds, routes and engine settings. <em>Not</em> the traffic history — restoring this alone gives a working gateway with no record of what it has sent.</small>
+            </span>
+          </label>
+        </div>
       </fieldset>
-      <p class="form-hint">Application code is not included — it lives in version control.</p>
+      <p class="form-hint">
+        Application code is in neither scope — it lives in version control, and a restore pairs a
+        backup with a deployed commit.
+      </p>
       <template #footer>
         <button class="secondary-button" @click="showBackupModal = false">Cancel</button>
         <button

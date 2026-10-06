@@ -145,6 +145,22 @@ const recordBusy = ref('');
 const showRecordForm = ref(false);
 const draftKey = ref('');
 const draftValue = ref('{}');
+/**
+ * Whether the draft parses, checked as it is typed.
+ *
+ * The create button used to be enabled whatever was in the field, so a missing
+ * brace was discovered by the API refusing it — a round trip, and an error
+ * message written for a caller rather than for the person who typed it.
+ */
+const validDraft = computed(() => {
+  if (!draftValue.value.trim()) return false;
+  try {
+    JSON.parse(draftValue.value);
+    return true;
+  } catch {
+    return false;
+  }
+});
 
 async function loadRecords() {
   recordState.value = 'loading';
@@ -492,24 +508,52 @@ onMounted(() => {
       <ModalDialog
         :open="showRecordForm && canManage"
         title="New reference record"
+        subtitle="A key and a JSON value, versioned. Later writes must send the version they read, so two operators cannot overwrite each other."
         testid="record-form"
         wide
         @close="showRecordForm = false"
       >
-        <div class="dialog-grid">
-          <label class="filter-select">
-            <span>Key</span>
-            <input v-model="draftKey" type="text" data-testid="record-key" />
-          </label>
-          <label class="filter-select filter-search dialog-span">
-            <span>Value (JSON object)</span>
-            <input v-model="draftValue" type="text" data-testid="record-value" />
-          </label>
-        </div>
+        <fieldset class="dialog-group">
+          <legend>Record</legend>
+          <div class="dialog-grid">
+            <label class="field">
+              <span>Key <em class="req" aria-hidden="true">required</em></span>
+              <input
+                v-model="draftKey"
+                type="text"
+                data-testid="record-key"
+                placeholder="carrier.kamdixy.contact"
+              />
+              <small>Unique within the tenant. Dotted names keep related records together.</small>
+            </label>
+            <label class="field dialog-span" :class="{ 'is-invalid': draftValue && !validDraft }">
+              <span>Value <em class="req" aria-hidden="true">required</em></span>
+              <input
+                v-model="draftValue"
+                type="text"
+                data-testid="record-value"
+                placeholder='{ "email": "noc@example.net" }'
+              />
+              <small v-if="draftValue && !validDraft" class="field-error">
+                Not valid JSON. A bare string needs quotes: <span class="mono">"value"</span>.
+              </small>
+              <small v-else>
+                A JSON object. It is stored as given and read back by whatever uses this key.
+              </small>
+            </label>
+          </div>
+        </fieldset>
+
         <!-- The panel's error banner is behind the scrim while this is open. -->
-        <p v-if="recordError" class="form-error" role="alert" data-testid="record-form-error">
-          {{ recordError }}
-        </p>
+        <div
+          v-if="recordError"
+          class="form-alert is-error"
+          role="alert"
+          data-testid="record-form-error"
+        >
+          <div><strong>This record was not created</strong><span>{{ recordError }}</span></div>
+        </div>
+
         <template #footer>
           <button class="secondary-button" type="button" @click="showRecordForm = false">
             Cancel
@@ -517,11 +561,11 @@ onMounted(() => {
           <button
             class="primary-button"
             type="button"
-            :disabled="Boolean(recordBusy)"
+            :disabled="Boolean(recordBusy) || !draftKey.trim() || !validDraft"
             data-testid="record-create"
             @click="createRecord"
           >
-            Create
+            Create record
           </button>
         </template>
       </ModalDialog>

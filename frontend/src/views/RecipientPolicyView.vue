@@ -437,55 +437,109 @@ onMounted(loadEntries);
         control that submitted it read "Add", which looks like a disclosure and
         is not.
       -->
+      <!--
+        Grouped to the house dialog shape. It was five controls whose labels
+        sat BESIDE their inputs — the one field layout the design system does
+        not style — with no hint under any of them, no required marker, and a
+        submit button reading "Add", which says nothing about what is added
+        or to which of three lists.
+
+        The list type is the consequential choice here: the same destination
+        on `blacklist` is refused and on `whitelist` is the only thing
+        accepted. It leads, and the sentence at the bottom states the outcome
+        in words before anybody presses the button.
+      -->
       <ModalDialog
         :open="showForm && canManage"
-        title="Add an entry"
+        title="Add a recipient policy entry"
+        subtitle="One destination, on one list. Nothing else about the platform's behaviour changes."
         testid="policy-form"
         wide
         @close="showForm = false"
       >
-        <p class="source-note" data-testid="policy-meaning">
-          {{ LIST_MEANING[draftType] }}
+        <fieldset class="dialog-group">
+          <legend>What this entry does</legend>
+          <div class="dialog-grid">
+            <label class="field">
+              <span>List <em class="req" aria-hidden="true">required</em></span>
+              <select v-model="draftType" data-testid="entry-type">
+                <option v-for="type in LIST_TYPES" :key="type" :value="type">{{ type }}</option>
+              </select>
+              <small data-testid="policy-meaning">{{ LIST_MEANING[draftType] }}</small>
+            </label>
+            <label class="field">
+              <span>Destination <em class="req" aria-hidden="true">required</em></span>
+              <input
+                v-model="draftMsisdn"
+                type="text"
+                data-testid="entry-msisdn"
+                placeholder="+256772000118"
+              />
+              <small>One MSISDN in E.164. This is matched exactly, not as a prefix.</small>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="dialog-group">
+          <legend>Scope and record</legend>
+          <div class="dialog-grid">
+            <label class="field">
+              <span>Customer</span>
+              <input v-model="draftCustomerId" type="text" data-testid="entry-customer" />
+              <small>Leave blank to apply to every customer on this tenant.</small>
+            </label>
+            <label class="field">
+              <span>Reason</span>
+              <input
+                v-model="draftReason"
+                type="text"
+                data-testid="entry-reason"
+                placeholder="Customer complaint, 2026-10-06"
+              />
+              <small>Why this was listed. It is the only record of the decision.</small>
+            </label>
+            <label class="field">
+              <span>Expires</span>
+              <input v-model="draftExpiresAt" type="datetime-local" data-testid="entry-expires" />
+              <small>Leave blank to keep it until somebody removes it.</small>
+            </label>
+          </div>
+        </fieldset>
+
+        <p class="draft-sentence" data-testid="policy-sentence">
+          <template v-if="draftMsisdn.trim()">
+            <strong>{{ draftMsisdn.trim() }}</strong> will be on the
+            <strong>{{ draftType }}</strong>
+            {{ draftCustomerId.trim() ? `for customer ${draftCustomerId.trim()}` : 'for every customer' }}<template
+              v-if="draftExpiresAt"
+            >
+              until {{ draftExpiresAt.replace('T', ' ') }}</template
+            ><template v-else> until it is removed</template>.
+          </template>
+          <template v-else>Enter a destination to see what this entry will do.</template>
         </p>
-        <div class="dialog-grid">
-          <label class="filter-select">
-            <span>Destination</span>
-            <input v-model="draftMsisdn" type="text" data-testid="entry-msisdn" />
-          </label>
-          <label class="filter-select">
-            <span>List</span>
-            <select v-model="draftType" data-testid="entry-type">
-              <option v-for="type in LIST_TYPES" :key="type" :value="type">{{ type }}</option>
-            </select>
-          </label>
-          <label class="filter-select">
-            <span>Customer (optional)</span>
-            <input v-model="draftCustomerId" type="text" data-testid="entry-customer" />
-          </label>
-          <label class="filter-select">
-            <span>Reason</span>
-            <input v-model="draftReason" type="text" data-testid="entry-reason" />
-          </label>
-          <label class="filter-select">
-            <span>Expires (optional)</span>
-            <input v-model="draftExpiresAt" type="datetime-local" data-testid="entry-expires" />
-          </label>
-        </div>
+
         <!-- The panel's own error banner is behind the scrim while this is
              open, so a refused add has to say so in here. -->
-        <p v-if="listError" class="form-error" role="alert" data-testid="policy-form-error">
-          {{ listError }}
-        </p>
+        <div
+          v-if="listError"
+          class="form-alert is-error"
+          role="alert"
+          data-testid="policy-form-error"
+        >
+          <div><strong>This entry was not added</strong><span>{{ listError }}</span></div>
+        </div>
+
         <template #footer>
           <button class="secondary-button" type="button" @click="showForm = false">Cancel</button>
           <button
             class="primary-button"
             type="button"
-            :disabled="Boolean(busy)"
+            :disabled="Boolean(busy) || !draftMsisdn.trim()"
             data-testid="entry-add"
             @click="addEntry"
           >
-            Add
+            Add to {{ draftType }}
           </button>
         </template>
       </ModalDialog>
