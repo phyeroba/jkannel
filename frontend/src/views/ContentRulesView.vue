@@ -957,16 +957,20 @@ onMounted(() => {
         <table>
           <thead>
             <tr>
+              <!--
+                SEVEN COLUMNS, FROM ELEVEN. Action and Priority are one answer
+                — what this rule does and when it gets its turn; Match and
+                Pattern are one answer about what it matches; Matches and Last
+                matched are one answer about whether it has ever fired. 177px
+                of overflow for an arrangement nobody reads that way.
+              -->
               <th scope="col" title="Position in evaluation order">#</th>
               <th scope="col">Rule</th>
               <th scope="col">State</th>
-              <th scope="col">Action</th>
-              <th scope="col">Priority</th>
-              <th scope="col">Match</th>
-              <th scope="col">Pattern</th>
+              <th scope="col">Does</th>
+              <th scope="col">Matches on</th>
               <th scope="col">Scope</th>
-              <th scope="col">Matches</th>
-              <th scope="col">Last matched</th>
+              <th scope="col">Fired</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
@@ -1025,14 +1029,20 @@ onMounted(() => {
                 <span class="status-badge" :class="rule.action === 'block' ? 'bad' : 'good'">{{
                   text(rule.action)
                 }}</span>
+                <small class="row-id">priority {{ text(rule.priority) }}</small>
               </td>
-              <td class="mono">{{ text(rule.priority) }}</td>
-              <td class="cell-wrap"><span class="clamp-2">{{ describeRule(rule) }}</span></td>
-              <td class="mono cell-clip" :title="text(rule.pattern)">{{ text(rule.pattern) }}</td>
-              <td>{{ scopeOf(rule) }}</td>
-              <td class="mono">{{ text(rule.match_count, '0') }}</td>
-              <td :title="text(rule.last_matched_at, '')">
-                {{ rule.last_matched_at ? agoWhen(rule.last_matched_at) : 'never' }}
+              <td class="cell-wrap">
+                <span class="clamp-2">{{ describeRule(rule) }}</span>
+                <small class="row-id mono clamp-1" :title="text(rule.pattern)">{{
+                  text(rule.pattern)
+                }}</small>
+              </td>
+              <td class="cell-clip" :title="scopeOf(rule)">{{ scopeOf(rule) }}</td>
+              <td>
+                <span class="mono">{{ text(rule.match_count, '0') }}</span>
+                <small class="row-id" :title="text(rule.last_matched_at, '')">{{
+                  rule.last_matched_at ? agoWhen(rule.last_matched_at) : 'never'
+                }}</small>
               </td>
               <td class="row-actions">
                 <template v-if="canManage">

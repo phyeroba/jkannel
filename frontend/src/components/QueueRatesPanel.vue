@@ -225,16 +225,20 @@ onMounted(load);
         <table data-testid="queue-rates-table">
           <thead>
             <tr>
+              <!--
+                SIX COLUMNS, FROM TEN. Ingress, egress and growth are one
+                answer — is this queue filling or draining — and depth and
+                oldest-spooled are one answer about how bad it is. Ten nowrap
+                columns put this table 186px past its panel, with "Measured
+                from" off the edge, which is the one cell that says whether
+                the rest of the row can be trusted.
+              -->
               <th scope="col">Destination</th>
               <th scope="col">Carrier</th>
               <th scope="col">Bind</th>
-              <th scope="col">Depth</th>
-              <th scope="col">Ingress</th>
-              <th scope="col">Egress</th>
-              <th scope="col">Growth</th>
+              <th scope="col">Backlog</th>
+              <th scope="col">Flow</th>
               <th scope="col">Drain estimate</th>
-              <th scope="col">Oldest spooled</th>
-              <th scope="col">Measured from</th>
             </tr>
           </thead>
           <tbody>
@@ -247,7 +251,16 @@ onMounted(load);
                 <router-link class="text-link" :to="`/smsc/${row.engineId}`">{{
                   row.smscName ?? row.engineId
                 }}</router-link>
-                <small class="row-id mono">{{ row.engineId }}</small>
+                <small class="row-id mono clamp-1" :title="row.engineId">{{
+                  row.engineId
+                }}</small>
+                <!-- What the row's rates were derived from. It qualifies every
+                     figure on the row, so it belongs beside the row's name
+                     rather than inside the drain cell, whose text is the
+                     API's own and must stay verbatim. -->
+                <small class="row-id" :data-testid="`queue-coverage-${row.engineId}`">{{
+                  describeCoverage(row)
+                }}</small>
               </td>
               <td>
                 <router-link
@@ -263,19 +276,45 @@ onMounted(load);
                   bindWord(row.bindState)
                 }}</span>
               </td>
-              <td class="mono" :data-testid="`queue-depth-${row.engineId}`">
-                {{ displayValue(row.depth, state) }}
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line">
+                    <span class="v mono" :data-testid="`queue-depth-${row.engineId}`">{{
+                      displayValue(row.depth, state)
+                    }}</span>
+                    <span class="k">queued</span>
+                  </span>
+                  <span class="metric-line">
+                    <span class="v mono" :data-testid="`queue-oldest-${row.engineId}`">{{
+                      formatAge(row.oldestSpoolAgeSeconds, state)
+                    }}</span>
+                    <span class="k">oldest spooled</span>
+                  </span>
+                </span>
               </td>
-              <td class="mono" :data-testid="`queue-ingress-${row.engineId}`">
-                {{ formatRate(row.ingressPerSecond, state) }}
-              </td>
-              <td class="mono" :data-testid="`queue-egress-${row.engineId}`">
-                {{ formatRate(row.egressPerSecond, state) }}
-              </td>
-              <td class="mono" :data-testid="`queue-growth-${row.engineId}`">
-                <span class="status-badge" :class="growthTone(row.growthPerSecond)">{{
-                  formatSignedRate(row.growthPerSecond, state)
-                }}</span>
+              <td>
+                <span class="metric-stack">
+                  <span class="metric-line">
+                    <span class="v" :data-testid="`queue-growth-${row.engineId}`">
+                      <span class="status-badge" :class="growthTone(row.growthPerSecond)">{{
+                        formatSignedRate(row.growthPerSecond, state)
+                      }}</span>
+                    </span>
+                    <span class="k">growth</span>
+                  </span>
+                  <span class="metric-line">
+                    <span class="v mono" :data-testid="`queue-ingress-${row.engineId}`">{{
+                      formatRate(row.ingressPerSecond, state)
+                    }}</span>
+                    <span class="k">in</span>
+                  </span>
+                  <span class="metric-line">
+                    <span class="v mono" :data-testid="`queue-egress-${row.engineId}`">{{
+                      formatRate(row.egressPerSecond, state)
+                    }}</span>
+                    <span class="k">out</span>
+                  </span>
+                </span>
               </td>
               <!--
                 VERBATIM. `drainUnavailableReason` names which of four causes
@@ -287,12 +326,7 @@ onMounted(load);
                 }}</span>
                 <span class="drain-text">{{ describeDrain(row, state).text }}</span>
               </td>
-              <td class="mono" :data-testid="`queue-oldest-${row.engineId}`">
-                {{ formatAge(row.oldestSpoolAgeSeconds, state) }}
-              </td>
-              <td class="row-id" :data-testid="`queue-coverage-${row.engineId}`">
-                {{ describeCoverage(row) }}
-              </td>
+
             </tr>
           </tbody>
         </table>

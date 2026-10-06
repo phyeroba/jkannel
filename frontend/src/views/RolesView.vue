@@ -629,11 +629,16 @@ onMounted(() => {
         <table>
           <thead>
             <tr>
+              <!--
+                FOUR COLUMNS, FROM SIX. "Users" is a count of the names in
+                "Members" — two columns for one answer — and both sat to the
+                right of a permission chip list, so the count fell off the
+                edge on a narrow panel.
+              -->
               <th scope="col">Role</th>
               <th scope="col">Primary goals</th>
               <th scope="col">Typical privileges</th>
-              <th scope="col">Users</th>
-              <th scope="col">Members</th>
+              <th scope="col">Held by</th>
               <th v-if="canManageUsers" scope="col">Actions</th>
             </tr>
           </thead>
@@ -713,20 +718,19 @@ onMounted(() => {
                   </span>
                 </div>
               </td>
-              <td class="mono" :data-testid="`role-user-count-${text(role.id)}`">
-                {{ userCountOf(role) }}
-              </td>
-              <td>
-                <span v-if="userState === 'error'" class="cell-health">{{ userError }}</span>
-                <span v-else-if="userState === 'loading'" class="cell-health">loading…</span>
-                <span
+              <td class="cell-clip">
+                <span class="mono" :data-testid="`role-user-count-${text(role.id)}`">{{
+                  userCountOf(role)
+                }}</span>
+                <small v-if="userState === 'error'" class="row-id">{{ userError }}</small>
+                <small v-else-if="userState === 'loading'" class="row-id">loading…</small>
+                <small
                   v-else-if="holdersOf(role).length"
-                  class="mono clamp-1"
+                  class="row-id mono clamp-1"
                   :title="holdersOf(role).join(', ')"
+                  >{{ holdersOf(role).join(', ') }}</small
                 >
-                  {{ holdersOf(role).join(', ') }}
-                </span>
-                <span v-else class="cell-health">nobody holds this role</span>
+                <small v-else class="row-id">nobody holds this role</small>
               </td>
               <td v-if="canManageUsers" class="row-actions">
                 <button

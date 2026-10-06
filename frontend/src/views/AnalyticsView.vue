@@ -1137,6 +1137,17 @@ onMounted(() => void refreshAll());
             <table>
               <thead>
                 <tr>
+                  <!--
+                    THE HEADER ROW WAS ONE SHORT.
+
+                    Five cells per row, four headers: the first column holds
+                    the SMSC or route name and had no heading at all, so
+                    "Messages" sat over the name, "DLRs" over the message
+                    count, and every figure in the table was labelled with the
+                    heading of the column to its left. The missing column was
+                    also unbounded, which is the +196px.
+                  -->
+                  <th scope="col">{{ group.unit }}</th>
                   <th scope="col">Messages</th>
                   <th scope="col">DLRs</th>
                   <th scope="col">Success</th>
@@ -1145,7 +1156,7 @@ onMounted(() => void refreshAll());
               </thead>
               <tbody>
                 <tr v-for="row in group.data.groups.slice(0, topN)" :key="row.label">
-                  <td>{{ row.label }}</td>
+                  <td class="cell-clip" :title="row.label">{{ row.label }}</td>
                   <td>{{ row.messages }}</td>
                   <td>{{ row.dlrs }}</td>
                   <td>

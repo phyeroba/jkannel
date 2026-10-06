@@ -7350,7 +7350,14 @@ onUnmounted(() => {
                 <strong>{{ text(tpl.name) }}</strong>
               </td>
               <td>{{ text(tpl.engine) }}</td>
-              <td>{{ text(tpl.description) }}</td>
+              <!-- A paragraph per template in a cell that is nowrap by
+                   default: 572px past the panel, and the Actions buttons off
+                   the right-hand edge. -->
+              <td class="cell-wrap">
+                <span class="clamp-2" :title="text(tpl.description)">{{
+                  text(tpl.description)
+                }}</span>
+              </td>
               <td>
                 <span
                   class="status-badge"
