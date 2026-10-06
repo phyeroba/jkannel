@@ -395,13 +395,24 @@ th {
   letter-spacing: -0.01em;
   color: var(--text-strong);
 }
+/* THE SIGN-IN ILLUSTRATION ------------------------------------------------
+   Three cards over a ring. They used to be absolutely positioned at fixed
+   offsets, which worked only while each one held a figure and two short
+   words. Once they carried sentences the "Tenant isolated" chip sat on top of
+   the card beside it and hid half its text.
+
+   So the cards flow and stagger, and only the ring is positioned. A card can
+   now grow to whatever its sentence needs and nothing lands on anything. */
 .login-illustration {
   position: relative;
   align-self: center;
+  display: grid;
+  justify-items: start;
+  gap: 14px;
   width: 100%;
   max-width: 460px;
-  height: 360px;
   margin: 20px 0;
+  padding: 26px 0;
 }
 .illustration-ring,
 .illustration-core {
@@ -410,6 +421,9 @@ th {
   top: 50%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
+  /* Decoration behind the cards, never over them. */
+  z-index: 0;
+  pointer-events: none;
 }
 .illustration-ring {
   width: 300px;
@@ -422,21 +436,19 @@ th {
   background: var(--surface-2);
 }
 .login-stat {
-  position: absolute;
-  width: 186px;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 272px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 15px 17px;
   box-shadow: var(--shadow-lg);
 }
-.login-stat.first {
-  left: 4px;
-  top: 36px;
-}
+/* The stagger that the fixed offsets used to give, without the collisions. */
 .login-stat.second {
-  right: 0;
-  bottom: 20px;
+  justify-self: end;
 }
 .login-stat .stat-icon {
   display: inline-flex;
@@ -466,28 +478,25 @@ th {
   color: var(--muted);
 }
 .login-live {
-  position: absolute;
-  left: 50%;
-  bottom: 2px;
-  transform: translateX(-50%);
-  width: 168px;
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  width: auto;
   background: var(--brand);
   border-radius: 12px;
-  padding: 13px 15px;
+  padding: 12px 16px;
   box-shadow: var(--shadow-lg);
   color: #fff;
-}
-.login-live small,
-.login-live strong {
-  display: block;
 }
 .login-live small {
   font-size: 11px;
   opacity: 0.85;
 }
 .login-live strong {
-  font-size: 14px;
-  margin-top: 2px;
+  font-size: 13.5px;
 }
 .login-caption {
   font-size: 12.5px !important;
