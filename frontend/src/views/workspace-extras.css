@@ -1868,3 +1868,29 @@ tbody td.cell-clip .row-id {
   line-height: 1.5;
   color: var(--muted);
 }
+
+/* A COMMIT THAT STAYS REACHABLE -------------------------------------------
+   A long form in a sheet puts its Save button below the last field, which on
+   the SMSC editor — thirty-eight fields — measured 1,156px past the bottom of
+   the window. An operator who changed the first field had to scroll the whole
+   form to commit it, and nothing on screen said the control was there.
+
+   Sticking the action row to the bottom of the scroll container fixes that
+   without moving the controls somewhere surprising: they are still at the end
+   of the form, they just never leave the view. */
+.detail-actions.is-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px -20px -20px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.detail-actions.is-sticky .source-note {
+  margin: 0 0 0 auto;
+}

@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-10-06d (the screens nothing links to from the navigation)
+
+The sweep now walks in **two phases** and clicks **every** opener, not one.
+`scripts/screen-sweep.mjs` v1 took a single button per page, which left three
+classes of screen unseen: every dialog after the first, every drawer that
+opens from a row click rather than a button, and **every page reached only by
+a link** — the carrier, SMSC and message detail screens, none of which is in
+`navigation.ts` and none of which any audit had ever visited.
+
+99 captures. What the unvisited screens turned out to be:
+
+| Screen | Found |
+|---|---|
+| `/smsc/kololo` | **7,043px tall, 917px of overflow** — the worst in the console |
+| `/carriers/:id` | 4,255px, 271px overflow |
+| `/smsc/local-fake`, `/smsc/local-fake-b` | 142px overflow each |
+| `/smsc` → **Edit** | the dialog is **1,156px taller than the window** — Save sat below 38 fields, more than a screen past the bottom edge |
+
+**The root cause of most of it is one rule.** `tbody td` is `white-space:
+nowrap` — deliberately, so a long value cannot build a tower — and a cell that
+genuinely holds prose opts in with `.cell-wrap`. Six registers never did, so a
+single sentence per row set the width of the whole table.
+
+Fixed, with the measurement each one was at:
+
+- `/smsc/:engineId` **917** — Reason and Verification wrap; the two unbounded
+  timelines are capped scroll regions with a count, which also takes the page
+  down from 7,043px
+- `/smpp-errors` **602** — "What it means" and "Suggested check" wrap
+- `/configuration` **572 + 191** — the generic fallback columns clipped the
+  checksum and the UUID. It serves every module without an explicit column
+  set, so this also covers `/queues` and `/delivery-reports`
+- `/logs-audit` **469** — 8 columns to 6; four opaque ids at 260px each was
+  more than a thousand pixels of ellipsis before the first readable word
+- `/log-explorer` **445** — the log message wraps
+- `/content-rules` **410** — regex patterns and rule ids capped
+- `/live-traffic` **350** — 14 columns to 7; one column per rate window, then
+  peak, then MO, then three spool figures, then two totals, is four questions
+  drawn as fourteen
+- `/roles` **506** — permission chips laid out on one line however many there
+  were
+- `/carriers/:id` **271** — 10 columns to 6
+- `/reports` **196** — two full ISO timestamps in two columns answering one
+  question
+- `/help` **66** — the guide purpose wraps
+
+**And the Save button that was 1,156px below the fold.** The SMSC editor has
+thirty-eight fields with Save under the last of them. Measured in the sheet
+that is more than a window height past the bottom: an operator who changed the
+first field had to scroll the whole form to commit it, and nothing on screen
+said the control existed. The action row sticks to the bottom of the sheet now.
+
+Frontend **756 tests pass**.
+
 ## 2026-10-06c (the sign-in page was inventing its figures, and five dialogs were flat)
 
 **A screenshot sweep now exists.** `scripts/screen-sweep.mjs` walks every route

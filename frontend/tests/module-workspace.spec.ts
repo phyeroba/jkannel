@@ -446,22 +446,31 @@ describe('module workspace behavior', () => {
     const wrapper = await mountWorkspace('/logs-audit', 'Logs & Audit');
     await vi.waitFor(() => expect(wrapper.text()).toContain('route.deploy'));
     expect(gridCall(fetchMock, '/audit-events?')).toContain('/audit-events?sort=-createdAt');
+    // SIX COLUMNS, FROM EIGHT. Four of the eight were opaque identifiers
+    // capped at 260px each, and Reason — the one cell holding a sentence —
+    // could not wrap, so the register ran 469px past its panel. Fields that
+    // answer one question now share a cell; nothing was dropped, which is
+    // what the row assertions below check.
     const headers = overlayAll(wrapper, 'th').map((th) => th.text());
     expect(headers).toEqual(
       expect.arrayContaining([
         'When',
         'Actor',
-        'Action',
-        'Entity',
+        'What happened',
+        'Previous state',
         'Reason',
-        'Correlation',
-        'Source IP',
+        'Origin',
       ]),
     );
+    expect(headers).not.toContain('Source IP');
     const row = overlay(wrapper, '[data-testid="record-evt-1"]').text();
     expect(row).toContain('user-7');
+    expect(row).toContain('route.deploy');
+    // Entity moved under the action; correlation moved under the source IP.
+    expect(row).toContain('route route-9');
     expect(row).toContain('corr-42');
     expect(row).toContain('10.0.0.9');
+    expect(row).toContain('deploy requested from console');
     expect(overlayHas(wrapper, '[data-testid="export-csv"]')).toBe(true);
     expect(overlayHas(wrapper, '[data-testid="export-pdf"]')).toBe(true);
   });

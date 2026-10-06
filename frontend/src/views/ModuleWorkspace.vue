@@ -11,7 +11,7 @@ import SegmentCounter from '../components/SegmentCounter.vue';
 import SendSchedule from '../components/SendSchedule.vue';
 import PrivacyReveal from '../components/PrivacyReveal.vue';
 import ScopePicker from '../components/ScopePicker.vue';
-import { shortWhen } from '../utils/when';
+import { agoWhen, shortWhen } from '../utils/when';
 
 /**
  * Which operational object owns each engine directive.
@@ -922,20 +922,39 @@ const definitions: Record<string, Workspace> = {
       exportBase: '/reports/volume/export',
       maxExportLimit: 1000,
     },
+    /*
+     * FIVE COLUMNS, NOT SEVEN. `From` and `To` were two full ISO timestamps
+     * in two nowrap columns answering one question — which period is this —
+     * and `Messages` and `DLRs` are one answer about volume. +196px of
+     * overflow for an arrangement nobody reads that way.
+     */
     columns: [
-      { header: 'Period', value: (raw) => text(raw.period_type) },
-      { header: 'From', value: (raw) => text(raw.period_start) },
-      { header: 'To', value: (raw) => text(raw.period_end) },
+      {
+        header: 'Period',
+        value: (raw) =>
+          `${shortWhen(raw.period_start)} → ${shortWhen(raw.period_end)}`.replace(/^ → $/, '—'),
+        hint: (raw) => text(raw.period_type),
+      },
       {
         header: 'Scope',
         value: (raw) =>
           raw.scope === 'total'
             ? 'total'
             : `${text(raw.scope)} · ${text(raw.scope_label ?? raw.scope_key)}`,
+        clip: true,
       },
-      { header: 'Messages', value: (raw) => text(raw.message_count, '0') },
-      { header: 'DLRs', value: (raw) => text(raw.dlr_count, '0') },
-      { header: 'Generated', value: (raw) => shortWhen(raw.generated_at), mono: true },
+      {
+        header: 'Volume',
+        lines: (raw) => [
+          { label: 'messages', value: text(raw.message_count, '0') },
+          { label: 'DLRs', value: text(raw.dlr_count, '0') },
+        ],
+      },
+      {
+        header: 'Generated',
+        value: (raw) => agoWhen(raw.generated_at) || 'not recorded',
+        hint: (raw) => shortWhen(raw.generated_at),
+      },
     ],
   },
   notifications: {
@@ -1051,20 +1070,34 @@ const definitions: Record<string, Workspace> = {
       exportBase: '/audit-events/export',
       maxExportLimit: 1000,
     },
+    /*
+     * SIX COLUMNS, NOT EIGHT.
+     *
+     * Four of the eight were opaque identifiers capped at 260px each — more
+     * than a thousand pixels of ellipsis before the first readable word — and
+     * `Reason`, the one cell holding a sentence, could not wrap because
+     * `tbody td` is nowrap. The register ran 469px past its panel.
+     *
+     * Fields that answer one question now share a cell: what happened and to
+     * what; where the call came from.
+     */
     columns: [
-      { header: 'When', value: (raw) => shortWhen(raw.created_at ?? raw.createdAt), mono: true },
+      {
+        header: 'When',
+        value: (raw) => agoWhen(raw.created_at ?? raw.createdAt) || 'never',
+        hint: (raw) => shortWhen(raw.created_at ?? raw.createdAt),
+      },
       {
         header: 'Actor',
         value: (raw) => text(raw.actor_id ?? raw.actorId),
         mono: true,
         clip: true,
       },
-      { header: 'Action', value: (raw) => text(raw.action) },
       {
-        header: 'Entity',
-        value: (raw) =>
+        header: 'What happened',
+        value: (raw) => text(raw.action),
+        hint: (raw) =>
           `${text(raw.entity_type ?? raw.entityType)} ${text(raw.entity_id ?? raw.entityId, '')}`.trim(),
-        mono: true,
         clip: true,
       },
       /*
@@ -1079,14 +1112,14 @@ const definitions: Record<string, Workspace> = {
         mono: true,
         clip: true,
       },
-      { header: 'Reason', value: (raw) => text(raw.reason) },
+      { header: 'Reason', value: (raw) => text(raw.reason), wrap: true },
       {
-        header: 'Correlation',
-        value: (raw) => text(raw.correlation_id ?? raw.correlationId),
+        header: 'Origin',
+        value: (raw) => text(raw.source_ip ?? raw.sourceIp),
+        hint: (raw) => text(raw.correlation_id ?? raw.correlationId, ''),
         mono: true,
         clip: true,
       },
-      { header: 'Source IP', value: (raw) => text(raw.source_ip ?? raw.sourceIp), mono: true },
     ],
   },
   plugins: {
@@ -1668,6 +1701,22 @@ const key = computed(() => String(route.name));
 const workspace = computed(() => definitions[key.value]);
 const grid = computed(() => workspace.value?.grid);
 const columns = computed(() => workspace.value?.columns);
+
+/**
+ * Is this value a token rather than a sentence?
+ *
+ * A checksum, UUID, path or engine id is matched or copied, never read end to
+ * end, so capping it with the full text in `title` loses nothing and keeps
+ * the register legible. A sentence is read, so truncating it does lose
+ * something and it wraps instead.
+ *
+ * The test is whitespace: a 64-character hex string has none, and no English
+ * sentence worth wrapping is one unbroken word.
+ */
+function isOpaque(value: unknown): boolean {
+  const text = String(value ?? '');
+  return text.length > 24 && !/\s/.test(text);
+}
 const states = computed(() => [
   'All',
   ...new Set(rows.value.map((row) => row.status).filter(Boolean)),
@@ -6284,9 +6333,19 @@ onUnmounted(() => {
                 Delete / Archive
               </button>
             </div>
+            <!--
+              THE SAVE BUTTON WAS 1,156px BELOW THE FOLD.
+
+              This form has thirty-eight fields, and Save sat under the last
+              of them. Measured in the sheet, that put it more than a window
+              height past the bottom edge: an operator who changed the first
+              field had to scroll the whole form to commit it, and nothing on
+              screen said the control existed. The actions stick to the bottom
+              of the sheet now, so the commit is reachable from any field.
+            -->
             <div v-if="canManageSystem && editing" data-testid="smsc-edit-form">
               <SmscConfigForm v-model="editSmscDraft" mode="edit" testid="smsc-edit" />
-              <div class="detail-actions">
+              <div class="detail-actions is-sticky">
                 <button
                   class="primary-button"
                   data-testid="smsc-save"
@@ -6296,6 +6355,7 @@ onUnmounted(() => {
                   Save changes
                 </button>
                 <button class="secondary-button" @click="editing = false">Cancel</button>
+                <span class="source-note">Nothing is written until you press Save.</span>
               </div>
             </div>
             <h3>
@@ -7503,12 +7563,33 @@ onUnmounted(() => {
                   </template>
                 </td>
               </template>
+              <!--
+                THE FALLBACK COLUMNS, FOR A MODULE WITH NO EXPLICIT SET.
+
+                `tbody td` is nowrap, so both of these cells held the table
+                open to the width of their longest value. On /configuration
+                that is a 64-character checksum in `detail` and a UUID under
+                the name, which put the register 572px past its panel and the
+                Actions cluster — Edit, Validate, Approve — off the right-hand
+                edge entirely.
+
+                Neither value is read end to end: an id is matched or copied,
+                and a checksum is compared. So they are capped with the full
+                text in `title`, which is what §3 asks for. A `detail` that is
+                prose rather than an opaque token is detected and wrapped
+                instead, because truncating a sentence does lose it.
+              -->
               <template v-else>
-                <td>
+                <td class="cell-clip">
                   <strong>{{ row.name }}</strong>
-                  <small class="row-id">{{ row.id }}</small>
+                  <small class="row-id mono clamp-1" :title="row.id">{{ row.id }}</small>
                 </td>
-                <td>{{ row.detail }}</td>
+                <td
+                  :class="isOpaque(row.detail) ? 'cell-clip mono' : 'cell-wrap'"
+                  :title="row.detail"
+                >
+                  <span :class="{ 'clamp-2': !isOpaque(row.detail) }">{{ row.detail }}</span>
+                </td>
                 <td>
                   <div class="cell-status">
                     <span

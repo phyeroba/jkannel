@@ -35,6 +35,7 @@ import { computed, onMounted, ref } from 'vue';
 import { ApiError, apiRequest } from '../api';
 import ModalDialog from '../components/ModalDialog.vue';
 import { canAccess, session } from '../stores/session';
+import { agoWhen } from '../utils/when';
 
 type RecordValue = Record<string, unknown>;
 type LoadState = 'loading' | 'ok' | 'error';
@@ -702,9 +703,11 @@ onMounted(() => {
                 :class="{ 'row-shadowed': match.shadowed }"
               >
                 <td class="mono">{{ index + 1 }}</td>
-                <td>
+                <td class="cell-clip">
                   <strong>{{ text(match.ruleName) }}</strong>
-                  <small class="row-id mono">{{ text(match.ruleId) }}</small>
+                  <small class="row-id mono clamp-1" :title="text(match.ruleId)">{{
+                    text(match.ruleId)
+                  }}</small>
                 </td>
                 <td>
                   <span
@@ -722,7 +725,12 @@ onMounted(() => {
                 </td>
                 <td class="mono">{{ text(match.priority) }}</td>
                 <td>{{ text(match.matchedOn) }} ({{ text(match.matchType) }})</td>
-                <td class="mono">{{ text(match.pattern) }}</td>
+                <!-- A regex, matched or copied and never read end to end,
+                     in a cell that is nowrap by default. Capped, with the
+                     whole pattern on hover. -->
+                <td class="mono cell-clip" :title="text(match.pattern)">
+                  {{ text(match.pattern) }}
+                </td>
               </tr>
               <tr v-if="!previewMatches.length">
                 <td colspan="7" class="empty-cell" data-testid="content-preview-no-match">
@@ -936,10 +944,15 @@ onMounted(() => {
               @keydown.space.prevent="canManage && openForm(rule)"
             >
               <td class="mono">{{ inEvaluationOrder ? offset + index + 1 : '·' }}</td>
-              <td>
+              <td class="cell-clip">
                 <strong>{{ text(rule.name) }}</strong>
-                <small class="row-id mono">{{ text(rule.id) }}</small>
-                <small v-if="rule.description" class="row-id">{{ text(rule.description) }}</small>
+                <small class="row-id mono clamp-1" :title="text(rule.id)">{{ text(rule.id) }}</small>
+                <small
+                  v-if="rule.description"
+                  class="row-id clamp-2"
+                  :title="text(rule.description)"
+                  >{{ text(rule.description) }}</small
+                >
               </td>
               <td>
                 <span
@@ -971,11 +984,13 @@ onMounted(() => {
                 }}</span>
               </td>
               <td class="mono">{{ text(rule.priority) }}</td>
-              <td>{{ describeRule(rule) }}</td>
-              <td class="mono">{{ text(rule.pattern) }}</td>
+              <td class="cell-wrap"><span class="clamp-2">{{ describeRule(rule) }}</span></td>
+              <td class="mono cell-clip" :title="text(rule.pattern)">{{ text(rule.pattern) }}</td>
               <td>{{ scopeOf(rule) }}</td>
               <td class="mono">{{ text(rule.match_count, '0') }}</td>
-              <td>{{ text(rule.last_matched_at, 'never') }}</td>
+              <td :title="text(rule.last_matched_at, '')">
+                {{ rule.last_matched_at ? agoWhen(rule.last_matched_at) : 'never' }}
+              </td>
               <td class="row-actions">
                 <template v-if="canManage">
                   <button

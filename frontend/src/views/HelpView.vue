@@ -163,7 +163,9 @@ function guideFor(number: number) {
                   >{{ guide.title }}<AppIcon name="external" :size="13"
                 /></a>
               </td>
-              <td>{{ guide.purpose }}</td>
+              <!-- A sentence per row. `tbody td` is nowrap, so it set the width of
+                   the whole table. -->
+              <td class="cell-wrap">{{ guide.purpose }}</td>
               <td>
                 <RouterLink v-if="reachable(guide.route)" class="text-link" :to="guide.route!"
                   >Open</RouterLink

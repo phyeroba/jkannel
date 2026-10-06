@@ -496,20 +496,22 @@ onMounted(() => {
           <table data-testid="live-traffic-table">
             <thead>
               <tr>
+                <!--
+                  SEVEN COLUMNS, FROM FOURTEEN.
+
+                  One column per rate window, then peak, then MO, then three
+                  spool figures, then two totals — fourteen nowrap cells of
+                  numbers, 350px past the panel. They are four questions, not
+                  fourteen: how fast is it going, how full is the pipe, what is
+                  stuck, and what has it done. Every figure is still here.
+                -->
                 <th scope="col">Bind</th>
                 <th scope="col">Carrier</th>
                 <th scope="col">State</th>
-                <th v-for="window in RATE_WINDOWS" :key="window.short" scope="col">
-                  MT {{ window.short }}
-                </th>
-                <th scope="col">MT peak</th>
-                <th scope="col">MO 1m</th>
-                <th scope="col">Utilisation</th>
-                <th scope="col">Queued</th>
-                <th scope="col">Oldest</th>
-                <th scope="col">Failed</th>
-                <th scope="col">Sent</th>
-                <th scope="col">Received</th>
+                <th scope="col">Outbound rate</th>
+                <th scope="col">Capacity</th>
+                <th scope="col">Spool</th>
+                <th scope="col">Totals</th>
               </tr>
             </thead>
             <tbody>
@@ -527,7 +529,9 @@ onMounted(() => {
                   <router-link class="text-link" :to="`/smsc/${bind.engineId}`">{{
                     bindLabel(bind)
                   }}</router-link>
-                  <small class="row-id mono">{{ bind.engineId }}</small>
+                  <small class="row-id mono clamp-1" :title="String(bind.engineId)">{{
+                    bind.engineId
+                  }}</small>
                   <small v-if="bind.known === false" class="row-id"
                     >not configured in this console</small
                   >
@@ -549,37 +553,87 @@ onMounted(() => {
                     >{{ engineStatusWord(bind.status) }}</span
                   >
                 </td>
-                <td
-                  v-for="window in RATE_WINDOWS"
-                  :key="window.short"
-                  class="mono"
-                  :data-testid="`live-traffic-mt-${window.short}-${bind.engineId}`"
-                >
-                  {{ formatRate(rateAt(bind.outboundRate, window.index), state) }}
-                </td>
-                <td class="mono" :data-testid="`live-traffic-peak-${bind.engineId}`">
-                  {{ formatRate(peakFor(bind), state) }}
-                </td>
-                <td class="mono" :data-testid="`live-traffic-mo-${bind.engineId}`">
-                  {{ formatRate(rateAt(bind.inboundRate, 0), state) }}
+                <!-- Every rate window, stacked, so the trend across them is
+                     read down one cell instead of across three columns. -->
+                <td>
+                  <span class="metric-stack">
+                    <span
+                      v-for="window in RATE_WINDOWS"
+                      :key="window.short"
+                      class="metric-line"
+                    >
+                      <span
+                        class="v mono"
+                        :data-testid="`live-traffic-mt-${window.short}-${bind.engineId}`"
+                        >{{ formatRate(rateAt(bind.outboundRate, window.index), state) }}</span
+                      >
+                      <span class="k">MT {{ window.short }}</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`live-traffic-mo-${bind.engineId}`">{{
+                        formatRate(rateAt(bind.inboundRate, 0), state)
+                      }}</span>
+                      <span class="k">MO 1m</span>
+                    </span>
+                  </span>
                 </td>
                 <!--
                   Against the ceiling the engine will actually enforce: the
                   per-bind tps multiplied by its instances. "unknown" where no
                   ceiling is declared, because a percentage of nothing is not 0%.
                 -->
-                <td class="mono" :data-testid="`live-traffic-utilisation-${bind.engineId}`">
-                  {{ formatUtilisation(utilisationFor(bind), state) }}
+                <td>
+                  <span class="metric-stack">
+                    <span
+                      class="metric-line"
+                    >
+                      <span
+                        class="v mono"
+                        :data-testid="`live-traffic-utilisation-${bind.engineId}`"
+                        >{{ formatUtilisation(utilisationFor(bind), state) }}</span
+                      >
+                      <span class="k">of ceiling</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`live-traffic-peak-${bind.engineId}`">{{
+                        formatRate(peakFor(bind), state)
+                      }}</span>
+                      <span class="k">MT peak</span>
+                    </span>
+                  </span>
                 </td>
-                <td class="mono" :data-testid="`live-traffic-queued-${bind.engineId}`">
-                  {{ displayValue(bind.queued, state) }}
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`live-traffic-queued-${bind.engineId}`">{{
+                        displayValue(bind.queued, state)
+                      }}</span>
+                      <span class="k">queued</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono" :data-testid="`live-traffic-oldest-${bind.engineId}`">{{
+                        oldestFor(bind)
+                      }}</span>
+                      <span class="k">oldest</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono">{{ displayValue(bind.failed, state) }}</span>
+                      <span class="k">failed</span>
+                    </span>
+                  </span>
                 </td>
-                <td class="mono" :data-testid="`live-traffic-oldest-${bind.engineId}`">
-                  {{ oldestFor(bind) }}
+                <td>
+                  <span class="metric-stack">
+                    <span class="metric-line">
+                      <span class="v mono">{{ displayValue(bind.sent, state) }}</span>
+                      <span class="k">sent</span>
+                    </span>
+                    <span class="metric-line">
+                      <span class="v mono">{{ displayValue(bind.received, state) }}</span>
+                      <span class="k">received</span>
+                    </span>
+                  </span>
                 </td>
-                <td class="mono">{{ displayValue(bind.failed, state) }}</td>
-                <td class="mono">{{ displayValue(bind.sent, state) }}</td>
-                <td class="mono">{{ displayValue(bind.received, state) }}</td>
               </tr>
             </tbody>
           </table>

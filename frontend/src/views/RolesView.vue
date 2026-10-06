@@ -663,7 +663,9 @@ onMounted(() => {
                 >
                   system
                 </span>
-                <small class="row-id mono">{{ text(role.id) }}</small>
+                <small class="row-id mono clamp-1" :title="text(role.id)">{{
+                  text(role.id)
+                }}</small>
               </td>
               <!-- Prose. Wraps and clamps rather than setting the table's
                    width from the longest description. -->
@@ -681,7 +683,14 @@ onMounted(() => {
                 in full, and comparably across roles, by the Capability matrix
                 below. Nothing is lost by sampling here.
               -->
-              <td>
+              <!--
+                `tbody td` is nowrap, so a row of permission chips laid itself
+                out on ONE line however many there were, and the register ran
+                506px past its panel. The chips wrap now; the cap on how many
+                are drawn stays, because the Capability matrix below lists them
+                in full.
+              -->
+              <td class="cell-wrap">
                 <span class="status-badge">{{ stringsOf(role.permissions).length }} granted</span>
                 <div class="chip-list">
                   <span

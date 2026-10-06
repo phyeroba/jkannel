@@ -28,6 +28,7 @@ import EventTimeline from '../components/EventTimeline.vue';
 import MiniChart, { type ChartSeries } from '../components/MiniChart.vue';
 import { setBreadcrumbTrail, setPageTitle } from '../stores/breadcrumbs';
 import { displayValue, type DataState as State } from '../utils/data-state';
+import { agoWhen } from '../utils/when';
 import {
   bindTone,
   bindWord,
@@ -541,14 +542,17 @@ watch(carrierId, reload);
             <table data-testid="carrier-smscs-table">
               <thead>
                 <tr>
+                  <!--
+                    SIX COLUMNS, FROM TEN. Bind state and Since are one answer;
+                    queued and failed are one; rate, ceiling and utilisation
+                    are one. This page is reached only by clicking a row on
+                    /carriers, so no audit had ever visited it and the register
+                    ran 271px past its panel.
+                  -->
                   <th scope="col">Connection</th>
                   <th scope="col">Bind state</th>
-                  <th scope="col">Since</th>
-                  <th scope="col">Queued</th>
-                  <th scope="col">Failed</th>
-                  <th scope="col">TPS out</th>
-                  <th scope="col">Ceiling</th>
-                  <th scope="col">Utilisation</th>
+                  <th scope="col">Throughput</th>
+                  <th scope="col">Spool</th>
                   <!-- The kit also lists Sessions, Oldest and Delivery here. None
                    are observable per connection: Kamex collapses instances=N
                    behind one smsc-id, queue age is per-message in SQLBox, and
@@ -568,27 +572,48 @@ watch(carrierId, reload);
                     <router-link class="text-link" :to="`/smsc/${smsc.engineId}`">{{
                       smsc.name
                     }}</router-link>
-                    <small class="row-id mono">{{ smsc.engineId }}</small>
+                    <small class="row-id mono clamp-1" :title="smsc.engineId">{{
+                      smsc.engineId
+                    }}</small>
                   </td>
                   <td>
                     <span class="status-badge" :class="bindTone(smsc.bindState)">{{
                       bindWord(smsc.bindState)
                     }}</span>
+                    <small class="row-id" :title="formatMoment(smsc.bindStateSince)">
+                      <template v-if="smsc.bindStateSince"
+                        >since {{ agoWhen(smsc.bindStateSince) }}</template
+                      >
+                      <template v-else>no start recorded</template>
+                    </small>
+                    <small
+                      class="row-id"
+                      :data-testid="`carrier-smsc-last-event-${smsc.engineId}`"
+                      :title="
+                        smsc.transitions?.[0] ? formatMoment(smsc.transitions[0].observedAt) : ''
+                      "
+                    >
+                      {{
+                        smsc.transitions?.[0]
+                          ? `${smsc.transitions[0].toState ?? 'unknown'} ${agoWhen(smsc.transitions[0].observedAt)}`
+                          : 'no transitions recorded'
+                      }}
+                    </small>
                   </td>
-                  <td class="mono">{{ formatMoment(smsc.bindStateSince) }}</td>
-                  <td class="mono">{{ displayValue(smsc.queued, 'live') }}</td>
-                  <td class="mono">{{ displayValue(smsc.failed, 'live') }}</td>
-                  <td class="mono">{{ formatRate(smsc.outboundRate) }}</td>
-                  <td class="mono">{{ formatCeiling(smsc.capacity) }}</td>
-                  <td class="mono" :data-testid="`carrier-smsc-utilisation-${smsc.engineId}`">
-                    {{ formatUtilisation(smsc.capacity?.utilisation) }}
+                  <td>
+                    <span class="mono">{{ formatRate(smsc.outboundRate) }}</span>
+                    <small class="row-id">of {{ formatCeiling(smsc.capacity) }}</small>
+                    <small
+                      class="row-id mono"
+                      :data-testid="`carrier-smsc-utilisation-${smsc.engineId}`"
+                      >{{ formatUtilisation(smsc.capacity?.utilisation) }}</small
+                    >
                   </td>
-                  <td class="mono" :data-testid="`carrier-smsc-last-event-${smsc.engineId}`">
-                    {{
-                      smsc.transitions?.[0]
-                        ? `${smsc.transitions[0].toState ?? 'unknown'} ${formatMoment(smsc.transitions[0].observedAt)}`
-                        : 'no transitions recorded'
-                    }}
+                  <td>
+                    <span class="mono">{{ displayValue(smsc.queued, 'live') }} queued</span>
+                    <small class="row-id mono"
+                      >{{ displayValue(smsc.failed, 'live') }} failed</small
+                    >
                   </td>
                   <td class="row-actions">
                     <router-link class="secondary-button" :to="`/smsc/${smsc.engineId}`"

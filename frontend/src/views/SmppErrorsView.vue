@@ -352,8 +352,15 @@ onMounted(() => {
               <tr v-for="row in rows" :key="row.code" :data-testid="`smpp-row-${row.code}`">
                 <td class="mono">{{ formatSmppCodeBoth(row.code) }}</td>
                 <td class="mono">{{ row.name }}</td>
-                <td>{{ row.meaning }}</td>
-                <td class="guidance-cell">{{ row.guidance }}</td>
+                <!--
+                  `tbody td` is nowrap by default — a long value must not build
+                  a tower — and a cell that genuinely holds prose opts in with
+                  `.cell-wrap`. These two never did, so two sentences per row
+                  held the table 602px wider than its panel and pushed
+                  "Retrying" off the right-hand edge.
+                -->
+                <td class="cell-wrap">{{ row.meaning }}</td>
+                <td class="cell-wrap guidance-cell">{{ row.guidance }}</td>
                 <td>
                   <span class="status-badge" :class="retryTone(row.retryable)">{{
                     retryWord(row.retryable)

@@ -816,11 +816,28 @@ onMounted(() => {
                   a line with no object is a line whose emitter did not say what
                   it concerned, which is a fact about the log, not about us.
                 -->
-                <td class="mono cell-tight" :data-testid="`log-object-${index}`">
+                <td
+                  class="mono cell-tight cell-clip"
+                  :data-testid="`log-object-${index}`"
+                  :title="logObject(entry)"
+                >
                   {{ logObject(entry) }}
                 </td>
-                <td>{{ text(entry.message) }}</td>
-                <td class="mono">
+                <!--
+                  THE MESSAGE IS PROSE AND COULD NOT WRAP.
+
+                  `tbody td` is nowrap, so one long log line set the width of
+                  the whole buffer — 445px past the panel, which put Duration
+                  and the correlation button off the right-hand edge. It wraps
+                  to two lines now, with the whole line on hover and the full
+                  entry a click away in the detail panel.
+                -->
+                <td class="cell-wrap">
+                  <span class="clamp-2" :title="text(entry.message)">{{
+                    text(entry.message)
+                  }}</span>
+                </td>
+                <td class="mono cell-clip" :title="`${entry.method ?? ''} ${text(entry.route)}`">
                   {{ entry.method ? `${entry.method} ` : '' }}{{ text(entry.route) }}
                 </td>
                 <td class="mono">{{ text(entry.status) }}</td>

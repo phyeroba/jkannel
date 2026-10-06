@@ -41,6 +41,7 @@ import {
 } from '../utils/safe-control';
 import { severityTone, type OperationalEvent } from '../utils/diagnostics';
 import { displayValue, type DataState as State } from '../utils/data-state';
+import { agoWhen } from '../utils/when';
 import {
   bindTone,
   bindWord,
@@ -784,7 +785,9 @@ watch(engineId, reload);
             </thead>
             <tbody>
               <tr v-for="row in operations" :key="String(row.id)">
-                <td class="mono cell-tight">{{ formatMoment(String(row.created_at ?? '')) }}</td>
+                <td class="cell-tight" :title="formatMoment(String(row.created_at ?? ''))">
+                  {{ agoWhen(row.created_at) || 'never' }}
+                </td>
                 <td class="mono">{{ row.operation }}</td>
                 <td>
                   <span
@@ -799,14 +802,29 @@ watch(engineId, reload);
                     >{{ row.status }}</span
                   >
                 </td>
-                <td class="mono cell-tight">{{ row.requested_by ?? 'not recorded' }}</td>
+                <td class="mono cell-tight cell-clip" :title="String(row.requested_by ?? '')">
+                  {{ row.requested_by ?? 'not recorded' }}
+                </td>
                 <!--
                   Reconnect, disable and enable do not persist a reason — their
                   handler reads no body. Saying "not recorded for this
                   operation" keeps that apart from an operator who gave none.
                 -->
-                <td>{{ row.reason ?? 'not recorded for this operation' }}</td>
-                <td class="cell-tight">{{ row.verification ?? row.detail ?? 'none' }}</td>
+                <!-- Two prose cells in a table whose `td` is nowrap by
+                     default. Between them they held this register 917px past
+                     its panel — the widest overflow in the console, on a page
+                     the audits never visited because nothing in the
+                     navigation links to it. -->
+                <td class="cell-wrap">
+                  <span class="clamp-2" :title="String(row.reason ?? '')">{{
+                    row.reason ?? 'not recorded for this operation'
+                  }}</span>
+                </td>
+                <td class="cell-wrap cell-tight">
+                  <span class="clamp-2" :title="String(row.verification ?? row.detail ?? '')">{{
+                    row.verification ?? row.detail ?? 'none'
+                  }}</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -840,8 +858,15 @@ watch(engineId, reload);
           </div>
           <RouterLink class="text-button" to="/events">All events</RouterLink>
         </header>
+        <p v-if="events.length" class="list-count" data-testid="smsc-events-count">
+          {{ events.length }} event(s) recorded · newest first
+        </p>
+        <!-- Capped. Kololo has been polled since August, and this rail plus
+             the one below took the page to 7,043px — six screens of scrolling
+             past the controls at the top. Nothing is dropped; the panel just
+             stops being able to push the rest of the record off the page. -->
+        <div v-if="events.length" class="capped-list">
         <EventTimeline
-          v-if="events.length"
           dense
           data-testid="smsc-event-timeline"
           :items="
@@ -858,6 +883,7 @@ watch(engineId, reload);
             }))
           "
         />
+        </div>
         <p v-else class="chart-empty" data-testid="smsc-events-empty">
           {{
             eventsState === 'permission-denied'
@@ -896,8 +922,12 @@ watch(engineId, reload);
           shows up as a visible rhythm of dots rather than as repeated words in
           a "Transition" column.
         -->
+        <p v-if="transitions.length" class="list-count" data-testid="smsc-transitions-count">
+          {{ transitions.length }} transition(s) recorded · newest first
+        </p>
+        <div v-if="transitions.length" class="capped-list">
         <EventTimeline
-          v-if="transitions.length"
+          dense
           data-testid="smsc-transitions"
           :items="
             transitions.map((entry) => ({
@@ -908,6 +938,7 @@ watch(engineId, reload);
             }))
           "
         />
+        </div>
         <p v-else class="chart-empty" data-testid="smsc-timeline-empty">
           No bind transition has been recorded for this connection. The history is kept forever, so
           an empty timeline means the poller has never seen this bind change state — not that older
