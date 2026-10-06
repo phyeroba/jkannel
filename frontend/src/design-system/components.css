@@ -412,10 +412,18 @@ tbody tr.selected td {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+/* AN EMPTY STATE IS PROSE AND MUST WRAP.
+
+   `tbody td` is nowrap, and an empty-state cell holds two sentences
+   explaining what would appear here and how to make it appear. On the send
+   queue — whose normal, healthy state IS empty — those sentences held the
+   table 132px past its panel, so the register overflowed precisely when
+   there was nothing in it. */
 .empty-cell {
   text-align: center;
   color: var(--muted);
   padding: 30px;
+  white-space: normal;
 }
 .pager {
   display: flex;

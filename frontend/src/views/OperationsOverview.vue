@@ -934,12 +934,18 @@ function statusTone(status: string) {
           <table>
             <thead>
               <tr>
+                <!--
+                  FIVE COLUMNS, FROM SIX. This panel is 1.6fr of a two-column
+                  grid, so it has well under a screen to work in, and six
+                  nowrap columns ran it 66px past its edge — on the screen an
+                  operator watches all day. Health and the 24h alert count
+                  answer the same question, so they share a cell.
+                -->
                 <th scope="col">Carrier</th>
                 <th scope="col">Health</th>
                 <th scope="col">Binds up</th>
                 <th scope="col">Throughput</th>
                 <th scope="col">Delivery</th>
-                <th scope="col">Alerts · 24h</th>
               </tr>
             </thead>
             <tbody>
@@ -959,10 +965,17 @@ function statusTone(status: string) {
                     'no network code'
                   }}</small>
                 </td>
-                <td>
+                <td class="cell-clip">
                   <span class="status-badge" :class="healthTone(carrier.health)">{{
                     carrier.health
                   }}</span>
+                  <small class="row-id">{{ carrier.openAlerts }} alert(s) · 24h</small>
+                  <small
+                    class="row-id clamp-1"
+                    :data-testid="`dashboard-last-event-${carrier.id}`"
+                    :title="carrier.lastEvent || ''"
+                    >{{ carrier.lastEvent || 'no transitions' }}</small
+                  >
                 </td>
                 <!--
                   One block per bind: filled when up, hollow when down,
@@ -1003,28 +1016,16 @@ function statusTone(status: string) {
                     >
                   </template>
                 </td>
-                <!-- `lastEvent` is "kololo bound 2026-10-06 07:12:41" — a
-                     sentence with a full timestamp in it, in a cell that is
-                     nowrap. Sixty-six pixels past the panel on the one screen
-                     an operator looks at all day. -->
-                <td class="cell-clip">
-                  <span class="mono">{{ carrier.openAlerts }}</span>
-                  <small
-                    class="row-id clamp-1"
-                    :data-testid="`dashboard-last-event-${carrier.id}`"
-                    :title="carrier.lastEvent || ''"
-                    >{{ carrier.lastEvent || 'no transitions' }}</small
-                  >
-                </td>
+
               </tr>
               <tr v-if="carriersState === 'ok' && !carriers.length">
-                <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-empty">
+                <td colspan="5" class="empty-cell" data-testid="dashboard-carriers-empty">
                   No carrier is registered yet. Add one on the Carriers screen to group SMSCs by
                   network.
                 </td>
               </tr>
               <tr v-if="carriersState === 'checking'">
-                <td colspan="6" class="empty-cell">Loading carriers…</td>
+                <td colspan="5" class="empty-cell">Loading carriers…</td>
               </tr>
               <tr v-if="carriersState === 'unavailable'">
                 <td colspan="6" class="empty-cell" data-testid="dashboard-carriers-unavailable">
