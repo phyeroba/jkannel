@@ -717,3 +717,40 @@ and it is on the JKANNEL side.
 | 9 | Approve `KAMEX` and add it to CPAAS-SMSONE's allowed senders | **Peter** | Open — blocks any live send as KAMEX |
 | 10 | Fix `jkannel-loopback-bind-1` (fakesmsc → bearerbox:10000 refused) | JKANNEL | Open — blocks questions 1 and 2 |
 | 11 | Decide the duplicate-check lookup (`foreignId` filter on which endpoint) | Both | Open — CPaaS to confirm the call they want |
+
+
+---
+
+## 14. 2026-10-06 (evening) — the first live test, and three items closed
+
+CPaaS sent four live messages as `sender=KAMEX`. All four were refused at
+routing. The cause, read from production:
+
+**The KAMEX route exists, is deployed, and matched.** `routing_rules` row
+`765c5479` — sender `KAMEX`, destination `256…`, priority 210, enabled,
+deployed. Its target is **kamdixy**, which is `retrying`, and it has **no
+fallback**. So the refusal reason's second clause is the operative one:
+*"primary and fallback unavailable; no available SMSC"*. A route matched and
+had nowhere to send.
+
+`kololo` is **bound** (back by itself at 07:48 on 2026-10-06) and
+CPAAS-SMSONE is entitled to it, but no route carries KAMEX traffic to it.
+**Peter decided on 2026-10-06 to change nothing**: no re-point, no fallback.
+CPaaS sends as KAMEX stay refused until kamdixy binds.
+
+Closed:
+
+| # | Item | How |
+|---|---|---|
+| 9 | KAMEX approved; added to CPAAS-SMSONE's allowed senders | `PATCH /customer-accounts/:id/sender-ids/:sid` and `PATCH /customers/:id` — audited, verified by reading back |
+| 10 | Loopback bind | **Both fake SMSCs had been stopped through the admin API on 2026-09-29 21:45** and never restarted — bearerbox was not listening on 10000 at all, so `fakesmsc` panicked every 17s for a week. `local-fake` restarted and bound. Not `local-fake-b`: it is another route's fallback target. |
+| 11 | `GET /gateway/messages?foreignId=` | Exact match on `send_sms.foreign_id`, bound parameter, still inside the key's SMSC scope |
+
+Also: `GET /gateway/whoami` now returns `customerId`. It was absent, which the
+caller read as `null` — and the customer is whose quota, credit, approved
+senders and route bindings a submit is checked against, so a key that could
+not see it could not diagnose its own rejection.
+
+Questions 1 and 2 (`%d` substitution, `dlr_url` rewriting) are now answerable
+by observation through the restored loopback bind, and will be answered that
+way rather than from upstream Kannel documentation.
