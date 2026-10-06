@@ -141,7 +141,12 @@ export class GatewayMessagingController {
     );
   }
 
-  /** Message history for the key's tenant. */
+  /**
+   * Message history for the key's tenant.
+   *
+   * `?foreignId=` returns the one message submitted with that id, or an empty
+   * page. That is the pre-retry duplicate check.
+   */
   @Get('messages')
   @RequirePermissions(GATEWAY_SCOPES.smsRead)
   async messages(@Req() request: GatewayRequest, @Query() query: Record<string, unknown> = {}) {
@@ -158,6 +163,21 @@ export class GatewayMessagingController {
         ? boundedInt(query.cursor, 'cursor', 1, Number.MAX_SAFE_INTEGER, 0)
         : undefined,
       deliveryStatus: typeof query.status === 'string' ? query.status : undefined,
+      /*
+       * The caller's own id, for a duplicate check before a retry.
+       *
+       * A caller that did not get a response to a submit cannot otherwise
+       * tell whether the message was accepted, and retrying blind is how a
+       * recipient gets the same SMS twice. `reference` cannot answer it —
+       * that is a ledger correlation field and never reaches the engine row
+       * — so this filters `send_sms.foreign_id`, which is where the id a
+       * caller sends as `foreignId` actually lands.
+       *
+       * Still scoped by `allowedSmscIds`, so a key only ever sees its own
+       * tenant's traffic: an unknown id returns an empty page rather than
+       * confirming that somebody else sent it.
+       */
+      foreignId: optionalText(query.foreignId),
       allowedSmscIds: await this.smscScope(request),
     });
     return { ...page, source: { status: 'available', type: 'kamex-sqlbox' } };

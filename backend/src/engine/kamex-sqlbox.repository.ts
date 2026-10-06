@@ -103,6 +103,16 @@ export interface SqlboxListOptions {
   /** Derived delivery status filter; same vocabulary as `status`, applied explicitly. */
   deliveryStatus?: string | string[];
   smscId?: string;
+  /**
+   * The caller's own message id, as supplied on submit and written to
+   * `send_sms.foreign_id`.
+   *
+   * This exists for a duplicate check before a retry: a caller that did not
+   * get a response cannot otherwise tell whether its message was accepted.
+   * `reference` cannot answer that — it is a ledger correlation field and
+   * never reaches the engine row — so this filters on the column that does.
+   */
+  foreignId?: string;
   direction?: 'MO' | 'MT' | 'DLR';
   /**
    * Inclusive lower bound on the engine's epoch-second `time` column. Served by
@@ -723,6 +733,12 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
     if (options.smscId) {
       params.push(options.smscId);
       clauses.push(`${prefix}smsc_id = $${params.length}`);
+    }
+    // Exact, never a LIKE: this answers "did my message get in", and a
+    // prefix match could answer it with somebody else's row.
+    if (options.foreignId) {
+      params.push(options.foreignId);
+      clauses.push(`${prefix}foreign_id = $${params.length}`);
     }
     // The delivery-report view IS the receipt rows, by definition; it pins the
     // direction so a caller cannot widen it back out with ?direction=MT.

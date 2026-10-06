@@ -150,6 +150,17 @@ export class ApiGatewayController {
       tenantId: client.tenantId,
       scopes: client.scopes,
       rateLimit: client.rateLimit,
+      /*
+       * Which customer this key submits as, or null for an operator key.
+       *
+       * It was absent entirely, and a caller reading the response saw no
+       * field — which their client rendered as `null` and read as "this key
+       * has no customer". The distinction matters: the customer is whose
+       * quota, credit, approved senders and route bindings a submit is
+       * checked against, so a key that cannot see it cannot diagnose its own
+       * rejection. Reported, rather than left to be inferred from a refusal.
+       */
+      customerId: client.customerId,
     };
   }
 }
