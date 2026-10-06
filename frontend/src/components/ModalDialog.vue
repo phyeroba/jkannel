@@ -239,7 +239,19 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 .command-dialog {
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 60px);
+  /*
+   * THE CAP HAS TO ALLOW FOR THE BACKDROP'S OWN PADDING.
+   *
+   * `.dialog-backdrop` places dialogs at `12vh` from the top — a deliberate
+   * choice, so a short dialog sits where the eye already is. The card was
+   * then capped at `100vh - 60px`, which on a 1000px viewport is 120px of
+   * padding plus a 940px card: 60px past the bottom edge, and what fell off
+   * was the footer. Every dialog tall enough to need the cap had its commit
+   * row clipped by exactly the padding above it.
+   *
+   * 12vh above, 24px of backdrop padding below, and 24px of air.
+   */
+  max-height: calc(88vh - 48px);
 }
 .dialog-body {
   flex: 1 1 auto;
