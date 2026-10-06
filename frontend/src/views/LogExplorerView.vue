@@ -964,6 +964,13 @@ onMounted(() => {
 tbody td.log-message {
   max-width: 300px;
 }
+/* Nine columns is a lot for one register, and the object (a route or a
+   subject) and the request route are both capped tokens rather than text to
+   be read. 170 each is enough to recognise one and still hold the table
+   inside its panel; both carry the full value in `title`. */
+tbody td.cell-clip {
+  max-width: 170px;
+}
 /* A sortable header is a button so it is reachable by keyboard and announced as
    one, but it must not LOOK like a button — the kit's table head is a quiet
    band and a row of controls in it would shout. So it inherits the `th`'s own

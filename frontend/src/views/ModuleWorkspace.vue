@@ -588,7 +588,7 @@ const definitions: Record<string, Workspace> = {
         header: 'Throughput',
         lines: (raw) => [
           {
-            label: 'TPS out / in',
+            label: 'out / in',
             value: `${rateText(raw.outbound_rate ?? raw.outboundRate)} / ${rateText(
               raw.inbound_rate ?? raw.inboundRate,
             )}`,
@@ -6410,33 +6410,21 @@ onUnmounted(() => {
           </template>
 
           <template v-else-if="key === 'customers'">
-            <dl class="detail-grid">
-              <dt>Name</dt>
-              <dd>{{ text(detail.name) }}</dd>
-              <dt>Code</dt>
-              <dd>{{ text(detail.code) }}</dd>
-              <dt>Status</dt>
-              <dd data-testid="customer-detail-status">{{ text(detail.status) }}</dd>
-              <dt>Contact</dt>
-              <dd>{{ text(detail.contact_email ?? detail.contactEmail) }}</dd>
-              <dt>Daily quota</dt>
-              <dd>{{ text(detail.quota_daily ?? detail.quotaDaily) }}</dd>
-              <dt>Rate limit / min</dt>
-              <dd>{{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin) }}</dd>
-              <dt>Sender IDs</dt>
-              <dd>{{ list(detail.allowed_sender_ids ?? detail.allowedSenderIds) }}</dd>
-              <dt>Notes</dt>
-              <dd>{{ text(detail.notes) }}</dd>
-              <dt>Created</dt>
-              <dd>{{ text(detail.created_at ?? detail.createdAt) }}</dd>
-            </dl>
             <!--
-              The record above is what a customer IS. Quota, credit, sender IDs
-              and route bindings are what an operator DOES to one, and they have
-              their own screen — fifteen endpoints' worth, which is more than a
-              drawer should try to hold.
+              ACTIONS FIRST, THEN THE RECORD.
+
+              This sheet opened on nine fields with its controls underneath —
+              the operator reads a screen of reference before reaching the
+              thing they opened it to do. Every other sheet in the console was
+              turned round; this is the generic one, and it was still the old
+              way.
+
+              Quota, credit, sender IDs and route bindings are what an
+              operator DOES to a customer, and they have their own screen —
+              fifteen endpoints' worth, which is more than a drawer should try
+              to hold.
             -->
-            <div class="detail-actions">
+            <div class="panel-actions">
               <RouterLink
                 class="primary-button"
                 data-testid="customer-open-account"
@@ -6461,6 +6449,35 @@ onUnmounted(() => {
                 </button>
               </template>
             </div>
+
+            <h3 class="panel-heading">Record</h3>
+            <dl class="panel-fields">
+              <dt>Name</dt>
+              <dd>{{ text(detail.name) }}</dd>
+              <dt>Code</dt>
+              <dd class="mono">{{ text(detail.code) }}</dd>
+              <dt>Status</dt>
+              <dd data-testid="customer-detail-status">{{ text(detail.status) }}</dd>
+              <dt>Contact</dt>
+              <dd>{{ text(detail.contact_email ?? detail.contactEmail) }}</dd>
+              <dt>Daily quota</dt>
+              <dd class="mono">{{ text(detail.quota_daily ?? detail.quotaDaily, 'unlimited') }}</dd>
+              <dt>Rate limit / min</dt>
+              <dd class="mono">
+                {{ text(detail.rate_limit_per_min ?? detail.rateLimitPerMin, 'unlimited') }}
+              </dd>
+              <dt>Sender IDs</dt>
+              <dd class="mono">{{ list(detail.allowed_sender_ids ?? detail.allowedSenderIds) }}</dd>
+              <dt>Notes</dt>
+              <dd>{{ text(detail.notes) }}</dd>
+              <!-- Relative, with the instant in `title`. A sheet is no better
+                   a place to read a UTC offset than a register is. -->
+              <dt>Created</dt>
+              <dd :title="text(detail.created_at ?? detail.createdAt)">
+                {{ agoWhen(detail.created_at ?? detail.createdAt) || '—' }}
+              </dd>
+            </dl>
+
             <div
               v-if="canManageSystem && editing"
               class="composer"
