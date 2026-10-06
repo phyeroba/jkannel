@@ -92,12 +92,21 @@ const DESTRUCTIVE =
   /\b(save|delete|remove|disable|enable|suspend|retire|purge|run|send|apply|rotate|revoke|restart|stop|start|deploy|reset|clear|acknowledge|resolve|close|retry|requeue|cancel|sign out|logout)\b/i;
 const DIALOG = '[role="dialog"], .modal, .drawer, .detail-drawer, .dialog, .drawer-body';
 
-async function capture(name, note, extra = {}) {
+/*
+ * `viewportOnly` for anything with an overlay open.
+ *
+ * A dialog is `position: fixed` and capped at `100vh - 60px` with a pinned
+ * footer, so it is correct on screen — but a FULL-PAGE screenshot renders it
+ * against the whole scroll height, which draws the card at viewport height
+ * on a 1,589px canvas and makes a correctly pinned footer look cut off. The
+ * capture was lying, not the dialog.
+ */
+async function capture(name, note, extra = {}, viewportOnly = false) {
   let file = `${name}.png`;
   let n = 2;
   while (taken.has(file)) file = `${name}-${n++}.png`;
   taken.add(file);
-  await page.screenshot({ path: join(OUT, file), fullPage: true });
+  await page.screenshot({ path: join(OUT, file), fullPage: !viewportOnly });
   const measured = await page.evaluate(() => ({
     height: document.documentElement.scrollHeight,
     // Named, not just counted. "/smsc/kololo overflow 917" sent one fix at
@@ -208,7 +217,12 @@ async function sweepRoute(route, label) {
       await button.click({ timeout: 2500 });
       await page.waitForTimeout(1200);
       if (await page.$(DIALOG)) {
-        await capture(`${slug(route)}--${slug(text)}`, `${route} → "${text}"`, { opener: text });
+        await capture(
+          `${slug(route)}--${slug(text)}`,
+          `${route} → "${text}"`,
+          { opener: text },
+          true,
+        );
         opened += 1;
       }
       await dismiss(route);
@@ -224,7 +238,12 @@ async function sweepRoute(route, label) {
       await row.click({ timeout: 2500 });
       await page.waitForTimeout(1300);
       if (await page.$(DIALOG)) {
-        await capture(`${slug(route)}--row`, `${route} → first row`, { opener: 'row click' });
+        await capture(
+          `${slug(route)}--row`,
+          `${route} → first row`,
+          { opener: 'row click' },
+          true,
+        );
         opened += 1;
       }
       await dismiss(route);
