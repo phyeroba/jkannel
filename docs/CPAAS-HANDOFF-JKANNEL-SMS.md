@@ -821,3 +821,55 @@ Told to CPaaS in `docs/integrations/JKANNEL-SEND-NOW.md` (their repo): add
 `"smscId": "kololo"` and nothing else; keep the pin out of production traffic;
 remove it when we tell them kamdixy is back. Their next test with a real
 `dlrUrl` will also answer their `%d` questions as observed fact.
+
+
+---
+
+## 17. 2026-10-07 — no receipts reach CPaaS, and why
+
+CPaaS asked where the receipts for their four pinned sends went. Read from
+production:
+
+**Nothing calls `dlr_url`, and nothing ever has.** In Kannel the component
+that fetches `dlr-url` is **smsbox**, for messages it originated through its
+own sendsms interface. JKANNEL writes to `send_sms` and **sqlbox** injects;
+the receipt returns to sqlbox, which writes it to `sent_sms` and stops.
+Confirmed: sqlbox logs no DLR callback activity, smsbox is not in the path
+(health probes only), and no JKANNEL worker reads `sent_sms.dlr_url`.
+
+**The `dlr_url` is stored byte-for-byte**, `%d` unsubstituted and `&`
+unescaped, on both the MT and the DLR row. That closes CPaaS questions 1 and
+2 with evidence: kamex does not rewrite it. Substitution would have been the
+fetcher's job, and there is no fetcher.
+
+**This carrier account has never returned a final receipt.**
+
+| `dlr_mask` | rows | bind |
+|---|---|---|
+| 8 — SMSC accepted | 38 | kololo, kamdixy |
+| 1 — delivered | 10 | **`local-fake` only** |
+
+All ten delivered receipts are from the loopback bind, which manufactures
+them. We request `dlr_mask 31` and get back only `8`. Whether final DLRs are
+enabled on the 8888.ug account is a question for the carrier.
+
+**A correction we owe ourselves.** The `?foreignId=` filter shipped on
+2026-10-06 could never have matched: it filtered `sent_sms.foreign_id`, and
+`sqlbox_pgsql` stamps that column itself — the originating `send_sms.sql_id`
+on an MT row, the SMSC message id on a DLR row. Zero rows in the whole table
+contain a caller id. It was "verified" against four REJECTED messages, where
+an empty page was right for the wrong reason. Now resolved through
+`message_route_decisions`, which is the only table that keeps the submitted
+id (`foreign_id` → `message_ref`).
+
+**The lesson, for this document:** an empty result is not a passing test. If
+a filter is verified against input that would return empty anyway, the
+verification proves nothing.
+
+A DLR forwarder is designed (poll `sent_sms` for new DLR rows with a
+`dlr_url`, GET it with `%d` → `dlr_mask`, forward all of 1/2/4/8/16, retry
+non-2xx with back-off for 24h, **destination allowlist** because a `dlr_url`
+is attacker-controllable and an unrestricted fetcher is an SSRF engine). It
+is **not built**: outbound HTTP from production to a third party is Peter's
+call. Answer sent as `docs/integrations/JKANNEL-DLR-ANSWER.md` in the CPaaS
+repo.
