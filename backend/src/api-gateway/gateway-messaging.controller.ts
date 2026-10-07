@@ -88,6 +88,36 @@ export class GatewayMessagingController {
     return request.gatewayClient!.tenantId;
   }
 
+  /**
+   * The caller's `foreignId` → the engine row ids it became.
+   *
+   * `message_route_decisions` is the only place a submitted id survives:
+   * `foreign_id` is what the caller sent and `message_ref` is the
+   * `send_sms.sql_id` the engine gave it. Scoped to the key's customer so a
+   * key cannot probe another customer's ids, and tenant-scoped by the
+   * transaction, so row-level security applies.
+   *
+   * Returns `undefined` when no id was asked for, and `[]` when one was
+   * asked for and nothing matched — the two must stay distinguishable, or an
+   * unknown id would return the entire register.
+   */
+  private async resolveForeignId(
+    request: GatewayRequest,
+    foreignId: string | undefined,
+  ): Promise<string[] | undefined> {
+    if (!foreignId) return undefined;
+    const customerId = request.gatewayClient!.customerId;
+    return this.database.tenantTransaction(this.tenantId(request), async (client) => {
+      const result = await client.query<{ message_ref: string | null }>(
+        `SELECT message_ref FROM message_route_decisions
+          WHERE foreign_id = $1 AND ($2::uuid IS NULL OR customer_id = $2::uuid)
+            AND message_ref IS NOT NULL`,
+        [foreignId, customerId],
+      );
+      return result.rows.map((row) => String(row.message_ref));
+    });
+  }
+
   /** Engine SMSC ids the key's tenant owns, for scoping SQLBox reads. */
   private async smscScope(request: GatewayRequest): Promise<string[]> {
     return this.database.tenantTransaction(this.tenantId(request), async (client) =>
@@ -144,8 +174,9 @@ export class GatewayMessagingController {
   /**
    * Message history for the key's tenant.
    *
-   * `?foreignId=` returns the one message submitted with that id, or an empty
-   * page. That is the pre-retry duplicate check.
+   * `?foreignId=` returns the message submitted with that id, or an empty
+   * page. That is the pre-retry duplicate check: empty means "never
+   * accepted, safe to retry"; a row means "already in flight, do not".
    */
   @Get('messages')
   @RequirePermissions(GATEWAY_SCOPES.smsRead)
@@ -166,18 +197,20 @@ export class GatewayMessagingController {
       /*
        * The caller's own id, for a duplicate check before a retry.
        *
-       * A caller that did not get a response to a submit cannot otherwise
-       * tell whether the message was accepted, and retrying blind is how a
-       * recipient gets the same SMS twice. `reference` cannot answer it —
-       * that is a ledger correlation field and never reaches the engine row
-       * — so this filters `send_sms.foreign_id`, which is where the id a
-       * caller sends as `foreignId` actually lands.
+       * IT CANNOT BE A FILTER ON `foreign_id`, which is what this was when
+       * it shipped and why it never matched. `sqlbox_pgsql` stamps
+       * `foreign_id` itself: the originating `send_sms.sql_id` on an MT row,
+       * the SMSC's own message id on a DLR row. A caller's id is never in
+       * that column — verified on production, where zero rows out of the
+       * whole table contain one.
        *
-       * Still scoped by `allowedSmscIds`, so a key only ever sees its own
-       * tenant's traffic: an unknown id returns an empty page rather than
-       * confirming that somebody else sent it.
+       * It is resolved here instead, through `message_route_decisions`,
+       * which records the submitted id against the engine row it became.
+       * `undefined` means no filter; an empty array means "resolved, and
+       * nothing matched", which must return an empty page rather than the
+       * whole register.
        */
-      foreignId: optionalText(query.foreignId),
+      sqlIds: await this.resolveForeignId(request, optionalText(query.foreignId)),
       allowedSmscIds: await this.smscScope(request),
     });
     return { ...page, source: { status: 'available', type: 'kamex-sqlbox' } };

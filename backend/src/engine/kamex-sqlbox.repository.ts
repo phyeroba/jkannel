@@ -104,15 +104,16 @@ export interface SqlboxListOptions {
   deliveryStatus?: string | string[];
   smscId?: string;
   /**
-   * The caller's own message id, as supplied on submit and written to
-   * `send_sms.foreign_id`.
+   * Engine row ids to restrict the page to.
    *
-   * This exists for a duplicate check before a retry: a caller that did not
-   * get a response cannot otherwise tell whether its message was accepted.
-   * `reference` cannot answer that — it is a ledger correlation field and
-   * never reaches the engine row — so this filters on the column that does.
+   * Used by the gateway's `?foreignId=` lookup. The caller's own id does NOT
+   * survive into the engine — `sqlbox_pgsql` stamps `foreign_id` itself, with
+   * the originating `send_sms.sql_id` on an MT row and the SMSC's message id
+   * on a DLR row — so a filter on `foreign_id` can never match what a caller
+   * submitted. The caller's id is resolved to these engine ids first, from
+   * `message_route_decisions`, which is the table that does keep it.
    */
-  foreignId?: string;
+  sqlIds?: string[];
   direction?: 'MO' | 'MT' | 'DLR';
   /**
    * Inclusive lower bound on the engine's epoch-second `time` column. Served by
@@ -736,9 +737,9 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
     }
     // Exact, never a LIKE: this answers "did my message get in", and a
     // prefix match could answer it with somebody else's row.
-    if (options.foreignId) {
-      params.push(options.foreignId);
-      clauses.push(`${prefix}foreign_id = $${params.length}`);
+    if (options.sqlIds) {
+      params.push(options.sqlIds);
+      clauses.push(`${prefix}foreign_id = ANY($${params.length})`);
     }
     // The delivery-report view IS the receipt rows, by definition; it pins the
     // direction so a caller cannot widen it back out with ?direction=MT.
