@@ -255,7 +255,9 @@ export class DlrForwardService {
 
   /** The URL as the engine stored it, read fresh rather than cached. */
   private async urlFor(engineSqlId: string): Promise<string | null> {
-    const page = await this.sqlbox.list({ sqlIds: [engineSqlId], direction: 'DLR', limit: 1 });
+    // `rowIds`, not `foreignIds`: this is the DLR row's OWN key. Its
+    // `foreign_id` is the SMSC's message id and would never match.
+    const page = await this.sqlbox.list({ rowIds: [engineSqlId], direction: 'DLR', limit: 1 });
     const raw = page.items[0]?.raw as Record<string, unknown> | undefined;
     const url = raw?.dlr_url;
     return typeof url === 'string' && url ? url : null;

@@ -30,7 +30,7 @@ describe('GET /gateway/messages — the engine-id restriction', () => {
 
   it('restricts to the resolved engine ids, as a bound parameter', async () => {
     const { repository, calls } = captureSql();
-    await repository.list({ sqlIds: ['44', '45'], limit: 10 });
+    await repository.list({ foreignIds: ['44', '45'], limit: 10 });
     const { sql, params } = calls[0];
     expect(sql).toContain('foreign_id = ANY($');
     // Never a LIKE: this answers "did my message get in", and a prefix match
@@ -50,14 +50,14 @@ describe('GET /gateway/messages — the engine-id restriction', () => {
     // means "asked, and nothing matched". Collapsing them would answer
     // "never submitted" with the whole register.
     const { repository, calls } = captureSql();
-    await repository.list({ sqlIds: [], limit: 10 });
+    await repository.list({ foreignIds: [], limit: 10 });
     expect(calls[0].sql).toContain('foreign_id = ANY($');
     expect(calls[0].params).toContainEqual([]);
   });
 
   it('keeps the tenant SMSC scope alongside it', async () => {
     const { repository, calls } = captureSql();
-    await repository.list({ sqlIds: ['44'], allowedSmscIds: ['kololo'], limit: 10 });
+    await repository.list({ foreignIds: ['44'], allowedSmscIds: ['kololo'], limit: 10 });
     const { sql } = calls[0];
     expect(sql).toContain('smsc_id = ANY($');
     expect(sql).toContain('foreign_id = ANY($');

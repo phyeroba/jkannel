@@ -104,16 +104,21 @@ export interface SqlboxListOptions {
   deliveryStatus?: string | string[];
   smscId?: string;
   /**
-   * Engine row ids to restrict the page to.
+   * Values to match against `foreign_id`.
    *
-   * Used by the gateway's `?foreignId=` lookup. The caller's own id does NOT
-   * survive into the engine — `sqlbox_pgsql` stamps `foreign_id` itself, with
-   * the originating `send_sms.sql_id` on an MT row and the SMSC's message id
-   * on a DLR row — so a filter on `foreign_id` can never match what a caller
-   * submitted. The caller's id is resolved to these engine ids first, from
-   * `message_route_decisions`, which is the table that does keep it.
+   * Used by the gateway's `?foreignId=` lookup, where the values are the
+   * originating `send_sms.sql_id`s — which is what `sqlbox_pgsql` stamps into
+   * `foreign_id` on an MT row. The caller's own id does NOT survive into the
+   * engine, so it is resolved to these first, from `message_route_decisions`.
+   *
+   * NOT the row's own key. `foreign_id` and `sql_id` are different id spaces
+   * and a DLR row's `foreign_id` is the SMSC's message id, not its MT's
+   * `sql_id` — naming one option for both is how the DLR forwarder came to
+   * look up every receipt by the wrong column and dead-letter all four.
    */
-  sqlIds?: string[];
+  foreignIds?: string[];
+  /** The rows' own `sql_id`s. The engine's primary key, not a correlation. */
+  rowIds?: string[];
   direction?: 'MO' | 'MT' | 'DLR';
   /**
    * Inclusive lower bound on the engine's epoch-second `time` column. Served by
@@ -737,9 +742,13 @@ export class KamexSqlboxRepository implements OnModuleDestroy, OnApplicationBoot
     }
     // Exact, never a LIKE: this answers "did my message get in", and a
     // prefix match could answer it with somebody else's row.
-    if (options.sqlIds) {
-      params.push(options.sqlIds);
+    if (options.foreignIds) {
+      params.push(options.foreignIds);
       clauses.push(`${prefix}foreign_id = ANY($${params.length})`);
+    }
+    if (options.rowIds) {
+      params.push(options.rowIds);
+      clauses.push(`${prefix}sql_id = ANY($${params.length}::bigint[])`);
     }
     // The delivery-report view IS the receipt rows, by definition; it pins the
     // direction so a caller cannot widen it back out with ?direction=MT.

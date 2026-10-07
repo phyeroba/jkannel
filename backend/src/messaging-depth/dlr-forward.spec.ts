@@ -170,3 +170,29 @@ describe('DLR forwarding — the poll chain', () => {
     }
   });
 });
+
+/**
+ * The bug this guards against actually happened: the forwarder looked every
+ * receipt up by `foreign_id` while holding a `sql_id`, found nothing, and
+ * dead-lettered all four of CPaaS's receipts on the first run. A DLR row's
+ * `foreign_id` is the SMSC's message id; its `sql_id` is its own key. Two
+ * id spaces, and one option name covering both is what hid it.
+ */
+describe('DLR forwarding — looks a receipt up by its own key', () => {
+  it('filters sql_id, not foreign_id', async () => {
+    const calls: { sql: string; params: unknown[] }[] = [];
+    const sqlbox = {
+      list: async (options: Record<string, unknown>) => {
+        calls.push({ sql: JSON.stringify(options), params: [] });
+        return { items: [] };
+      },
+    };
+    const service = new DlrForwardService({} as never, sqlbox as never, {} as never);
+    // `urlFor` is private; dispatch is the only way in, and it reads the
+    // attempt row first — so assert on the option the repository is handed.
+    await (service as unknown as { urlFor(id: string): Promise<string | null> }).urlFor('97');
+    const options = JSON.parse(calls[0].sql);
+    expect(options.rowIds).toEqual(['97']);
+    expect(options.foreignIds).toBeUndefined();
+  });
+});

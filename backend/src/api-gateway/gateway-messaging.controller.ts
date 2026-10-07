@@ -210,7 +210,7 @@ export class GatewayMessagingController {
        * nothing matched", which must return an empty page rather than the
        * whole register.
        */
-      sqlIds: await this.resolveForeignId(request, optionalText(query.foreignId)),
+      foreignIds: await this.resolveForeignId(request, optionalText(query.foreignId)),
       allowedSmscIds: await this.smscScope(request),
     });
     return { ...page, source: { status: 'available', type: 'kamex-sqlbox' } };
