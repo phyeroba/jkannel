@@ -873,3 +873,35 @@ is attacker-controllable and an unrestricted fetcher is an SSRF engine). It
 is **not built**: outbound HTTP from production to a third party is Peter's
 call. Answer sent as `docs/integrations/JKANNEL-DLR-ANSWER.md` in the CPaaS
 repo.
+
+
+---
+
+## 18. 2026-10-07 — the DLR forwarder is live
+
+Approved by Peter and deployed. CPaaS's four missing receipts were forwarded
+on the retry run: engine rows 91, 95, 96, 97, all `dlr_mask 8`, all HTTP 200
+to `app.speedamobile.com`.
+
+Built on the platform job queue, like MO fan-out — `dlr.forward.poll` sweeps
+and schedules its own successor, `dlr.forward.dispatch` is one call per
+receipt with its own backoff and dead-letter. Twelve attempts spans 24 hours.
+At-most-once comes from a unique index on `(tenant_id, engine_sql_id)`, not
+from the sweep being careful.
+
+`DLR_FORWARD_ALLOWED_HOSTS` is the control that matters: a `dlr_url` is
+attacker-controllable, so an unrestricted fetcher inside the private network
+is an SSRF engine with a queue in front of it. Exact host match (never
+`endsWith`), https only, empty means forward nothing and the poll chain does
+not start.
+
+**The bug worth remembering.** The first live run dead-lettered all four
+receipts: `urlFor()` asked for `foreign_id = <sql_id>`. A DLR row's
+`foreign_id` is the SMSC's message id; its `sql_id` is its own key. One
+option name, `sqlIds`, covered both id spaces — it had been written for the
+gateway lookup, where the values genuinely are `foreign_id` values. Split
+into `foreignIds` and `rowIds` with the distinction documented on both.
+
+The ledger is what caught it inside a minute: four rows reading
+"the engine row no longer carries a dlr_url" is exactly how a failure should
+read.
