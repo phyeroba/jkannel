@@ -787,3 +787,37 @@ not evidence about the other today.
 Standing decision (Peter, 2026-10-07): the KAMEX route is unchanged — no
 re-point, no fallback. For testing while kamdixy is down, CPaaS pins
 `smscId: "kololo"`, which is a deliberate and temporary exception to §9.2.
+
+
+---
+
+## 16. 2026-10-07 — verified working, and what we told CPaaS
+
+Four messages sent from JKANNEL to Peter's handsets, 03:17–03:18 UTC. Sender
+`KAMEX`, pinned to the `kololo` bind. All four accepted by the carrier; Peter
+confirmed receipt of the first by hand.
+
+```
+at         momt  sender  smsc     sql_id    dlr_mask
+03:17:22   MT    KAMEX   kololo   40        31
+03:17:22   DLR   KAMEX   kololo   167CA55A  8    ← ACK/
+…           …     …       …        41-43     …
+```
+
+Nothing queued, nothing failed. **The `KAMEX` sender approval of 6 October is
+in force and the send path is healthy.** What is broken is one carrier bind,
+and nothing else.
+
+**kololo and kamdixy are two binds to the same upstream.** `8888.ug:4089` and
+`8888.ug:4098`. Proven by traffic, not just by config: the 2 October message
+went out on **kamdixy** and its receipt came back on **kololo**, so the two
+share an account and a receipt queue. Pinning kololo is therefore the same
+destination over the bind that is up — not a detour to another carrier.
+
+`ACK/` with `dlr_mask 8` confirms CPaaS's Correction C in our own traffic: it
+is the SMSC-accept receipt, not handset delivery.
+
+Told to CPaaS in `docs/integrations/JKANNEL-SEND-NOW.md` (their repo): add
+`"smscId": "kololo"` and nothing else; keep the pin out of production traffic;
+remove it when we tell them kamdixy is back. Their next test with a real
+`dlrUrl` will also answer their `%d` questions as observed fact.

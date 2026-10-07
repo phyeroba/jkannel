@@ -137,6 +137,13 @@ grey for a reason it will not give.
   CPaaS's did not, on the same configuration.
 - **Testing today needs no change:** pin `smscId: "kololo"`, which is bound.
   Told to CPaaS as a temporary, testing-only exception to §9.2.
+- **2026-10-07 03:17 UTC — VERIFIED WORKING.** Four messages sent from
+  JKANNEL, sender `KAMEX`, pinned to `kololo`; all four reached Peter's
+  handsets and all four were ACKed by the carrier. The send path is healthy;
+  one carrier bind is down and nothing else.
+- **kololo and kamdixy are two binds to ONE upstream** — `8888.ug:4089` and
+  `:4098`. The 2 October message went out on kamdixy and its receipt came
+  back on kololo. Pinning kololo is the same carrier, not a detour.
 - **Still to do:** observe `%d` substitution and `dlr_url` rewriting through
   the restored loopback bind, and answer CPaaS questions 1 and 2 with that
   evidence.
