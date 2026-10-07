@@ -1315,6 +1315,10 @@ tbody td.cell-clip .row-id {
 
    Every figure here is a whole-table measurement. Deriving them from the
    loaded page is one line of code and gives the size of the page. */
+/* The track count follows the number of figures.
+   `repeat(4, 1fr)` was hardcoded for the four-figure strips, so a screen
+   with three — sessions — drew an empty tinted cell on the right that read
+   as a figure still loading. The spec allows three to five. */
 .stat-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1325,13 +1329,27 @@ tbody td.cell-clip .row-id {
   background: var(--border);
   overflow: hidden;
 }
+.stat-strip:has(article:nth-child(3):last-child) {
+  grid-template-columns: repeat(3, 1fr);
+}
+.stat-strip:has(article:nth-child(2):last-child) {
+  grid-template-columns: repeat(2, 1fr);
+}
+.stat-strip:has(article:nth-child(5)) {
+  grid-template-columns: repeat(5, 1fr);
+}
 @media (max-width: 900px) {
-  .stat-strip {
+  .stat-strip,
+  .stat-strip:has(article:nth-child(3):last-child),
+  .stat-strip:has(article:nth-child(5)) {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 @media (max-width: 460px) {
-  .stat-strip {
+  .stat-strip,
+  .stat-strip:has(article:nth-child(3):last-child),
+  .stat-strip:has(article:nth-child(2):last-child),
+  .stat-strip:has(article:nth-child(5)) {
     grid-template-columns: 1fr;
   }
 }
