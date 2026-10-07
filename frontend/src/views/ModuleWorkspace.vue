@@ -1372,7 +1372,15 @@ const msgTo = ref('');
  * matches the other long registers on this console (spool, sessions, log
  * explorer) and halves the tallest real screen in the product.
  */
-const msgLimit = ref(50);
+/*
+ * 25, not 50.
+ *
+ * Every row on this register carries two or three stacked lines — route,
+ * encoding, handling, attribution — so fifty rows is a 5,779px page. Nobody
+ * reads to the bottom of that; they filter or they page. The selector still
+ * offers more for an export.
+ */
+const msgLimit = ref(25);
 const MESSAGE_STATUS_CHOICES = [
   { value: '', label: 'Any delivery status' },
   { value: 'resendable', label: 'Resendable failures (failed + rejected)' },
@@ -7060,12 +7068,24 @@ onUnmounted(() => {
       </p>
     </section>
 
-    <section
+    <!--
+      A DISCLOSURE, NOT A PANEL.
+
+      This is a maintenance tool whose second button permanently deletes
+      message rows, and it sat open above the register — so every visit to
+      Messages, which is a screen people come to in order to READ, scrolled
+      past a destructive control to reach the data. It is used perhaps
+      monthly. Folded away, and it says what it is before it is opened.
+    -->
+    <details
       v-if="key === 'messages' && !error"
       class="panel composer"
       aria-label="SQLBox retention"
     >
-      <h2>SQLBox retention</h2>
+      <summary class="panel-summary-row">
+        <strong>SQLBox retention</strong>
+        <small>Prune message rows older than a given age. Deletes permanently.</small>
+      </summary>
       <label>
         Keep sent message rows for days
         <input
@@ -7098,7 +7118,7 @@ onUnmounted(() => {
         {{ retentionStatus.eligibleRows ?? 0 }} of {{ retentionStatus.totalRows ?? 0 }} SQLBox rows
         are older than {{ retentionStatus.retentionDays ?? retentionDays }} days.
       </p>
-    </section>
+    </details>
 
     <section
       v-if="key === 'configuration' && !error"

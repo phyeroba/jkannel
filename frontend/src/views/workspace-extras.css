@@ -1909,3 +1909,37 @@ tbody td.cell-wrap > .chip-list {
   gap: 4px;
   max-width: 320px;
 }
+
+/* A PANEL THAT OPENS ------------------------------------------------------
+   For a maintenance tool on a screen people come to in order to read: it
+   states what it is and what it will do, and stays shut until wanted. */
+details.panel > summary.panel-summary-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+}
+details.panel > summary.panel-summary-row::-webkit-details-marker {
+  display: none;
+}
+details.panel > summary.panel-summary-row::before {
+  content: '▸';
+  color: var(--muted);
+  font-size: 11px;
+}
+details.panel[open] > summary.panel-summary-row::before {
+  content: '▾';
+}
+details.panel > summary.panel-summary-row strong {
+  font-size: 15px;
+  color: var(--text-strong);
+}
+details.panel > summary.panel-summary-row small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+details.panel[open] > summary.panel-summary-row {
+  margin-bottom: 14px;
+}
