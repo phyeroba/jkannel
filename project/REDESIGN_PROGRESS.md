@@ -100,17 +100,26 @@ fieldsets, a hint under every field, REQUIRED markers, a sentence stating
 what will happen, and a Save that **lists what is missing** rather than being
 grey for a reason it will not give.
 
-### What is left
+### The tall screens — in progress
 
-1. **The remaining read-only screens.** The sweep captures them all; nothing
-   on them is broken, but several have not been looked at with the five-band
-   shape in mind — `/api-reference` (4,685px), `/messages` (5,779px),
-   `/sessions` (5,187px), `/delivery-reports` (3,953px), `/system` (3,799px).
-   Tall is not automatically wrong, but those are the candidates.
-2. **The drawers.** The sweep now captures the one behind a row click on
+| Screen | Before | After | What it was |
+|---|---|---|---|
+| `/messages` | 5,779px | **3,361px** | The SQLBox retention tool — a monthly job whose second button permanently deletes rows — sat open above the register on a screen people come to in order to read. Folded to a disclosure. Page size 50 → 25. |
+| `/sessions` | 5,187px | **2,999px** | A security register with no figure on it. Now three whole-table figures, two honest tabs (the API's `active` is boolean, so a third "Revoked" tab could only count the page), a 60s live line, relative ages, `TablePager`. |
+
+Still to do, tallest first: `/log-explorer` 4,721 · `/api-reference` 4,685 ·
+`/logs-audit` 4,558 · `/smsc/:id` 4,527 · `/reports` 4,413 ·
+`/delivery-reports` 3,953 · `/system` 3,799.
+
+**Tall is not automatically wrong** — `/api-reference` is documentation and is
+meant to be long. The test is whether the height comes from content somebody
+reads or from furniture nobody does.
+
+### Also left
+1. **The drawers.** The sweep now captures the one behind a row click on
    every register. Alerts, lifecycle, SMSC and carriers have the house sheet;
    the rest are still the generic drawer.
-3. **`/traffic` is a second copy of the dashboard** reached by a link and not
+2. **`/traffic` is a second copy of the dashboard** reached by a link and not
    in the navigation. Decide whether it should exist.
 
 ## CPaaS integration — state as of 2026-10-06 evening
