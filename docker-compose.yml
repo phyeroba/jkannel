@@ -199,6 +199,20 @@ services:
       # `requiredSecrets`; the Configuration screen now shows that list.
       CARRIER_KOLOLO_PASSWORD: ${CARRIER_KOLOLO_PASSWORD:-}
       CARRIER_KAMDIXY_PASSWORD: ${CARRIER_KAMDIXY_PASSWORD:-}
+      # DELIVERY RECEIPT FORWARDING — the hosts a receipt may be sent to.
+      #
+      # A caller's `dlrUrl` is attacker-controllable: anyone who can submit a
+      # message can put any URL in it. The forwarder calls only hosts named
+      # here, because a worker that fetches whatever it finds in a database
+      # column, from inside this network, is a server-side request forgery
+      # engine with a job queue in front of it.
+      #
+      # EMPTY MEANS FORWARD NOTHING, and the poll chain does not even start.
+      # That is the correct default: the failure mode of the other choice is
+      # the SSRF this list exists to prevent.
+      #
+      # Comma-separated, exact hostnames, https only.
+      DLR_FORWARD_ALLOWED_HOSTS: ${DLR_FORWARD_ALLOWED_HOSTS:-}
       # Probe targets for the services board (spec §14). Both default to EMPTY,
       # and an empty value means the board reports that component as "not
       # observed" — visibly distinct from healthy, never mistaken for it.

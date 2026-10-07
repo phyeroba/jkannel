@@ -24,6 +24,8 @@ import { MoJobHandlers } from './mo.handlers';
 import { MoController } from './mo.controller';
 import { PrivacyModule } from '../privacy/privacy.module';
 import { MtDedupeService } from './mt-dedupe.service';
+import { DlrForwardService } from './dlr-forward.service';
+import { DlrForwardJobHandlers } from './dlr-forward.handlers';
 
 /**
  * Messaging-depth feature module. It owns THE send path
@@ -76,6 +78,8 @@ import { MtDedupeService } from './mt-dedupe.service';
     MoInboundService,
     MoDeliveryService,
     MoJobHandlers,
+    DlrForwardService,
+    DlrForwardJobHandlers,
   ],
   exports: [
     MessageSendService,
