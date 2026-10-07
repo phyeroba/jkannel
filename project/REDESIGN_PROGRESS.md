@@ -124,8 +124,19 @@ grey for a reason it will not give.
   `whoami` now returns `customerId`.
 - **CPaaS's four live sends were refused at routing.** The KAMEX route exists
   and matched; its only target is `kamdixy`, which is retrying, and it has no
-  fallback. `kololo` is bound. **Peter decided 2026-10-06: change nothing** —
-  no re-point, no fallback. CPaaS traffic stays refused until kamdixy binds.
+  fallback. `kololo` is bound. **Peter decided 2026-10-06 and again on
+  2026-10-07: change nothing** — no re-point, no fallback.
+- **Correction, 2026-10-07:** kamdixy is NOT a standing outage. It was bound
+  from 2026-09-30 06:20 to **2026-10-06 07:33** — six days — and dropped five
+  hours before the CPaaS test. The "refused since 8 September" line was
+  `kololo`'s old outage carried forward. **Read bind claims from
+  `smsc_bind_transitions`, never from an earlier note.**
+- **Peter's own working tests bypassed routing.** His 2 October decision row
+  is `outcome = explicit` — the console pinned the smscId, so the route and
+  its missing fallback were never consulted. That is why his sends worked and
+  CPaaS's did not, on the same configuration.
+- **Testing today needs no change:** pin `smscId: "kololo"`, which is bound.
+  Told to CPaaS as a temporary, testing-only exception to §9.2.
 - **Still to do:** observe `%d` substitution and `dlr_url` rewriting through
   the restored loopback bind, and answer CPaaS questions 1 and 2 with that
   evidence.

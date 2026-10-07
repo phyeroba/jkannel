@@ -754,3 +754,36 @@ not see it could not diagnose its own rejection.
 Questions 1 and 2 (`%d` substitution, `dlr_url` rewriting) are now answerable
 by observation through the restored loopback bind, and will be answered that
 way rather than from upstream Kannel documentation.
+
+
+---
+
+## 15. 2026-10-07 — correction: kamdixy is intermittent, not a standing outage
+
+§14 said `8888.ug:4098` had refused us "since 8 September". **Wrong.** That
+described `kololo`'s September outage. `smsc_bind_transitions` for kamdixy:
+
+```
+2026-09-29 16:51   (none)   → retrying
+2026-09-30 06:20   retrying → bound
+2026-10-06 07:33   bound    → retrying      ← five hours before the CPaaS test
+```
+
+**kamdixy was bound for six days** and dropped on the morning of 6 October.
+CPaaS sent at 12:44. The route was never wrong; the carrier link went down
+that morning.
+
+**And Peter's own successful tests did not use routing at all.** His 2 October
+decision row reads `outcome = explicit`, `reason = "explicit smscId supplied
+by the caller (console)"`, `smsc = kamdixy`. An explicit `smscId` bypasses
+route selection entirely, so the route's missing fallback was never consulted.
+Two results that looked contradictory were two different code paths.
+
+The lesson for this document: **a bind-state claim must be read from
+`smsc_bind_transitions`, not carried forward from an earlier note.** Both
+carriers flap, and a sentence written three weeks ago about one of them is
+not evidence about the other today.
+
+Standing decision (Peter, 2026-10-07): the KAMEX route is unchanged — no
+re-point, no fallback. For testing while kamdixy is down, CPaaS pins
+`smscId: "kololo"`, which is a deliberate and temporary exception to §9.2.
