@@ -134,3 +134,87 @@ describe('Sessions administration view', () => {
     click.mockRestore();
   });
 });
+
+/**
+ * The 2026-10-07 rebuild. This register opened on fifty three-line rows —
+ * 5,187px — with no figure anywhere, so "how many sessions are live" could
+ * only be answered by counting rows by eye, and revoked sessions were
+ * interleaved with active ones.
+ */
+describe('Sessions — figures that count the table, not the page', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  /** The API returns `total` for whatever filter it was given. */
+  const tallyingFetch = (activeTotal: number, allTotal: number, pageItems: unknown[]) =>
+    vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/sessions?')) {
+        const active = u.includes('active=true');
+        const probe = u.includes('limit=1');
+        if (probe) return apiResponse({ items: [], total: active ? activeTotal : allTotal });
+        return apiResponse({ items: pageItems, total: active ? activeTotal : allTotal });
+      }
+      return apiResponse({});
+    });
+
+  it('counts active and revoked across the whole table, not the loaded page', async () => {
+    // 25 rows on the page; 192 sessions in the table, 140 of them active.
+    const rows = Array.from({ length: 25 }, (_, i) => ({ ...page.items[0], id: `sess-${i}` }));
+    vi.stubGlobal('fetch', tallyingFetch(140, 192, rows));
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="sessions-strip"]').exists()).toBe(true),
+    );
+    expect(wrapper.get('[data-testid="sessions-stat-active"]').text()).toBe('140');
+    // Derived, not guessed: everything that is not active is revoked or expired.
+    expect(wrapper.get('[data-testid="sessions-stat-revoked"]').text()).toBe('52');
+    expect(wrapper.get('[data-testid="sessions-stat-total"]').text()).toBe('192');
+    // The page holds 25 rows and none of those figures is 25.
+    wrapper.unmount();
+  });
+
+  it('renders no strip at all when the tally cannot be read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes('limit=1')) return apiResponse('nope', 500);
+        if (String(url).includes('/sessions')) return apiResponse(page);
+        return apiResponse({});
+      }),
+    );
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() => expect(wrapper.text()).toContain('operator'));
+    // Zeros on a security screen would report an estate with nobody signed in.
+    expect(wrapper.find('[data-testid="sessions-strip"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('offers only the two tabs the API can honour', async () => {
+    vi.stubGlobal('fetch', tallyingFetch(140, 192, page.items));
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="sessions-tab-active"]').exists()).toBe(true),
+    );
+    // `active` is boolean on the API. A third "Revoked" tab could only filter
+    // one page in the browser and would report the page's count as the
+    // table's.
+    expect(wrapper.find('[data-testid="sessions-tab-revoked"]').exists()).toBe(false);
+    // The count arrives with the tally, a tick after the tab itself.
+    await vi.waitFor(() =>
+      expect(wrapper.get('[data-testid="sessions-tab-all"]').text()).toContain('192'),
+    );
+    wrapper.unmount();
+  });
+
+  it('opens on Active, which is the tab that matters here', async () => {
+    const fetchMock = tallyingFetch(140, 192, page.items);
+    vi.stubGlobal('fetch', fetchMock);
+    const wrapper = mount(SessionsView);
+    await vi.waitFor(() => expect(wrapper.text()).toContain('operator'));
+    const listCalls = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.includes('/sessions?') && !url.includes('limit=1'));
+    expect(listCalls[0]).toContain('active=true');
+    wrapper.unmount();
+  });
+});
